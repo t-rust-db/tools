@@ -161,6 +161,78 @@ fn codegen_join_matches_query_engine() {
     assert_eq!(generated_output, expected);
 }
 
+/// #1: `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` -- the window
+/// shape reconstructs `Query` as a literal the same way the `JOIN` shape
+/// does (see `render_windowed` in `src/codegen.rs`) and calls
+/// `execute_windowed` at runtime.
+#[test]
+fn codegen_row_number_window_matches_query_engine() {
+    let sql =
+        "SELECT id, region_key, ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id) FROM orders ORDER BY id";
+    let src = column_rs::codegen::generate(sql).unwrap();
+    let fixture = fixture_path("orders.parquet");
+
+    let generated_output = compile_and_run(&src, &[&fixture]);
+
+    let engine = column_rs::query::QueryEngine::open(std::path::Path::new(&fixture)).unwrap();
+    let result = engine.execute(sql).unwrap();
+    let mut expected = format!("{}\n", result.columns.join("\t"));
+    for row in &result.rows {
+        let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();
+        expected.push_str(&line.join("\t"));
+        expected.push('\n');
+    }
+
+    assert_eq!(generated_output, expected);
+}
+
+/// #1: `LAG`/`LEAD`, with and without an explicit offset -- confirms
+/// `WindowSpec::offset` round-trips through the literal reconstruction
+/// (`None` defaults to 1 at runtime in `compute_window`, so this also
+/// exercises that default).
+#[test]
+fn codegen_lag_lead_window_matches_query_engine() {
+    let sql = "SELECT id, region_key, LAG(id) OVER (PARTITION BY region_key ORDER BY id), LEAD(id, 2) OVER (PARTITION BY region_key ORDER BY id) FROM orders ORDER BY id";
+    let src = column_rs::codegen::generate(sql).unwrap();
+    let fixture = fixture_path("orders.parquet");
+
+    let generated_output = compile_and_run(&src, &[&fixture]);
+
+    let engine = column_rs::query::QueryEngine::open(std::path::Path::new(&fixture)).unwrap();
+    let result = engine.execute(sql).unwrap();
+    let mut expected = format!("{}\n", result.columns.join("\t"));
+    for row in &result.rows {
+        let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();
+        expected.push_str(&line.join("\t"));
+        expected.push('\n');
+    }
+
+    assert_eq!(generated_output, expected);
+}
+
+/// #1: an aggregate window function (`SUM(...) OVER (PARTITION BY ...)`,
+/// no `ORDER BY` inside `OVER` -- the whole-partition-aggregate path in
+/// `compute_window`).
+#[test]
+fn codegen_sum_over_window_matches_query_engine() {
+    let sql = "SELECT region, amount, SUM(amount) OVER (PARTITION BY region) FROM production ORDER BY region";
+    let src = column_rs::codegen::generate(sql).unwrap();
+    let fixture = fixture_path("production.parquet");
+
+    let generated_output = compile_and_run(&src, &[&fixture]);
+
+    let engine = column_rs::query::QueryEngine::open(std::path::Path::new(&fixture)).unwrap();
+    let result = engine.execute(sql).unwrap();
+    let mut expected = format!("{}\n", result.columns.join("\t"));
+    for row in &result.rows {
+        let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();
+        expected.push_str(&line.join("\t"));
+        expected.push('\n');
+    }
+
+    assert_eq!(generated_output, expected);
+}
+
 /// #103: same round-trip, for an `IN (SELECT ...)` semi-join.
 #[test]
 fn codegen_semi_join_matches_query_engine() {
