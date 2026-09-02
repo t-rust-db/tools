@@ -1,0 +1,21 @@
+[package]
+name = "column-rs"
+version = "0.15.1"
+edition = "2021"
+
+[lib]
+name = "column_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "column-rs"
+path = "src/bin/column-rs/main.rs"
+
+[dependencies]
+rayon = "1"
+db-storage = { path = "../db-storage" }
+sql-types = { path = "../db-core/sql-types" }
+sql-expr = { path = "../db-core/sql-expr" }
+sql-parser = { path = "../db-core/sql-parser" }
+db-parquet = { path = "../db-parquet" }
+db-cli = { path = "../db-cli" }
