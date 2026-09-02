@@ -1,0 +1,26 @@
+# Local monorepo-style development override: when db-storage/db-core/
+# db-parquet/db-cli are checked out as siblings under t-rust-db/ (which
+# they are in this layout), build against the local working tree instead
+# of re-fetching/re-tagging the git dependency on every change.
+#
+# CI and any external consumer of this crate (without this file, or
+# without the sibling checkouts present) fall back to the tagged git
+# dependencies declared in Cargo.toml -- reproducible, no local checkout
+# required.
+#
+# To bump versions: tag+push the dependency repos, update the `tag = "..."`
+# values in Cargo.toml, then delete/refresh Cargo.lock.
+
+[patch."https://github.com/t-rust-db/db-storage"]
+db-storage = { path = "../db-storage" }
+
+[patch."https://github.com/t-rust-db/db-core"]
+sql-types = { path = "../db-core/sql-types" }
+sql-expr = { path = "../db-core/sql-expr" }
+sql-parser = { path = "../db-core/sql-parser" }
+
+[patch."https://github.com/t-rust-db/db-parquet"]
+db-parquet = { path = "../db-parquet" }
+
+[patch."https://github.com/t-rust-db/db-cli"]
+db-cli = { path = "../db-cli" }

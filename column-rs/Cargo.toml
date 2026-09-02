@@ -13,9 +13,9 @@ path = "src/bin/column-rs/main.rs"
 
 [dependencies]
 rayon = "1"
-db-storage = { path = "../db-storage" }
-sql-types = { path = "../db-core/sql-types" }
-sql-expr = { path = "../db-core/sql-expr" }
-sql-parser = { path = "../db-core/sql-parser" }
-db-parquet = { path = "../db-parquet" }
-db-cli = { path = "../db-cli" }
+db-storage = { git = "https://github.com/t-rust-db/db-storage", tag = "v0.1.0" }
+sql-types = { git = "https://github.com/t-rust-db/db-core", tag = "v0.1.0", package = "sql-types" }
+sql-expr = { git = "https://github.com/t-rust-db/db-core", tag = "v0.1.0", package = "sql-expr" }
+sql-parser = { git = "https://github.com/t-rust-db/db-core", tag = "v0.1.0", package = "sql-parser" }
+db-parquet = { git = "https://github.com/t-rust-db/db-parquet", tag = "v0.1.0" }
+db-cli = { git = "https://github.com/t-rust-db/db-cli", tag = "v0.1.0" }
