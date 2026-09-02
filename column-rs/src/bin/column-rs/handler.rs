@@ -21,19 +21,26 @@ impl ReplHandler for ColumnHandler {
     type Output = Output;
 
     fn execute(&mut self, input: &str) -> Result<Self::Output, String> {
-        let (is_explain, query) = column_rs::sql::parse_explain(input).map_err(|e| e.to_string())?;
+        let (is_explain, query) =
+            column_rs::sql::parse_explain(input).map_err(|e| e.to_string())?;
         if is_explain {
             let plan = self.engine.explain(&query).map_err(|e| e.to_string())?;
             return Ok(Output::Plan(plan));
         }
-        self.engine.execute(input).map(Output::Rows).map_err(|e| e.to_string())
+        self.engine
+            .execute(input)
+            .map(Output::Rows)
+            .map_err(|e| e.to_string())
     }
 
     fn format(&self, output: &Self::Output, mode: OutputMode) -> String {
         match output {
             Output::Rows(result) => {
-                let rows: Vec<Vec<String>> =
-                    result.rows.iter().map(|row| row.iter().map(|v| v.to_string()).collect()).collect();
+                let rows: Vec<Vec<String>> = result
+                    .rows
+                    .iter()
+                    .map(|row| row.iter().map(|v| v.to_string()).collect())
+                    .collect();
                 render(mode, &result.columns, &rows)
             }
             Output::Plan(nodes) => format_plan(nodes),
@@ -42,7 +49,13 @@ impl ReplHandler for ColumnHandler {
 
     fn command(&mut self, name: &str, arg: &str) -> Option<Vec<String>> {
         if !name.is_empty() && "tables".starts_with(name) {
-            return Some(self.engine.table_names().into_iter().map(str::to_string).collect());
+            return Some(
+                self.engine
+                    .table_names()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            );
         }
         if !name.is_empty() && "schema".starts_with(name) {
             let mut lines = Vec::new();
@@ -58,20 +71,25 @@ impl ReplHandler for ColumnHandler {
             if arg.is_empty() {
                 return Some(vec![".open <path> [AS <name>]".to_string()]);
             }
-            let (path_str, table_name) = match arg.split_once(" AS ").or_else(|| arg.split_once(" as ")) {
-                Some((path, name)) => (path.trim(), Some(name.trim().to_string())),
-                None => (arg.trim(), None),
-            };
-            return Some(match self.engine.add_table(Path::new(path_str), table_name) {
-                Ok(()) => vec![],
-                Err(e) => vec![format!("error: {e}")],
-            });
+            let (path_str, table_name) =
+                match arg.split_once(" AS ").or_else(|| arg.split_once(" as ")) {
+                    Some((path, name)) => (path.trim(), Some(name.trim().to_string())),
+                    None => (arg.trim(), None),
+                };
+            return Some(
+                match self.engine.add_table(Path::new(path_str), table_name) {
+                    Ok(()) => vec![],
+                    Err(e) => vec![format!("error: {e}")],
+                },
+            );
         }
         if !name.is_empty() && "color".starts_with(name) {
             // db-cli's generic REPL loop owns the terminal editor and does
             // not expose a hook for a handler to toggle its color output,
             // so `.color on|off` can't be wired through cleanly here.
-            return Some(vec!["'.color' is not supported by this build's REPL".to_string()]);
+            return Some(vec![
+                "'.color' is not supported by this build's REPL".to_string()
+            ]);
         }
         None
     }
@@ -101,7 +119,9 @@ impl ReplHandler for ColumnHandler {
 /// ```
 fn format_plan(nodes: &[PlanNode]) -> String {
     let mut out = String::new();
-    let Some(root) = nodes.first() else { return out };
+    let Some(root) = nodes.first() else {
+        return out;
+    };
     out.push_str(&root.detail);
     out.push('\n');
     format_children(&mut out, nodes, root.id, "");
@@ -109,12 +129,81 @@ fn format_plan(nodes: &[PlanNode]) -> String {
 }
 
 fn format_children(out: &mut String, nodes: &[PlanNode], parent: u32, prefix: &str) {
-    let children: Vec<&PlanNode> = nodes.iter().filter(|n| n.id != n.parent && n.parent == parent).collect();
+    let children: Vec<&PlanNode> = nodes
+        .iter()
+        .filter(|n| n.id != n.parent && n.parent == parent)
+        .collect();
     for (i, node) in children.iter().enumerate() {
         let is_last = i == children.len() - 1;
         let branch = if is_last { "└── " } else { "├── " };
         out.push_str(&format!("{prefix}{branch}{}\n", node.detail));
         let child_prefix = format!("{prefix}{}", if is_last { "    " } else { "│   " });
         format_children(out, nodes, node.id, &child_prefix);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(id: u32, parent: u32, detail: &str) -> PlanNode {
+        PlanNode {
+            id,
+            parent,
+            detail: detail.to_string(),
+        }
+    }
+
+    #[test]
+    fn empty_plan_is_empty_string() {
+        assert_eq!(format_plan(&[]), "");
+    }
+
+    #[test]
+    fn single_node_plan_prints_just_the_root() {
+        let nodes = vec![node(0, 0, "SCAN events")];
+        assert_eq!(format_plan(&nodes), "SCAN events\n");
+    }
+
+    #[test]
+    fn two_level_plan_uses_last_branch_marker() {
+        let nodes = vec![node(0, 0, "EMIT: region"), node(1, 0, "SCAN events")];
+        let out = format_plan(&nodes);
+        assert_eq!(out, "EMIT: region\n└── SCAN events\n");
+    }
+
+    #[test]
+    fn multiple_children_use_middle_and_last_markers() {
+        let nodes = vec![
+            node(0, 0, "JOIN"),
+            node(1, 0, "SCAN a"),
+            node(2, 0, "SCAN b"),
+        ];
+        let out = format_plan(&nodes);
+        assert_eq!(out, "JOIN\n├── SCAN a\n└── SCAN b\n");
+    }
+
+    #[test]
+    fn three_level_nesting_indents_grandchildren() {
+        let nodes = vec![
+            node(0, 0, "SCAN events (3 row groups)"),
+            node(1, 0, "LOAD COLUMNS: region, amount"),
+        ];
+        let out = format_plan(&nodes);
+        assert_eq!(
+            out,
+            "SCAN events (3 row groups)\n└── LOAD COLUMNS: region, amount\n"
+        );
+
+        let deep = vec![
+            node(0, 0, "EMIT: region"),
+            node(1, 0, "SCAN events"),
+            node(2, 1, "LOAD COLUMNS: region, amount"),
+        ];
+        let out = format_plan(&deep);
+        assert_eq!(
+            out,
+            "EMIT: region\n└── SCAN events\n    └── LOAD COLUMNS: region, amount\n"
+        );
     }
 }
