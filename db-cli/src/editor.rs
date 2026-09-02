@@ -37,7 +37,11 @@ impl Default for Readline {
 
 impl Readline {
     pub fn new() -> Self {
-        Readline { history: History::new(), tty: is_tty(), color: true }
+        Readline {
+            history: History::new(),
+            tty: is_tty(),
+            color: true,
+        }
     }
 
     pub fn set_color(&mut self, enabled: bool) {
@@ -179,7 +183,11 @@ impl Readline {
     }
 
     fn redraw_at(&self, prompt: &str, line: &str, cursor: usize, stdout: &mut io::Stdout) {
-        let display = if self.color { highlight::highlight(line) } else { line.to_string() };
+        let display = if self.color {
+            highlight::highlight(line)
+        } else {
+            line.to_string()
+        };
         // Clear line, reprint, then move the cursor back to its logical position.
         let trailing = line.chars().count() - cursor;
         print!("\r\x1b[K{prompt}{display}");
@@ -191,7 +199,39 @@ impl Readline {
 }
 
 fn char_byte_index(s: &str, char_idx: usize) -> usize {
-    s.char_indices().nth(char_idx).map(|(i, _)| i).unwrap_or(s.len())
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
+}
+
+#[cfg(test)]
+mod char_byte_index_tests {
+    use super::char_byte_index;
+
+    #[test]
+    fn ascii_index_matches_byte_offset() {
+        assert_eq!(char_byte_index("hello", 2), 2);
+    }
+
+    #[test]
+    fn index_at_or_past_end_returns_byte_len() {
+        assert_eq!(char_byte_index("hi", 2), 2);
+        assert_eq!(char_byte_index("hi", 100), 2);
+    }
+
+    #[test]
+    fn empty_string_returns_zero() {
+        assert_eq!(char_byte_index("", 0), 0);
+    }
+
+    #[test]
+    fn multibyte_chars_use_char_count_not_byte_count() {
+        // "héllo": 'é' is 2 bytes, so char index 2 ('l') is at byte 3.
+        let s = "héllo";
+        assert_eq!(char_byte_index(s, 2), 3);
+        assert_eq!(char_byte_index(s, 0), 0);
+    }
 }
 
 fn is_tty() -> bool {
@@ -340,10 +380,43 @@ mod highlight {
     use super::term;
 
     const KEYWORDS: &[&str] = &[
-        "SELECT", "FROM", "WHERE", "GROUP", "BY", "ORDER", "LIMIT", "AND", "OR", "NOT", "IN",
-        "AS", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "ON", "NULL", "TRUE", "FALSE", "ASC",
-        "DESC", "COUNT", "SUM", "AVG", "MIN", "MAX", "OVER", "PARTITION", "ROW_NUMBER", "RANK",
-        "DENSE_RANK", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE",
+        "SELECT",
+        "FROM",
+        "WHERE",
+        "GROUP",
+        "BY",
+        "ORDER",
+        "LIMIT",
+        "AND",
+        "OR",
+        "NOT",
+        "IN",
+        "AS",
+        "JOIN",
+        "INNER",
+        "LEFT",
+        "RIGHT",
+        "OUTER",
+        "ON",
+        "NULL",
+        "TRUE",
+        "FALSE",
+        "ASC",
+        "DESC",
+        "COUNT",
+        "SUM",
+        "AVG",
+        "MIN",
+        "MAX",
+        "OVER",
+        "PARTITION",
+        "ROW_NUMBER",
+        "RANK",
+        "DENSE_RANK",
+        "LAG",
+        "LEAD",
+        "FIRST_VALUE",
+        "LAST_VALUE",
     ];
 
     /// Colorize SQL input for display.
