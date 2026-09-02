@@ -16,10 +16,40 @@ use db_parquet::footer::PhysicalType;
 use db_parquet::ParquetFile;
 use db_storage::{Vfs, VfsFile};
 use sql_expr::{AggFunc, BinOp, Expr, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec};
+use sql_join::JoinHashTable;
 use sql_types::Literal;
 use crate::vm::{Batch, MapOp, Opcode, Segment, Value};
 use std::collections::HashMap;
 use std::fmt;
+
+/// Hashable/`Eq` stand-in for a join key. `Value` itself only derives
+/// `PartialEq` (it holds `f64`, and blanket-deriving `Eq`/`Hash` on the
+/// type used throughout the VM's registers would be a bigger, riskier
+/// change than a join needs) -- so join code converts to this narrower
+/// type at the point of use instead. `Float` compares by bit pattern
+/// (`f64::to_bits`), matching how every other bitwise-equal float already
+/// behaves as a join key; `NaN` keys simply never match another `NaN`,
+/// consistent with SQL equality semantics for `NaN`.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum JoinKey {
+    Int(i64),
+    Float(u64),
+    Bool(bool),
+    Str(std::borrow::Cow<'static, str>),
+    Null,
+}
+
+impl JoinKey {
+    fn from_value(v: &Value) -> Self {
+        match v {
+            Value::Int(n) => JoinKey::Int(*n),
+            Value::Float(f) => JoinKey::Float(f.to_bits()),
+            Value::Bool(b) => JoinKey::Bool(*b),
+            Value::Str(s) => JoinKey::Str(s.clone()),
+            Value::Null => JoinKey::Null,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum QueryError {
@@ -628,9 +658,14 @@ pub fn execute_joined(left_file: &ParquetFile, right_file: &ParquetFile, query: 
     let right_batch = read_whole_table(right_file, &right_columns);
 
     let right_key = right_batch.columns.get(&join.right_col).ok_or_else(|| QueryError::UnknownColumn(join.right_col.clone()))?;
-    let mut right_index: HashMap<String, Vec<usize>> = HashMap::new();
+    // Flat open-addressing multimap (sql-join), not `HashMap<String,
+    // Vec<usize>>`: no per-key `Vec` allocation, and no per-row `.to_string()`
+    // just to obtain something `Hash` -- see JoinKey above. Duplicate right-side
+    // keys (the normal foreign-key-on-the-build-side case) are each their own
+    // entry rather than needing a `Vec<usize>` per key.
+    let mut right_index: JoinHashTable<JoinKey, usize> = JoinHashTable::with_capacity(right_key.len());
     for (row, value) in right_key.iter().enumerate() {
-        right_index.entry(value.to_string()).or_default().push(row);
+        right_index.insert(JoinKey::from_value(value), row);
     }
 
     let left_key = left_batch.columns.get(&join.left_col).ok_or_else(|| QueryError::UnknownColumn(join.left_col.clone()))?;
@@ -638,10 +673,14 @@ pub fn execute_joined(left_file: &ParquetFile, right_file: &ParquetFile, query: 
     // (left_row, right_row) pairs -- `right_row = None` for an unmatched LEFT JOIN row.
     let mut pairs: Vec<(usize, Option<usize>)> = Vec::new();
     for (left_row, key) in left_key.iter().enumerate() {
-        match right_index.get(&key.to_string()) {
-            Some(right_rows) => pairs.extend(right_rows.iter().map(|&r| (left_row, Some(r)))),
-            None if join.kind == JoinKind::Left => pairs.push((left_row, None)),
-            None => {}
+        let key = JoinKey::from_value(key);
+        let mut matched = false;
+        for &right_row in right_index.get_all(&key) {
+            pairs.push((left_row, Some(right_row)));
+            matched = true;
+        }
+        if !matched && join.kind == JoinKind::Left {
+            pairs.push((left_row, None));
         }
     }
 

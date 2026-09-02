@@ -17,6 +17,7 @@ dependencies = [
  "db-storage",
  "rayon",
  "sql-expr",
+ "sql-join",
  "sql-parser",
  "sql-types",
 ]
@@ -201,6 +202,10 @@ version = "0.1.0"
 dependencies = [
  "sql-types",
 ]
+
+[[package]]
+name = "sql-join"
+version = "0.1.0"
 
 [[package]]
 name = "sql-parser"

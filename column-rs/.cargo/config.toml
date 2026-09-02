@@ -18,6 +18,7 @@ db-storage = { path = "../db-storage" }
 sql-types = { path = "../db-core/sql-types" }
 sql-expr = { path = "../db-core/sql-expr" }
 sql-parser = { path = "../db-core/sql-parser" }
+sql-join = { path = "../db-core/sql-join" }
 
 [patch."https://github.com/t-rust-db/db-parquet"]
 db-parquet = { path = "../db-parquet" }
