@@ -1,6 +1,13 @@
 pub mod codegen;
 pub mod query;
-pub mod vm;
+
+/// Re-exports preserving column-rs's pre-extraction `column_rs::vm::*`
+/// surface — the actual implementation now lives in `sql-vm`'s
+/// `BatchExecutor` (`sql_vm::batch`), alongside `sql_vm::row`/`sql_vm::stream`
+/// stubs for the other two executors that column-rs doesn't use.
+pub mod vm {
+    pub use sql_vm::batch::*;
+}
 
 /// Re-exports preserving column-rs's pre-extraction `column_rs::file::*`
 /// surface — the actual implementation now lives in `db-parquet`.
