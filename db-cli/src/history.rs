@@ -17,7 +17,9 @@ impl Default for History {
 
 impl History {
     pub fn new() -> Self {
-        History { entries: Vec::new() }
+        History {
+            entries: Vec::new(),
+        }
     }
 
     pub fn add(&mut self, line: &str) {

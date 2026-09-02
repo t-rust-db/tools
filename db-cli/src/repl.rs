@@ -70,7 +70,11 @@ pub struct Repl<H: ReplHandler> {
 
 impl<H: ReplHandler> Repl<H> {
     pub fn new(handler: H) -> Self {
-        Repl { handler, mode: OutputMode::Table, buffer: String::new() }
+        Repl {
+            handler,
+            mode: OutputMode::Table,
+            buffer: String::new(),
+        }
     }
 
     pub fn mode(&self) -> OutputMode {
@@ -113,7 +117,10 @@ impl<H: ReplHandler> Repl<H> {
 
     fn dot_command(&mut self, rest: &str) -> Step {
         let cmd = rest.split_whitespace().next().unwrap_or("");
-        let arg = rest.split_once(char::is_whitespace).map(|(_, a)| a.trim()).unwrap_or("");
+        let arg = rest
+            .split_once(char::is_whitespace)
+            .map(|(_, a)| a.trim())
+            .unwrap_or("");
 
         if !cmd.is_empty() && ("quit".starts_with(cmd) || "exit".starts_with(cmd)) {
             return Step::Quit;
@@ -161,7 +168,11 @@ pub struct ReplOptions<'a> {
 
 impl<'a> Default for ReplOptions<'a> {
     fn default() -> Self {
-        ReplOptions { prompt: "> ", continuation_prompt: "  -> ", history_file: None }
+        ReplOptions {
+            prompt: "> ",
+            continuation_prompt: "  -> ",
+            history_file: None,
+        }
     }
 }
 
@@ -179,7 +190,11 @@ pub fn run_repl<H: ReplHandler>(handler: H, opts: ReplOptions) -> io::Result<()>
     }
 
     loop {
-        let prompt = if repl.is_buffering() { opts.continuation_prompt } else { opts.prompt };
+        let prompt = if repl.is_buffering() {
+            opts.continuation_prompt
+        } else {
+            opts.prompt
+        };
         let line = match editor.read_line(prompt) {
             Ok(l) => l,
             Err(ReadlineError::Eof) => break,
@@ -237,7 +252,9 @@ mod tests {
     }
 
     fn mock() -> Repl<MockHandler> {
-        Repl::new(MockHandler { executed: Vec::new() })
+        Repl::new(MockHandler {
+            executed: Vec::new(),
+        })
     }
 
     #[test]
