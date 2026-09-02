@@ -12,7 +12,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn fixture_path(name: &str) -> String {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name).to_string_lossy().into_owned()
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Locate the already-built `libcolumn_rs-*.rlib` in `target/<profile>/deps`
@@ -32,7 +36,11 @@ fn find_column_rs_rlib(deps_dir: &std::path::Path) -> PathBuf {
 fn deps_dir() -> PathBuf {
     // The test binary itself lives at target/<profile>/deps/<test>-<hash>;
     // its own directory is exactly the deps dir we need.
-    std::env::current_exe().unwrap().parent().unwrap().to_path_buf()
+    std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 /// Compile `src` (a codegen'd `.rs` file) into a standalone binary linked
@@ -45,7 +53,10 @@ fn compile_and_run(src: &str, args: &[&str]) -> String {
     let rlib = find_column_rs_rlib(&deps);
 
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("column_rs_codegen_e2e_{}_{unique}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "column_rs_codegen_e2e_{}_{unique}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let src_path = dir.join("generated.rs");
     let bin_path = dir.join("generated_bin");
@@ -62,10 +73,20 @@ fn compile_and_run(src: &str, args: &[&str]) -> String {
         .arg(&src_path)
         .status()
         .expect("failed to spawn rustc");
-    assert!(status.success(), "rustc failed to compile generated source:\n{src}");
+    assert!(
+        status.success(),
+        "rustc failed to compile generated source:\n{src}"
+    );
 
-    let output = Command::new(&bin_path).args(args).output().expect("failed to run generated binary");
-    assert!(output.status.success(), "generated binary exited non-zero: {}", String::from_utf8_lossy(&output.stderr));
+    let output = Command::new(&bin_path)
+        .args(args)
+        .output()
+        .expect("failed to run generated binary");
+    assert!(
+        output.status.success(),
+        "generated binary exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
     String::from_utf8(output.stdout).unwrap()
@@ -124,7 +145,11 @@ fn codegen_join_matches_query_engine() {
 
     let generated_output = compile_and_run(&src, &[&orders, &regions]);
 
-    let engine = column_rs::query::QueryEngine::open_many(&[std::path::PathBuf::from(&orders), std::path::PathBuf::from(&regions)]).unwrap();
+    let engine = column_rs::query::QueryEngine::open_many(&[
+        std::path::PathBuf::from(&orders),
+        std::path::PathBuf::from(&regions),
+    ])
+    .unwrap();
     let result = engine.execute(sql).unwrap();
     let mut expected = format!("{}\n", result.columns.join("\t"));
     for row in &result.rows {
@@ -146,7 +171,11 @@ fn codegen_semi_join_matches_query_engine() {
 
     let generated_output = compile_and_run(&src, &[&orders, &regions]);
 
-    let engine = column_rs::query::QueryEngine::open_many(&[std::path::PathBuf::from(&orders), std::path::PathBuf::from(&regions)]).unwrap();
+    let engine = column_rs::query::QueryEngine::open_many(&[
+        std::path::PathBuf::from(&orders),
+        std::path::PathBuf::from(&regions),
+    ])
+    .unwrap();
     let result = engine.execute(sql).unwrap();
     let mut expected = format!("{}\n", result.columns.join("\t"));
     for row in &result.rows {

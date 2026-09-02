@@ -61,7 +61,10 @@ pub struct Batch {
 
 impl Batch {
     pub fn new(num_rows: usize) -> Self {
-        Batch { columns: HashMap::new(), num_rows }
+        Batch {
+            columns: HashMap::new(),
+            num_rows,
+        }
     }
 
     pub fn with_column(mut self, name: impl Into<String>, values: Vec<Value>) -> Self {
@@ -89,24 +92,40 @@ pub enum MapOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Opcode {
     /// Load a named column from the current batch into a register.
-    LoadColumn { reg: usize, column: Cow<'static, str> },
+    LoadColumn {
+        reg: usize,
+        column: Cow<'static, str>,
+    },
     /// Broadcast a constant value to every row of the current batch into a
     /// register.
     LoadConst { reg: usize, value: Value },
     /// Apply a binary op elementwise: `registers[dst] = op(registers[a], registers[b])`.
-    Map { dst: usize, op: MapOp, a: usize, b: usize },
+    Map {
+        dst: usize,
+        op: MapOp,
+        a: usize,
+        b: usize,
+    },
     /// Keep only the rows where `predicate` register holds `Value::Bool(true)`,
     /// applied to every currently-live register (in place).
     Filter { predicate: usize },
     /// Aggregate a whole register down to a single value (skipping nulls).
     /// `COUNT` counts non-null values, or all rows when `src` is `None`
     /// (`COUNT(*)`).
-    Reduce { func: AggFunc, src: Option<usize>, dst: usize },
+    Reduce {
+        func: AggFunc,
+        src: Option<usize>,
+        dst: usize,
+    },
     /// Hash-aggregate: partition rows by the tuple of values in `group_by`
     /// registers, then reduce each `(func, src)` pair per group. Writes one
     /// row per distinct group into `group_by` registers (deduplicated) plus
     /// one output register per aggregate, in `aggs` order.
-    GroupReduce { group_by: Cow<'static, [usize]>, aggs: Cow<'static, [(AggFunc, Option<usize>)]>, agg_dst: Cow<'static, [usize]> },
+    GroupReduce {
+        group_by: Cow<'static, [usize]>,
+        aggs: Cow<'static, [(AggFunc, Option<usize>)]>,
+        agg_dst: Cow<'static, [usize]>,
+    },
     /// Marks the top of the per-segment loop; a no-op on its own (the
     /// current batch is already loaded by [`Vm::run`]).
     Scan,
@@ -140,7 +159,10 @@ pub trait Segment: Send + Sync {
 ///
 /// `GroupReduce`/`Reduce` results are per-segment only — merging partial
 /// aggregates across segments is not performed here.
-pub fn run_parallel<'s>(segments: &[Box<dyn Segment + 's>], program: &[Opcode]) -> Result<Vec<Vec<Value>>> {
+pub fn run_parallel<'s>(
+    segments: &[Box<dyn Segment + 's>],
+    program: &[Opcode],
+) -> Result<Vec<Vec<Value>>> {
     use rayon::prelude::*;
 
     let per_segment: Vec<Result<Vec<Vec<Value>>>> = segments
@@ -231,7 +253,11 @@ fn top_n_reduce(rows: Vec<Vec<Value>>, spec: &TopN) -> Vec<Vec<Value>> {
 
     let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(spec.limit.min(rows.len()) + 1);
     for row in rows {
-        let item = TopNItem { row, col: spec.col, descending: spec.descending };
+        let item = TopNItem {
+            row,
+            col: spec.col,
+            descending: spec.descending,
+        };
         if heap.len() < spec.limit {
             heap.push(item);
         } else if let Some(worst) = heap.peek() {
@@ -241,7 +267,10 @@ fn top_n_reduce(rows: Vec<Vec<Value>>, spec: &TopN) -> Vec<Vec<Value>> {
             }
         }
     }
-    heap.into_sorted_vec().into_iter().map(|item| item.row).collect()
+    heap.into_sorted_vec()
+        .into_iter()
+        .map(|item| item.row)
+        .collect()
 }
 
 /// Like [`run_parallel`], but for `ORDER BY ... LIMIT ...` queries: each
@@ -249,7 +278,11 @@ fn top_n_reduce(rows: Vec<Vec<Value>>, spec: &TopN) -> Vec<Vec<Value>> {
 /// the merge itself is a final top-`spec.limit` reduction rather than a
 /// concatenation -- so peak memory is bounded by `segments.len() *
 /// spec.limit` rather than the full row count.
-pub fn run_parallel_top_n<'s>(segments: &[Box<dyn Segment + 's>], program: &[Opcode], spec: &TopN) -> Result<Vec<Vec<Value>>> {
+pub fn run_parallel_top_n<'s>(
+    segments: &[Box<dyn Segment + 's>],
+    program: &[Opcode],
+    spec: &TopN,
+) -> Result<Vec<Vec<Value>>> {
     use rayon::prelude::*;
 
     let per_segment: Vec<Result<Vec<Vec<Value>>>> = segments
@@ -303,7 +336,10 @@ impl Vm {
     }
 
     pub fn register(&self, reg: usize) -> Result<&[Value]> {
-        self.registers.get(&reg).map(Vec::as_slice).ok_or(VmError::UnknownRegister(reg))
+        self.registers
+            .get(&reg)
+            .map(Vec::as_slice)
+            .ok_or(VmError::UnknownRegister(reg))
     }
 
     pub fn execute(&mut self, batch: &Batch, program: &[Opcode]) -> Result<()> {
@@ -353,22 +389,34 @@ impl Vm {
     fn step(&mut self, batch: &Batch, op: &Opcode) -> Result<()> {
         match op {
             Opcode::LoadColumn { reg, column } => {
-                let values = batch.columns.get(column.as_ref()).ok_or_else(|| VmError::UnknownColumn(column.to_string()))?;
+                let values = batch
+                    .columns
+                    .get(column.as_ref())
+                    .ok_or_else(|| VmError::UnknownColumn(column.to_string()))?;
                 self.registers.insert(*reg, values.clone());
             }
             Opcode::LoadConst { reg, value } => {
-                self.registers.insert(*reg, vec![value.clone(); batch.num_rows]);
+                self.registers
+                    .insert(*reg, vec![value.clone(); batch.num_rows]);
             }
             Opcode::Map { dst, op, a, b } => {
                 let (a_vals, b_vals) = (self.register(*a)?, self.register(*b)?);
                 if a_vals.len() != b_vals.len() {
                     return Err(VmError::RegisterLengthMismatch);
                 }
-                let result = a_vals.iter().zip(b_vals).map(|(x, y)| apply_map_op(*op, x, y)).collect();
+                let result = a_vals
+                    .iter()
+                    .zip(b_vals)
+                    .map(|(x, y)| apply_map_op(*op, x, y))
+                    .collect();
                 self.registers.insert(*dst, result);
             }
             Opcode::Filter { predicate } => {
-                let mask: Vec<bool> = self.register(*predicate)?.iter().map(|v| matches!(v, Value::Bool(true))).collect();
+                let mask: Vec<bool> = self
+                    .register(*predicate)?
+                    .iter()
+                    .map(|v| matches!(v, Value::Bool(true)))
+                    .collect();
                 // #110: size each kept-values buffer to the actual survivor
                 // count (not the pre-filter length) -- at 50% selectivity on
                 // a 10M-row scan, over-allocating by 2x per live register is
@@ -395,13 +443,27 @@ impl Vm {
                 };
                 self.registers.insert(*dst, vec![result]);
             }
-            Opcode::GroupReduce { group_by, aggs, agg_dst } => {
-                let key_columns: Vec<Vec<Value>> = group_by.iter().map(|reg| self.register(*reg).map(<[Value]>::to_vec)).collect::<Result<_>>()?;
+            Opcode::GroupReduce {
+                group_by,
+                aggs,
+                agg_dst,
+            } => {
+                let key_columns: Vec<Vec<Value>> = group_by
+                    .iter()
+                    .map(|reg| self.register(*reg).map(<[Value]>::to_vec))
+                    .collect::<Result<_>>()?;
                 let num_rows = match key_columns.first() {
                     Some(c) => c.len(),
-                    None => match aggs.iter().find_map(|(_, src)| src.map(|reg| self.register(reg).map(<[Value]>::len))) {
+                    None => match aggs
+                        .iter()
+                        .find_map(|(_, src)| src.map(|reg| self.register(reg).map(<[Value]>::len)))
+                    {
                         Some(len) => len?,
-                        None => self.registers.values().next().map_or(batch.num_rows, Vec::len),
+                        None => self
+                            .registers
+                            .values()
+                            .next()
+                            .map_or(batch.num_rows, Vec::len),
                     },
                 };
 
@@ -410,7 +472,11 @@ impl Vm {
                 let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
                 for row in 0..num_rows {
                     let key: Vec<Value> = key_columns.iter().map(|c| c[row].clone()).collect();
-                    let key_str = key.iter().map(Value::to_string).collect::<Vec<_>>().join("\u{0}");
+                    let key_str = key
+                        .iter()
+                        .map(Value::to_string)
+                        .collect::<Vec<_>>()
+                        .join("\u{0}");
                     let group = *group_index.entry(key_str).or_insert_with(|| {
                         group_keys.push(key);
                         group_keys.len() - 1
@@ -420,7 +486,8 @@ impl Vm {
                 let num_groups = group_keys.len();
 
                 for (i, reg) in group_by.iter().enumerate() {
-                    self.registers.insert(*reg, group_keys.iter().map(|k| k[i].clone()).collect());
+                    self.registers
+                        .insert(*reg, group_keys.iter().map(|k| k[i].clone()).collect());
                 }
 
                 for ((func, src), dst) in aggs.iter().zip(agg_dst.iter()) {
@@ -442,7 +509,13 @@ impl Vm {
                     }
                     let result = per_group
                         .iter()
-                        .map(|vals| if src.is_none() { Value::Int(vals.len() as i64) } else { reduce_values(*func, vals) })
+                        .map(|vals| {
+                            if src.is_none() {
+                                Value::Int(vals.len() as i64)
+                            } else {
+                                reduce_values(*func, vals)
+                            }
+                        })
                         .collect();
                     self.registers.insert(*dst, result);
                 }
@@ -453,7 +526,10 @@ impl Vm {
                 // cell once to build each output row, so cloning the whole
                 // column again first (the previous `.to_vec()`) doubled the
                 // clone cost of every surviving value for no reason.
-                let cols: Vec<&[Value]> = registers.iter().map(|r| self.register(*r)).collect::<Result<_>>()?;
+                let cols: Vec<&[Value]> = registers
+                    .iter()
+                    .map(|r| self.register(*r))
+                    .collect::<Result<_>>()?;
                 let num_rows = cols.first().map_or(0, |c| c.len());
                 let mut rows = Vec::with_capacity(num_rows);
                 for row in 0..num_rows {
@@ -479,7 +555,9 @@ fn reduce_count_star(func: AggFunc, num_rows: usize) -> Value {
 fn reduce_values(func: AggFunc, values: &[Value]) -> Value {
     let non_null: Vec<f64> = values.iter().filter_map(Value::as_f64).collect();
     match func {
-        AggFunc::Count => Value::Int(values.iter().filter(|v| !matches!(v, Value::Null)).count() as i64),
+        AggFunc::Count => {
+            Value::Int(values.iter().filter(|v| !matches!(v, Value::Null)).count() as i64)
+        }
         AggFunc::Sum => {
             if non_null.is_empty() {
                 Value::Null
@@ -494,8 +572,18 @@ fn reduce_values(func: AggFunc, values: &[Value]) -> Value {
                 Value::Float(non_null.iter().sum::<f64>() / non_null.len() as f64)
             }
         }
-        AggFunc::Min => non_null.into_iter().fold(None, |acc: Option<f64>, v| Some(acc.map_or(v, |a| a.min(v)))).map_or(Value::Null, Value::Float),
-        AggFunc::Max => non_null.into_iter().fold(None, |acc: Option<f64>, v| Some(acc.map_or(v, |a| a.max(v)))).map_or(Value::Null, Value::Float),
+        AggFunc::Min => non_null
+            .into_iter()
+            .fold(None, |acc: Option<f64>, v| {
+                Some(acc.map_or(v, |a| a.min(v)))
+            })
+            .map_or(Value::Null, Value::Float),
+        AggFunc::Max => non_null
+            .into_iter()
+            .fold(None, |acc: Option<f64>, v| {
+                Some(acc.map_or(v, |a| a.max(v)))
+            })
+            .map_or(Value::Null, Value::Float),
     }
 }
 
@@ -528,9 +616,15 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
                 MapOp::Eq => ordering == Some(std::cmp::Ordering::Equal),
                 MapOp::Ne => ordering != Some(std::cmp::Ordering::Equal),
                 MapOp::Lt => ordering == Some(std::cmp::Ordering::Less),
-                MapOp::Le => matches!(ordering, Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)),
+                MapOp::Le => matches!(
+                    ordering,
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                ),
                 MapOp::Gt => ordering == Some(std::cmp::Ordering::Greater),
-                MapOp::Ge => matches!(ordering, Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)),
+                MapOp::Ge => matches!(
+                    ordering,
+                    Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+                ),
                 _ => unreachable!(),
             };
             Value::Bool(result)
@@ -558,25 +652,54 @@ mod tests {
 
     #[test]
     fn load_column_copies_batch_values_into_register() {
-        let batch = Batch::new(3).with_column("id", vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let batch =
+            Batch::new(3).with_column("id", vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
         let mut vm = Vm::new();
-        vm.execute(&batch, &[Opcode::LoadColumn { reg: 0, column: "id".into() }]).unwrap();
-        assert_eq!(vm.register(0).unwrap(), &[Value::Int(1), Value::Int(2), Value::Int(3)]);
+        vm.execute(
+            &batch,
+            &[Opcode::LoadColumn {
+                reg: 0,
+                column: "id".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Int(1), Value::Int(2), Value::Int(3)]
+        );
     }
 
     #[test]
     fn load_const_broadcasts_to_batch_length() {
         let batch = Batch::new(3);
         let mut vm = Vm::new();
-        vm.execute(&batch, &[Opcode::LoadConst { reg: 0, value: Value::Int(10) }]).unwrap();
-        assert_eq!(vm.register(0).unwrap(), &[Value::Int(10), Value::Int(10), Value::Int(10)]);
+        vm.execute(
+            &batch,
+            &[Opcode::LoadConst {
+                reg: 0,
+                value: Value::Int(10),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Int(10), Value::Int(10), Value::Int(10)]
+        );
     }
 
     #[test]
     fn load_column_errors_on_unknown_column() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
-        let err = vm.execute(&batch, &[Opcode::LoadColumn { reg: 0, column: "missing".into() }]).unwrap_err();
+        let err = vm
+            .execute(
+                &batch,
+                &[Opcode::LoadColumn {
+                    reg: 0,
+                    column: "missing".into(),
+                }],
+            )
+            .unwrap_err();
         assert_eq!(err, VmError::UnknownColumn("missing".into()));
     }
 
@@ -587,15 +710,34 @@ mod tests {
         vm.execute(
             &batch,
             &[
-                Opcode::LoadConst { reg: 0, value: Value::Int(10) },
-                Opcode::LoadConst { reg: 1, value: Value::Int(4) },
-                Opcode::Map { dst: 2, op: MapOp::Add, a: 0, b: 1 },
-                Opcode::Map { dst: 3, op: MapOp::Div, a: 0, b: 1 },
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Int(10),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Int(4),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+                Opcode::Map {
+                    dst: 3,
+                    op: MapOp::Div,
+                    a: 0,
+                    b: 1,
+                },
             ],
         )
         .unwrap();
         assert_eq!(vm.register(2).unwrap(), &[Value::Int(14), Value::Int(14)]);
-        assert_eq!(vm.register(3).unwrap(), &[Value::Float(2.5), Value::Float(2.5)]);
+        assert_eq!(
+            vm.register(3).unwrap(),
+            &[Value::Float(2.5), Value::Float(2.5)]
+        );
     }
 
     #[test]
@@ -605,9 +747,20 @@ mod tests {
         vm.execute(
             &batch,
             &[
-                Opcode::LoadColumn { reg: 0, column: "amount".into() },
-                Opcode::LoadConst { reg: 1, value: Value::Int(10) },
-                Opcode::Map { dst: 2, op: MapOp::Gt, a: 0, b: 1 },
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "amount".into(),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Int(10),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Gt,
+                    a: 0,
+                    b: 1,
+                },
             ],
         )
         .unwrap();
@@ -621,9 +774,20 @@ mod tests {
         vm.execute(
             &batch,
             &[
-                Opcode::LoadConst { reg: 0, value: Value::Null },
-                Opcode::LoadConst { reg: 1, value: Value::Int(1) },
-                Opcode::Map { dst: 2, op: MapOp::Add, a: 0, b: 1 },
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Null,
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Int(1),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
             ],
         )
         .unwrap();
@@ -634,9 +798,26 @@ mod tests {
     fn map_length_mismatch_errors() {
         let batch = Batch::new(2).with_column("a", vec![Value::Int(1), Value::Int(2)]);
         let mut vm = Vm::new();
-        vm.execute(&batch, &[Opcode::LoadColumn { reg: 0, column: "a".into() }]).unwrap();
+        vm.execute(
+            &batch,
+            &[Opcode::LoadColumn {
+                reg: 0,
+                column: "a".into(),
+            }],
+        )
+        .unwrap();
         vm.registers.insert(1, vec![Value::Int(1)]);
-        let err = vm.step(&batch, &Opcode::Map { dst: 2, op: MapOp::Add, a: 0, b: 1 }).unwrap_err();
+        let err = vm
+            .step(
+                &batch,
+                &Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            )
+            .unwrap_err();
         assert_eq!(err, VmError::RegisterLengthMismatch);
     }
 
@@ -644,15 +825,32 @@ mod tests {
     fn filter_keeps_only_true_rows_across_all_registers() {
         let batch = Batch::new(3)
             .with_column("id", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
-            .with_column("amount", vec![Value::Int(5), Value::Int(15), Value::Int(25)]);
+            .with_column(
+                "amount",
+                vec![Value::Int(5), Value::Int(15), Value::Int(25)],
+            );
         let mut vm = Vm::new();
         vm.execute(
             &batch,
             &[
-                Opcode::LoadColumn { reg: 0, column: "id".into() },
-                Opcode::LoadColumn { reg: 1, column: "amount".into() },
-                Opcode::LoadConst { reg: 2, value: Value::Int(10) },
-                Opcode::Map { dst: 3, op: MapOp::Gt, a: 1, b: 2 },
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "id".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "amount".into(),
+                },
+                Opcode::LoadConst {
+                    reg: 2,
+                    value: Value::Int(10),
+                },
+                Opcode::Map {
+                    dst: 3,
+                    op: MapOp::Gt,
+                    a: 1,
+                    b: 2,
+                },
                 Opcode::Filter { predicate: 3 },
             ],
         )
@@ -663,9 +861,19 @@ mod tests {
 
     #[test]
     fn reduce_sum_avg_min_max_skip_nulls() {
-        let batch = Batch::new(4).with_column("amount", vec![Value::Int(10), Value::Null, Value::Int(20), Value::Int(30)]);
+        let batch = Batch::new(4).with_column(
+            "amount",
+            vec![Value::Int(10), Value::Null, Value::Int(20), Value::Int(30)],
+        );
         let mut vm = Vm::new();
-        vm.execute(&batch, &[Opcode::LoadColumn { reg: 0, column: "amount".into() }]).unwrap();
+        vm.execute(
+            &batch,
+            &[Opcode::LoadColumn {
+                reg: 0,
+                column: "amount".into(),
+            }],
+        )
+        .unwrap();
 
         for (func, expected) in [
             (AggFunc::Sum, Value::Float(60.0)),
@@ -674,7 +882,15 @@ mod tests {
             (AggFunc::Max, Value::Float(30.0)),
             (AggFunc::Count, Value::Int(3)),
         ] {
-            vm.step(&batch, &Opcode::Reduce { func, src: Some(0), dst: 1 }).unwrap();
+            vm.step(
+                &batch,
+                &Opcode::Reduce {
+                    func,
+                    src: Some(0),
+                    dst: 1,
+                },
+            )
+            .unwrap();
             assert_eq!(vm.register(1).unwrap(), &[expected], "{func:?}");
         }
     }
@@ -683,7 +899,15 @@ mod tests {
     fn reduce_count_star_counts_rows_not_values() {
         let batch = Batch::new(5);
         let mut vm = Vm::new();
-        vm.execute(&batch, &[Opcode::Reduce { func: AggFunc::Count, src: None, dst: 0 }]).unwrap();
+        vm.execute(
+            &batch,
+            &[Opcode::Reduce {
+                func: AggFunc::Count,
+                src: None,
+                dst: 0,
+            }],
+        )
+        .unwrap();
         assert_eq!(vm.register(0).unwrap(), &[Value::Int(5)]);
     }
 
@@ -693,7 +917,17 @@ mod tests {
         let mut vm = Vm::new();
         vm.execute(
             &batch,
-            &[Opcode::LoadColumn { reg: 0, column: "amount".into() }, Opcode::Reduce { func: AggFunc::Sum, src: Some(0), dst: 1 }],
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "amount".into(),
+                },
+                Opcode::Reduce {
+                    func: AggFunc::Sum,
+                    src: Some(0),
+                    dst: 1,
+                },
+            ],
         )
         .unwrap();
         assert_eq!(vm.register(1).unwrap(), &[Value::Null]);
@@ -702,20 +936,52 @@ mod tests {
     #[test]
     fn group_reduce_hash_aggregates_by_key() {
         let batch = Batch::new(4)
-            .with_column("region", vec![Value::Str("east".into()), Value::Str("west".into()), Value::Str("east".into()), Value::Str("west".into())])
-            .with_column("amount", vec![Value::Int(10), Value::Int(5), Value::Int(20), Value::Int(15)]);
+            .with_column(
+                "region",
+                vec![
+                    Value::Str("east".into()),
+                    Value::Str("west".into()),
+                    Value::Str("east".into()),
+                    Value::Str("west".into()),
+                ],
+            )
+            .with_column(
+                "amount",
+                vec![
+                    Value::Int(10),
+                    Value::Int(5),
+                    Value::Int(20),
+                    Value::Int(15),
+                ],
+            );
         let mut vm = Vm::new();
         vm.execute(
             &batch,
             &[
-                Opcode::LoadColumn { reg: 0, column: "region".into() },
-                Opcode::LoadColumn { reg: 1, column: "amount".into() },
-                Opcode::GroupReduce { group_by: vec![0].into(), aggs: vec![(AggFunc::Sum, Some(1)), (AggFunc::Count, None)].into(), agg_dst: vec![2, 3].into() },
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "region".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "amount".into(),
+                },
+                Opcode::GroupReduce {
+                    group_by: vec![0].into(),
+                    aggs: vec![(AggFunc::Sum, Some(1)), (AggFunc::Count, None)].into(),
+                    agg_dst: vec![2, 3].into(),
+                },
             ],
         )
         .unwrap();
-        assert_eq!(vm.register(0).unwrap(), &[Value::Str("east".into()), Value::Str("west".into())]);
-        assert_eq!(vm.register(2).unwrap(), &[Value::Float(30.0), Value::Float(20.0)]);
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Str("east".into()), Value::Str("west".into())]
+        );
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Float(30.0), Value::Float(20.0)]
+        );
         assert_eq!(vm.register(3).unwrap(), &[Value::Int(2), Value::Int(2)]);
     }
 
@@ -743,13 +1009,25 @@ mod tests {
         let mut vm = Vm::new();
         let program = vec![
             Opcode::Scan,
-            Opcode::LoadColumn { reg: 0, column: "id".into() },
-            Opcode::Emit { registers: vec![0].into() },
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "id".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0].into(),
+            },
             Opcode::NextSegment { loop_start: 1 },
             Opcode::Halt,
         ];
         let rows = vm.run(&mut source, &program).unwrap();
-        assert_eq!(rows, vec![vec![Value::Int(1)], vec![Value::Int(2)], vec![Value::Int(3)]]);
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Int(1)],
+                vec![Value::Int(2)],
+                vec![Value::Int(3)]
+            ]
+        );
     }
 
     #[test]
@@ -771,26 +1049,61 @@ mod tests {
     #[test]
     fn run_parallel_scans_all_segments_in_order() {
         let segments: Vec<Box<dyn Segment>> = (0..8)
-            .map(|i| Box::new(InMemorySegment(Batch::new(1).with_column("id", vec![Value::Int(i)]))) as Box<dyn Segment>)
+            .map(|i| {
+                Box::new(InMemorySegment(
+                    Batch::new(1).with_column("id", vec![Value::Int(i)]),
+                )) as Box<dyn Segment>
+            })
             .collect();
-        let program = vec![Opcode::LoadColumn { reg: 0, column: "id".into() }, Opcode::Emit { registers: vec![0].into() }];
+        let program = vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "id".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0].into(),
+            },
+        ];
         let rows = run_parallel(&segments, &program).unwrap();
-        let ids: Vec<i64> = rows.iter().map(|r| match &r[0] { Value::Int(v) => *v, _ => unreachable!() }).collect();
+        let ids: Vec<i64> = rows
+            .iter()
+            .map(|r| match &r[0] {
+                Value::Int(v) => *v,
+                _ => unreachable!(),
+            })
+            .collect();
         assert_eq!(ids, (0..8).collect::<Vec<_>>());
     }
 
     #[test]
     fn run_parallel_applies_filter_per_segment() {
         let segments: Vec<Box<dyn Segment>> = vec![
-            Box::new(InMemorySegment(Batch::new(2).with_column("amount", vec![Value::Int(5), Value::Int(15)]))),
-            Box::new(InMemorySegment(Batch::new(2).with_column("amount", vec![Value::Int(25), Value::Int(3)]))),
+            Box::new(InMemorySegment(
+                Batch::new(2).with_column("amount", vec![Value::Int(5), Value::Int(15)]),
+            )),
+            Box::new(InMemorySegment(
+                Batch::new(2).with_column("amount", vec![Value::Int(25), Value::Int(3)]),
+            )),
         ];
         let program = vec![
-            Opcode::LoadColumn { reg: 0, column: "amount".into() },
-            Opcode::LoadConst { reg: 1, value: Value::Int(10) },
-            Opcode::Map { dst: 2, op: MapOp::Gt, a: 0, b: 1 },
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "amount".into(),
+            },
+            Opcode::LoadConst {
+                reg: 1,
+                value: Value::Int(10),
+            },
+            Opcode::Map {
+                dst: 2,
+                op: MapOp::Gt,
+                a: 0,
+                b: 1,
+            },
             Opcode::Filter { predicate: 2 },
-            Opcode::Emit { registers: vec![0].into() },
+            Opcode::Emit {
+                registers: vec![0].into(),
+            },
         ];
         let rows = run_parallel(&segments, &program).unwrap();
         assert_eq!(rows, vec![vec![Value::Int(15)], vec![Value::Int(25)]]);
@@ -799,30 +1112,91 @@ mod tests {
     #[test]
     fn run_parallel_top_n_picks_largest_across_segments_descending() {
         let segments: Vec<Box<dyn Segment>> = vec![
-            Box::new(InMemorySegment(Batch::new(3).with_column("amount", vec![Value::Int(5), Value::Int(15), Value::Null]))),
-            Box::new(InMemorySegment(Batch::new(3).with_column("amount", vec![Value::Int(25), Value::Int(3), Value::Int(20)]))),
+            Box::new(InMemorySegment(Batch::new(3).with_column(
+                "amount",
+                vec![Value::Int(5), Value::Int(15), Value::Null],
+            ))),
+            Box::new(InMemorySegment(Batch::new(3).with_column(
+                "amount",
+                vec![Value::Int(25), Value::Int(3), Value::Int(20)],
+            ))),
         ];
-        let program = vec![Opcode::LoadColumn { reg: 0, column: "amount".into() }, Opcode::Emit { registers: vec![0].into() }];
-        let spec = TopN { col: 0, descending: true, limit: 3 };
+        let program = vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "amount".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0].into(),
+            },
+        ];
+        let spec = TopN {
+            col: 0,
+            descending: true,
+            limit: 3,
+        };
         let rows = run_parallel_top_n(&segments, &program, &spec).unwrap();
-        assert_eq!(rows, vec![vec![Value::Int(25)], vec![Value::Int(20)], vec![Value::Int(15)]]);
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Int(25)],
+                vec![Value::Int(20)],
+                vec![Value::Int(15)]
+            ]
+        );
     }
 
     #[test]
     fn run_parallel_top_n_sorts_nulls_last_ascending() {
         let segments: Vec<Box<dyn Segment>> =
-            vec![Box::new(InMemorySegment(Batch::new(4).with_column("amount", vec![Value::Int(5), Value::Null, Value::Int(1), Value::Int(9)])))];
-        let program = vec![Opcode::LoadColumn { reg: 0, column: "amount".into() }, Opcode::Emit { registers: vec![0].into() }];
-        let spec = TopN { col: 0, descending: false, limit: 3 };
+            vec![Box::new(InMemorySegment(Batch::new(4).with_column(
+                "amount",
+                vec![Value::Int(5), Value::Null, Value::Int(1), Value::Int(9)],
+            )))];
+        let program = vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "amount".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0].into(),
+            },
+        ];
+        let spec = TopN {
+            col: 0,
+            descending: false,
+            limit: 3,
+        };
         let rows = run_parallel_top_n(&segments, &program, &spec).unwrap();
-        assert_eq!(rows, vec![vec![Value::Int(1)], vec![Value::Int(5)], vec![Value::Int(9)]]);
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Int(1)],
+                vec![Value::Int(5)],
+                vec![Value::Int(9)]
+            ]
+        );
     }
 
     #[test]
     fn run_parallel_top_n_limit_larger_than_row_count_returns_all_sorted() {
-        let segments: Vec<Box<dyn Segment>> = vec![Box::new(InMemorySegment(Batch::new(2).with_column("amount", vec![Value::Int(2), Value::Int(1)])))];
-        let program = vec![Opcode::LoadColumn { reg: 0, column: "amount".into() }, Opcode::Emit { registers: vec![0].into() }];
-        let spec = TopN { col: 0, descending: false, limit: 100 };
+        let segments: Vec<Box<dyn Segment>> = vec![Box::new(InMemorySegment(
+            Batch::new(2).with_column("amount", vec![Value::Int(2), Value::Int(1)]),
+        ))];
+        let program = vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "amount".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0].into(),
+            },
+        ];
+        let spec = TopN {
+            col: 0,
+            descending: false,
+            limit: 100,
+        };
         let rows = run_parallel_top_n(&segments, &program, &spec).unwrap();
         assert_eq!(rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
     }

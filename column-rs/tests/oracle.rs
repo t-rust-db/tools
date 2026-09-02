@@ -14,9 +14,15 @@ use std::path::Path;
 use std::process::Command;
 
 fn duckdb_csv(sql: &str) -> Option<String> {
-    let output = Command::new("duckdb").args(["-csv", "-c", sql]).output().ok()?;
+    let output = Command::new("duckdb")
+        .args(["-csv", "-c", sql])
+        .output()
+        .ok()?;
     if !output.status.success() {
-        panic!("duckdb query failed: {}", String::from_utf8_lossy(&output.stderr));
+        panic!(
+            "duckdb query failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     Some(String::from_utf8(output.stdout).expect("duckdb output is valid UTF-8"))
 }
@@ -25,11 +31,18 @@ fn duckdb_csv(sql: &str) -> Option<String> {
 /// commas or newlines in values) into rows of raw string cells, skipping
 /// the header line.
 fn parse_csv_rows(csv: &str) -> Vec<Vec<String>> {
-    csv.lines().skip(1).map(|line| line.split(',').map(str::to_string).collect()).collect()
+    csv.lines()
+        .skip(1)
+        .map(|line| line.split(',').map(str::to_string).collect())
+        .collect()
 }
 
 fn fixture_path(name: &str) -> String {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name).to_string_lossy().into_owned()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
 }
 
 macro_rules! require_duckdb_or_skip {
@@ -64,7 +77,10 @@ fn cell_as_string(cell: &str) -> Option<String> {
 fn oracle_int64_matches_duckdb() {
     let path = fixture_path("int64.parquet");
     let csv = require_duckdb_or_skip!(&format!("SELECT id FROM '{path}'"));
-    let expected: Vec<Option<i64>> = parse_csv_rows(&csv).iter().map(|row| cell_as_i64(&row[0])).collect();
+    let expected: Vec<Option<i64>> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| cell_as_i64(&row[0]))
+        .collect();
 
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
@@ -77,7 +93,10 @@ fn oracle_int64_matches_duckdb() {
 fn oracle_double_matches_duckdb() {
     let path = fixture_path("double.parquet");
     let csv = require_duckdb_or_skip!(&format!("SELECT val FROM '{path}'"));
-    let expected: Vec<Option<f64>> = parse_csv_rows(&csv).iter().map(|row| cell_as_f64(&row[0])).collect();
+    let expected: Vec<Option<f64>> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| cell_as_f64(&row[0]))
+        .collect();
 
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
@@ -90,7 +109,10 @@ fn oracle_double_matches_duckdb() {
 fn oracle_boolean_matches_duckdb() {
     let path = fixture_path("boolean.parquet");
     let csv = require_duckdb_or_skip!(&format!("SELECT flag FROM '{path}'"));
-    let expected: Vec<Option<bool>> = parse_csv_rows(&csv).iter().map(|row| cell_as_bool(&row[0])).collect();
+    let expected: Vec<Option<bool>> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| cell_as_bool(&row[0]))
+        .collect();
 
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
@@ -103,7 +125,10 @@ fn oracle_boolean_matches_duckdb() {
 fn oracle_string_matches_duckdb() {
     let path = fixture_path("string.parquet");
     let csv = require_duckdb_or_skip!(&format!("SELECT name FROM '{path}'"));
-    let expected: Vec<Option<String>> = parse_csv_rows(&csv).iter().map(|row| cell_as_string(&row[0])).collect();
+    let expected: Vec<Option<String>> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| cell_as_string(&row[0]))
+        .collect();
 
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
@@ -117,7 +142,10 @@ fn oracle_region_dictionary_matches_duckdb() {
     // Low-cardinality string column: DuckDB writes this PLAIN_DICTIONARY-encoded.
     let path = fixture_path("region.parquet");
     let csv = require_duckdb_or_skip!(&format!("SELECT region FROM '{path}'"));
-    let expected: Vec<Option<String>> = parse_csv_rows(&csv).iter().map(|row| cell_as_string(&row[0])).collect();
+    let expected: Vec<Option<String>> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| cell_as_string(&row[0]))
+        .collect();
 
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
@@ -131,7 +159,10 @@ fn oracle_delta_binary_packed_matches_duckdb() {
     // Sequential INT64 IDs: DuckDB's V2 writer encodes these DELTA_BINARY_PACKED.
     let path = fixture_path("delta.parquet");
     let csv = require_duckdb_or_skip!(&format!("SELECT id FROM '{path}'"));
-    let expected: Vec<Option<i64>> = parse_csv_rows(&csv).iter().map(|row| cell_as_i64(&row[0])).collect();
+    let expected: Vec<Option<i64>> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| cell_as_i64(&row[0]))
+        .collect();
 
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
@@ -157,7 +188,11 @@ fn oracle_snappy_compressed_matches_duckdb() {
     for (i, row) in rows.iter().enumerate() {
         assert_eq!(ids[i], cell_as_i64(&row[0]), "id mismatch at row {i}");
         assert_eq!(vals[i], cell_as_f64(&row[1]), "val mismatch at row {i}");
-        assert_eq!(names[i], cell_as_string(&row[2]), "name mismatch at row {i}");
+        assert_eq!(
+            names[i],
+            cell_as_string(&row[2]),
+            "name mismatch at row {i}"
+        );
     }
 }
 
@@ -178,7 +213,11 @@ fn oracle_zstd_compressed_matches_duckdb() {
     for (i, row) in rows.iter().enumerate() {
         assert_eq!(ids[i], cell_as_i64(&row[0]), "id mismatch at row {i}");
         assert_eq!(vals[i], cell_as_f64(&row[1]), "val mismatch at row {i}");
-        assert_eq!(names[i], cell_as_string(&row[2]), "name mismatch at row {i}");
+        assert_eq!(
+            names[i],
+            cell_as_string(&row[2]),
+            "name mismatch at row {i}"
+        );
     }
 }
 
@@ -200,13 +239,29 @@ fn oracle_int32_float_and_fixed_len_byte_array_match_duckdb() {
     let decimals = rg.read_fixed_len_byte_array_column(3).unwrap();
 
     for (i, row) in rows.iter().enumerate() {
-        assert_eq!(i8s[i], Some(row[0].parse::<i32>().unwrap()), "i8 mismatch at row {i}");
-        assert_eq!(i32s[i], Some(row[1].parse::<i32>().unwrap()), "i32 mismatch at row {i}");
-        assert_eq!(f32s[i], Some(row[2].parse::<f32>().unwrap()), "f32 mismatch at row {i}");
+        assert_eq!(
+            i8s[i],
+            Some(row[0].parse::<i32>().unwrap()),
+            "i8 mismatch at row {i}"
+        );
+        assert_eq!(
+            i32s[i],
+            Some(row[1].parse::<i32>().unwrap()),
+            "i32 mismatch at row {i}"
+        );
+        assert_eq!(
+            f32s[i],
+            Some(row[2].parse::<f32>().unwrap()),
+            "f32 mismatch at row {i}"
+        );
         // DECIMAL(38,10) -> a 16-byte big-endian two's-complement unscaled integer;
         // full semantic decoding is out of scope here, just confirm the raw bytes
         // round-trip at the expected fixed width.
-        assert_eq!(decimals[i].as_ref().unwrap().len(), 16, "decimal byte width mismatch at row {i}");
+        assert_eq!(
+            decimals[i].as_ref().unwrap().len(),
+            16,
+            "decimal byte width mismatch at row {i}"
+        );
     }
 }
 
@@ -217,7 +272,9 @@ fn oracle_int32_float_and_fixed_len_byte_array_match_duckdb() {
 #[test]
 fn oracle_timestamp_micros_and_decimals_match_duckdb() {
     let path = fixture_path("logical_types.parquet");
-    let csv = require_duckdb_or_skip!(&format!("SELECT epoch_us(ts_us), dec_small, dec_big FROM '{path}'"));
+    let csv = require_duckdb_or_skip!(&format!(
+        "SELECT epoch_us(ts_us), dec_small, dec_big FROM '{path}'"
+    ));
     let rows = parse_csv_rows(&csv);
 
     let data = std::fs::read(&path).unwrap();
@@ -229,9 +286,21 @@ fn oracle_timestamp_micros_and_decimals_match_duckdb() {
     let dec_big = rg.read_decimal_column(2).unwrap();
 
     for (i, row) in rows.iter().enumerate() {
-        assert_eq!(ts[i], Some(row[0].parse::<i64>().unwrap()), "timestamp mismatch at row {i}");
-        assert_eq!(dec_small[i].unwrap().to_string(), row[1], "dec_small mismatch at row {i}");
-        assert_eq!(dec_big[i].unwrap().to_string(), row[2], "dec_big mismatch at row {i}");
+        assert_eq!(
+            ts[i],
+            Some(row[0].parse::<i64>().unwrap()),
+            "timestamp mismatch at row {i}"
+        );
+        assert_eq!(
+            dec_small[i].unwrap().to_string(),
+            row[1],
+            "dec_small mismatch at row {i}"
+        );
+        assert_eq!(
+            dec_big[i].unwrap().to_string(),
+            row[2],
+            "dec_big mismatch at row {i}"
+        );
     }
 }
 
@@ -249,7 +318,11 @@ fn oracle_timestamp_millis_matches_duckdb() {
     let ts = rg.read_timestamp_column(0).unwrap();
 
     for (i, row) in rows.iter().enumerate() {
-        assert_eq!(ts[i], Some(row[0].parse::<i64>().unwrap()), "timestamp mismatch at row {i}");
+        assert_eq!(
+            ts[i],
+            Some(row[0].parse::<i64>().unwrap()),
+            "timestamp mismatch at row {i}"
+        );
     }
 }
 
@@ -268,7 +341,11 @@ fn oracle_int96_timestamps_match_duckdb() {
 
     assert_eq!(ts.len(), rows.len());
     for (i, row) in rows.iter().enumerate() {
-        assert_eq!(ts[i], Some(row[0].parse::<i64>().unwrap()), "INT96 timestamp mismatch at row {i}");
+        assert_eq!(
+            ts[i],
+            Some(row[0].parse::<i64>().unwrap()),
+            "INT96 timestamp mismatch at row {i}"
+        );
     }
 }
 
@@ -297,7 +374,11 @@ fn oracle_multi_page_column_chunk_matches_duckdb() {
     assert_eq!(names.len(), rows.len(), "name column was truncated");
     for (i, row) in rows.iter().enumerate() {
         assert_eq!(ids[i], cell_as_i64(&row[0]), "id mismatch at row {i}");
-        assert_eq!(names[i], cell_as_string(&row[1]), "name mismatch at row {i}");
+        assert_eq!(
+            names[i],
+            cell_as_string(&row[1]),
+            "name mismatch at row {i}"
+        );
     }
 }
 
@@ -321,10 +402,27 @@ fn nested_struct_column_reconstructs_correctly() {
     assert_eq!(points.len(), 10);
 
     for i in 0..10 {
-        assert_eq!(ids[i], NestedValue::Scalar(column_rs::reader::LeafScalar::Int64(i as i64)));
-        let NestedValue::Struct(fields) = &points[i] else { panic!("expected a struct at row {i}, got {:?}", points[i]) };
-        assert_eq!(fields[0], ("x".to_string(), NestedValue::Scalar(column_rs::reader::LeafScalar::Int64(i as i64))));
-        assert_eq!(fields[1], ("y".to_string(), NestedValue::Scalar(column_rs::reader::LeafScalar::Int64((i * 2) as i64))));
+        assert_eq!(
+            ids[i],
+            NestedValue::Scalar(column_rs::reader::LeafScalar::Int64(i as i64))
+        );
+        let NestedValue::Struct(fields) = &points[i] else {
+            panic!("expected a struct at row {i}, got {:?}", points[i])
+        };
+        assert_eq!(
+            fields[0],
+            (
+                "x".to_string(),
+                NestedValue::Scalar(column_rs::reader::LeafScalar::Int64(i as i64))
+            )
+        );
+        assert_eq!(
+            fields[1],
+            (
+                "y".to_string(),
+                NestedValue::Scalar(column_rs::reader::LeafScalar::Int64((i * 2) as i64))
+            )
+        );
     }
 }
 
@@ -345,7 +443,11 @@ fn nested_list_column_reconstructs_correctly() {
     assert_eq!(
         numbers,
         vec![
-            NestedValue::List(vec![NestedValue::Scalar(LeafScalar::Int64(1)), NestedValue::Scalar(LeafScalar::Int64(2)), NestedValue::Scalar(LeafScalar::Int64(3))]),
+            NestedValue::List(vec![
+                NestedValue::Scalar(LeafScalar::Int64(1)),
+                NestedValue::Scalar(LeafScalar::Int64(2)),
+                NestedValue::Scalar(LeafScalar::Int64(3))
+            ]),
             NestedValue::List(vec![]),
             NestedValue::List(vec![NestedValue::Scalar(LeafScalar::Int64(4))]),
         ]
@@ -355,7 +457,10 @@ fn nested_list_column_reconstructs_correctly() {
     assert_eq!(
         letters,
         vec![
-            NestedValue::List(vec![NestedValue::Scalar(LeafScalar::Str("a".to_string())), NestedValue::Scalar(LeafScalar::Str("b".to_string()))]),
+            NestedValue::List(vec![
+                NestedValue::Scalar(LeafScalar::Str("a".to_string())),
+                NestedValue::Scalar(LeafScalar::Str("b".to_string()))
+            ]),
             NestedValue::List(vec![NestedValue::Scalar(LeafScalar::Str("c".to_string()))]),
             NestedValue::Null,
         ]
@@ -375,10 +480,25 @@ fn nested_map_column_reconstructs_correctly() {
     let file = ParquetFile::open(&data).unwrap();
 
     let kv = file.read_nested_column(0, "kv").unwrap();
-    let pair = |k: &str, v: i64| NestedValue::Struct(vec![("key".to_string(), NestedValue::Scalar(LeafScalar::Str(k.to_string()))), ("value".to_string(), NestedValue::Scalar(LeafScalar::Int64(v)))]);
+    let pair = |k: &str, v: i64| {
+        NestedValue::Struct(vec![
+            (
+                "key".to_string(),
+                NestedValue::Scalar(LeafScalar::Str(k.to_string())),
+            ),
+            (
+                "value".to_string(),
+                NestedValue::Scalar(LeafScalar::Int64(v)),
+            ),
+        ])
+    };
     assert_eq!(
         kv,
-        vec![NestedValue::List(vec![pair("a", 1), pair("b", 2)]), NestedValue::List(vec![]), NestedValue::List(vec![pair("c", 3)]),]
+        vec![
+            NestedValue::List(vec![pair("a", 1), pair("b", 2)]),
+            NestedValue::List(vec![]),
+            NestedValue::List(vec![pair("c", 3)]),
+        ]
     );
 }
 
@@ -392,9 +512,15 @@ fn dictionary_indices_reconstruct_same_values_as_resolved_column() {
     let rg = file.row_group(0).unwrap();
 
     let resolved = rg.read_string_column(0).unwrap();
-    let (dictionary, indices) = rg.read_string_column_dictionary_indices(0).unwrap().expect("region.parquet is dictionary-encoded");
+    let (dictionary, indices) = rg
+        .read_string_column_dictionary_indices(0)
+        .unwrap()
+        .expect("region.parquet is dictionary-encoded");
 
-    let reconstructed: Vec<Option<String>> = indices.into_iter().map(|idx| idx.map(|i| dictionary[i as usize].clone())).collect();
+    let reconstructed: Vec<Option<String>> = indices
+        .into_iter()
+        .map(|idx| idx.map(|i| dictionary[i as usize].clone()))
+        .collect();
     assert_eq!(reconstructed, resolved);
 }
 
@@ -410,7 +536,10 @@ fn oracle_inner_join_matches_duckdb() {
         "SELECT orders.id, regions.budget FROM '{orders_path}' orders \
          JOIN '{regions_path}' regions ON orders.region_key = regions.key ORDER BY orders.id"
     ));
-    let expected: Vec<(i64, f64)> = parse_csv_rows(&csv).iter().map(|row| (row[0].parse().unwrap(), row[1].parse().unwrap())).collect();
+    let expected: Vec<(i64, f64)> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| (row[0].parse().unwrap(), row[1].parse().unwrap()))
+        .collect();
 
     let orders_data = std::fs::read(&orders_path).unwrap();
     let regions_data = std::fs::read(&regions_path).unwrap();
@@ -423,7 +552,11 @@ fn oracle_inner_join_matches_duckdb() {
     assert_eq!(rows.len(), expected.len());
     for ((id, budget), row) in expected.iter().zip(&rows) {
         assert_eq!(row[0].as_f64().unwrap() as i64, *id, "id mismatch");
-        assert_eq!(row[1].as_f64().unwrap(), *budget, "budget mismatch for id {id}");
+        assert_eq!(
+            row[1].as_f64().unwrap(),
+            *budget,
+            "budget mismatch for id {id}"
+        );
     }
 }
 
@@ -437,7 +570,10 @@ fn query_engine_runs_join_across_two_loaded_tables() {
     use column_rs::query::QueryEngine;
     use std::path::PathBuf;
 
-    let paths = vec![PathBuf::from(fixture_path("orders.parquet")), PathBuf::from(fixture_path("regions.parquet"))];
+    let paths = vec![
+        PathBuf::from(fixture_path("orders.parquet")),
+        PathBuf::from(fixture_path("regions.parquet")),
+    ];
     let engine = QueryEngine::open_many(&paths).unwrap();
 
     assert_eq!(engine.table_names(), vec!["orders", "regions"]);
@@ -453,9 +589,15 @@ fn query_engine_runs_join_across_two_loaded_tables() {
 fn query_engine_rejects_duplicate_table_name() {
     use column_rs::query::QueryEngine;
 
-    let mut engine = QueryEngine::open(std::path::Path::new(&fixture_path("orders.parquet"))).unwrap();
-    let err = engine.add_table(std::path::Path::new(&fixture_path("orders.parquet")), None).unwrap_err();
-    assert!(err.to_string().contains("orders"), "error should name the duplicate table: {err}");
+    let mut engine =
+        QueryEngine::open(std::path::Path::new(&fixture_path("orders.parquet"))).unwrap();
+    let err = engine
+        .add_table(std::path::Path::new(&fixture_path("orders.parquet")), None)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("orders"),
+        "error should name the duplicate table: {err}"
+    );
 }
 
 /// #110: `column-rs -c "<SQL>"` (one-shot mode) streams tab-separated rows
@@ -469,7 +611,11 @@ fn cli_one_shot_streaming_output_matches_query_engine() {
     let sql = "SELECT id, name FROM mixed WHERE id > 995";
     let bin = env!("CARGO_BIN_EXE_column-rs");
     let output = Command::new(bin).args(["-c", sql, &path]).output().unwrap();
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     let engine = column_rs::query::QueryEngine::open(Path::new(&path)).unwrap();
@@ -496,8 +642,10 @@ fn oracle_left_join_keeps_unmatched_rows_matches_duckdb() {
         "SELECT orders.id, regions.budget FROM '{orders_path}' orders \
          LEFT JOIN '{regions_path}' regions ON orders.region_key = regions.key ORDER BY orders.id"
     ));
-    let expected: Vec<(i64, Option<f64>)> =
-        parse_csv_rows(&csv).iter().map(|row| (row[0].parse().unwrap(), cell_as_f64(&row[1]))).collect();
+    let expected: Vec<(i64, Option<f64>)> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| (row[0].parse().unwrap(), cell_as_f64(&row[1])))
+        .collect();
 
     let orders_data = std::fs::read(&orders_path).unwrap();
     let regions_data = std::fs::read(&regions_path).unwrap();
@@ -509,13 +657,23 @@ fn oracle_left_join_keeps_unmatched_rows_matches_duckdb() {
             .unwrap();
     let rows = query::execute_joined(&orders, &regions, &parsed).unwrap();
 
-    assert_eq!(rows.len(), expected.len(), "LEFT JOIN row count mismatch (unmatched rows must be kept)");
-    assert!(rows.iter().any(|r| matches!(r[1], Value::Null)), "expected at least one unmatched (NULL) right side");
+    assert_eq!(
+        rows.len(),
+        expected.len(),
+        "LEFT JOIN row count mismatch (unmatched rows must be kept)"
+    );
+    assert!(
+        rows.iter().any(|r| matches!(r[1], Value::Null)),
+        "expected at least one unmatched (NULL) right side"
+    );
     for ((id, budget), row) in expected.iter().zip(&rows) {
         assert_eq!(row[0].as_f64().unwrap() as i64, *id, "id mismatch");
         match budget {
             Some(b) => assert_eq!(row[1].as_f64().unwrap(), *b, "budget mismatch for id {id}"),
-            None => assert!(matches!(row[1], Value::Null), "expected NULL budget for unmatched id {id}"),
+            None => assert!(
+                matches!(row[1], Value::Null),
+                "expected NULL budget for unmatched id {id}"
+            ),
         }
     }
 }
@@ -530,17 +688,27 @@ fn oracle_semi_join_matches_duckdb() {
     let csv = require_duckdb_or_skip!(&format!(
         "SELECT id FROM '{orders_path}' WHERE region_key IN (SELECT key FROM '{regions_path}') ORDER BY id"
     ));
-    let expected: Vec<i64> = parse_csv_rows(&csv).iter().map(|row| row[0].parse().unwrap()).collect();
+    let expected: Vec<i64> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| row[0].parse().unwrap())
+        .collect();
 
     let orders_data = std::fs::read(&orders_path).unwrap();
     let regions_data = std::fs::read(&regions_path).unwrap();
     let orders = ParquetFile::open(&orders_data).unwrap();
     let regions = ParquetFile::open(&regions_data).unwrap();
 
-    let parsed = sql::parse("SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions) ORDER BY id").unwrap();
+    let parsed = sql::parse(
+        "SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions) ORDER BY id",
+    )
+    .unwrap();
     let rows = query::execute_semi_join(&orders, &regions, &parsed).unwrap();
 
-    assert_eq!(rows.len(), expected.len(), "semi-join should exclude the unmatched region_key row");
+    assert_eq!(
+        rows.len(),
+        expected.len(),
+        "semi-join should exclude the unmatched region_key row"
+    );
     for (id, row) in expected.iter().zip(&rows) {
         assert_eq!(row[0].as_f64().unwrap() as i64, *id);
     }
@@ -550,11 +718,21 @@ fn oracle_semi_join_matches_duckdb() {
 #[test]
 fn oracle_ranking_window_functions_match_duckdb() {
     let path = fixture_path("orders.parquet");
-    let sql_text = "SELECT id, region_key, ROW_NUMBER() OVER w, RANK() OVER w, DENSE_RANK() OVER w \
+    let sql_text =
+        "SELECT id, region_key, ROW_NUMBER() OVER w, RANK() OVER w, DENSE_RANK() OVER w \
                      FROM '{path}' WINDOW w AS (PARTITION BY region_key ORDER BY id) ORDER BY id";
     let csv = require_duckdb_or_skip!(&sql_text.replace("{path}", &path));
-    let expected: Vec<(i64, i64, i64, i64)> =
-        parse_csv_rows(&csv).iter().map(|row| (row[0].parse().unwrap(), row[2].parse().unwrap(), row[3].parse().unwrap(), row[4].parse().unwrap())).collect();
+    let expected: Vec<(i64, i64, i64, i64)> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| {
+            (
+                row[0].parse().unwrap(),
+                row[2].parse().unwrap(),
+                row[3].parse().unwrap(),
+                row[4].parse().unwrap(),
+            )
+        })
+        .collect();
 
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
@@ -566,9 +744,21 @@ fn oracle_ranking_window_functions_match_duckdb() {
     assert_eq!(rows.len(), expected.len());
     for ((id, rn, rk, drk), row) in expected.iter().zip(&rows) {
         assert_eq!(row[0].as_f64().unwrap() as i64, *id);
-        assert_eq!(row[2].as_f64().unwrap() as i64, *rn, "ROW_NUMBER mismatch for id {id}");
-        assert_eq!(row[3].as_f64().unwrap() as i64, *rk, "RANK mismatch for id {id}");
-        assert_eq!(row[4].as_f64().unwrap() as i64, *drk, "DENSE_RANK mismatch for id {id}");
+        assert_eq!(
+            row[2].as_f64().unwrap() as i64,
+            *rn,
+            "ROW_NUMBER mismatch for id {id}"
+        );
+        assert_eq!(
+            row[3].as_f64().unwrap() as i64,
+            *rk,
+            "RANK mismatch for id {id}"
+        );
+        assert_eq!(
+            row[4].as_f64().unwrap() as i64,
+            *drk,
+            "DENSE_RANK mismatch for id {id}"
+        );
     }
 }
 
@@ -585,7 +775,15 @@ fn oracle_lag_lead_first_last_value_match_duckdb() {
     type ExpectedRow = (i64, Option<i64>, Option<i64>, i64, i64);
     let expected: Vec<ExpectedRow> = parse_csv_rows(&csv)
         .iter()
-        .map(|row| (row[0].parse().unwrap(), cell_as_i64(&row[1]), cell_as_i64(&row[2]), row[3].parse().unwrap(), row[4].parse().unwrap()))
+        .map(|row| {
+            (
+                row[0].parse().unwrap(),
+                cell_as_i64(&row[1]),
+                cell_as_i64(&row[2]),
+                row[3].parse().unwrap(),
+                row[4].parse().unwrap(),
+            )
+        })
         .collect();
 
     let data = std::fs::read(&path).unwrap();
@@ -602,15 +800,37 @@ fn oracle_lag_lead_first_last_value_match_duckdb() {
     for ((id, lag, lead, first, last), row) in expected.iter().zip(&rows) {
         assert_eq!(row[0].as_f64().unwrap() as i64, *id);
         match lag {
-            Some(v) => assert_eq!(row[1].as_f64().unwrap() as i64, *v, "LAG mismatch for id {id}"),
-            None => assert!(matches!(row[1], Value::Null), "expected NULL LAG for id {id}"),
+            Some(v) => assert_eq!(
+                row[1].as_f64().unwrap() as i64,
+                *v,
+                "LAG mismatch for id {id}"
+            ),
+            None => assert!(
+                matches!(row[1], Value::Null),
+                "expected NULL LAG for id {id}"
+            ),
         }
         match lead {
-            Some(v) => assert_eq!(row[2].as_f64().unwrap() as i64, *v, "LEAD mismatch for id {id}"),
-            None => assert!(matches!(row[2], Value::Null), "expected NULL LEAD for id {id}"),
+            Some(v) => assert_eq!(
+                row[2].as_f64().unwrap() as i64,
+                *v,
+                "LEAD mismatch for id {id}"
+            ),
+            None => assert!(
+                matches!(row[2], Value::Null),
+                "expected NULL LEAD for id {id}"
+            ),
         }
-        assert_eq!(row[3].as_f64().unwrap() as i64, *first, "FIRST_VALUE mismatch for id {id}");
-        assert_eq!(row[4].as_f64().unwrap() as i64, *last, "LAST_VALUE mismatch for id {id}");
+        assert_eq!(
+            row[3].as_f64().unwrap() as i64,
+            *first,
+            "FIRST_VALUE mismatch for id {id}"
+        );
+        assert_eq!(
+            row[4].as_f64().unwrap() as i64,
+            *last,
+            "LAST_VALUE mismatch for id {id}"
+        );
     }
 }
 
@@ -624,8 +844,17 @@ fn oracle_window_aggregates_match_duckdb() {
         "SELECT id, SUM(id) OVER running, COUNT(id) OVER whole, AVG(id) OVER whole FROM '{path}' \
          WINDOW running AS (PARTITION BY region_key ORDER BY id), whole AS (PARTITION BY region_key) ORDER BY id"
     ));
-    let expected: Vec<(i64, f64, i64, f64)> =
-        parse_csv_rows(&csv).iter().map(|row| (row[0].parse().unwrap(), row[1].parse().unwrap(), row[2].parse().unwrap(), row[3].parse().unwrap())).collect();
+    let expected: Vec<(i64, f64, i64, f64)> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| {
+            (
+                row[0].parse().unwrap(),
+                row[1].parse().unwrap(),
+                row[2].parse().unwrap(),
+                row[3].parse().unwrap(),
+            )
+        })
+        .collect();
 
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
@@ -639,9 +868,21 @@ fn oracle_window_aggregates_match_duckdb() {
     assert_eq!(rows.len(), expected.len());
     for ((id, running_sum, whole_count, whole_avg), row) in expected.iter().zip(&rows) {
         assert_eq!(row[0].as_f64().unwrap() as i64, *id);
-        assert_eq!(row[1].as_f64().unwrap(), *running_sum, "running SUM mismatch for id {id}");
-        assert_eq!(row[2].as_f64().unwrap() as i64, *whole_count, "COUNT mismatch for id {id}");
-        assert_eq!(row[3].as_f64().unwrap(), *whole_avg, "AVG mismatch for id {id}");
+        assert_eq!(
+            row[1].as_f64().unwrap(),
+            *running_sum,
+            "running SUM mismatch for id {id}"
+        );
+        assert_eq!(
+            row[2].as_f64().unwrap() as i64,
+            *whole_count,
+            "COUNT mismatch for id {id}"
+        );
+        assert_eq!(
+            row[3].as_f64().unwrap(),
+            *whole_avg,
+            "AVG mismatch for id {id}"
+        );
     }
 }
 
@@ -652,12 +893,23 @@ fn oracle_production_shaped_file_group_by_matches_duckdb() {
     let csv = require_duckdb_or_skip!(&format!(
         "SELECT region, SUM(amount), COUNT(*) FROM '{path}' WHERE id > 1000 GROUP BY region ORDER BY region"
     ));
-    let expected: Vec<(String, f64, i64)> =
-        parse_csv_rows(&csv).iter().map(|row| (row[0].clone(), row[1].parse().unwrap(), row[2].parse().unwrap())).collect();
+    let expected: Vec<(String, f64, i64)> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| {
+            (
+                row[0].clone(),
+                row[1].parse().unwrap(),
+                row[2].parse().unwrap(),
+            )
+        })
+        .collect();
 
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
-    assert!(file.num_row_groups() > 1, "fixture should span multiple row groups to exercise parallel scan");
+    assert!(
+        file.num_row_groups() > 1,
+        "fixture should span multiple row groups to exercise parallel scan"
+    );
 
     let query = sql::parse("SELECT region, SUM(amount), COUNT(*) FROM production WHERE id > 1000 GROUP BY region ORDER BY region").unwrap();
     let mut rows = query::execute(&file, &query).unwrap();
@@ -666,8 +918,16 @@ fn oracle_production_shaped_file_group_by_matches_duckdb() {
     assert_eq!(rows.len(), expected.len());
     for ((region, sum, count), row) in expected.iter().zip(&rows) {
         assert_eq!(row[0].to_string(), *region);
-        assert_eq!(row[1].as_f64().unwrap(), *sum, "sum mismatch for region {region}");
-        assert_eq!(row[2].as_f64().unwrap() as i64, *count, "count mismatch for region {region}");
+        assert_eq!(
+            row[1].as_f64().unwrap(),
+            *sum,
+            "sum mismatch for region {region}"
+        );
+        assert_eq!(
+            row[2].as_f64().unwrap() as i64,
+            *count,
+            "count mismatch for region {region}"
+        );
     }
 }
 
@@ -679,9 +939,19 @@ fn oracle_production_shaped_file_group_by_matches_duckdb() {
 #[test]
 fn oracle_limit_only_matches_duckdb() {
     let path = fixture_path("production.parquet");
-    let csv = require_duckdb_or_skip!(&format!("SELECT region, amount, id FROM '{path}' LIMIT 1500"));
-    let expected: Vec<(String, f64, i64)> =
-        parse_csv_rows(&csv).iter().map(|row| (row[0].clone(), row[1].parse().unwrap(), row[2].parse().unwrap())).collect();
+    let csv = require_duckdb_or_skip!(&format!(
+        "SELECT region, amount, id FROM '{path}' LIMIT 1500"
+    ));
+    let expected: Vec<(String, f64, i64)> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| {
+            (
+                row[0].clone(),
+                row[1].parse().unwrap(),
+                row[2].parse().unwrap(),
+            )
+        })
+        .collect();
 
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
@@ -718,7 +988,11 @@ fn oracle_mixed_types_match_duckdb() {
         assert_eq!(ids[i], cell_as_i64(&row[0]), "id mismatch at row {i}");
         assert_eq!(vals[i], cell_as_f64(&row[1]), "val mismatch at row {i}");
         assert_eq!(flags[i], cell_as_bool(&row[2]), "flag mismatch at row {i}");
-        assert_eq!(names[i], cell_as_string(&row[3]), "name mismatch at row {i}");
+        assert_eq!(
+            names[i],
+            cell_as_string(&row[3]),
+            "name mismatch at row {i}"
+        );
     }
 }
 
@@ -747,7 +1021,11 @@ fn oracle_nullable_columns_match_duckdb() {
         assert_eq!(ids[i], cell_as_i64(&row[0]), "id mismatch at row {i}");
         assert_eq!(vals[i], cell_as_f64(&row[1]), "val mismatch at row {i}");
         assert_eq!(flags[i], cell_as_bool(&row[2]), "flag mismatch at row {i}");
-        assert_eq!(names[i], cell_as_string(&row[3]), "name mismatch at row {i}");
+        assert_eq!(
+            names[i],
+            cell_as_string(&row[3]),
+            "name mismatch at row {i}"
+        );
     }
 }
 
@@ -759,13 +1037,20 @@ fn oracle_order_by_limit_top_n_matches_duckdb() {
     let path = fixture_path("nullable.parquet");
 
     for order in ["ASC", "DESC"] {
-        let csv = require_duckdb_or_skip!(&format!("SELECT id, val FROM '{path}' ORDER BY val {order} LIMIT 5"));
-        let expected: Vec<(Option<i64>, Option<f64>)> =
-            parse_csv_rows(&csv).iter().map(|row| (cell_as_i64(&row[0]), cell_as_f64(&row[1]))).collect();
+        let csv = require_duckdb_or_skip!(&format!(
+            "SELECT id, val FROM '{path}' ORDER BY val {order} LIMIT 5"
+        ));
+        let expected: Vec<(Option<i64>, Option<f64>)> = parse_csv_rows(&csv)
+            .iter()
+            .map(|row| (cell_as_i64(&row[0]), cell_as_f64(&row[1])))
+            .collect();
 
         let data = std::fs::read(&path).unwrap();
         let file = ParquetFile::open(&data).unwrap();
-        let query = sql::parse(&format!("SELECT id, val FROM nullable ORDER BY val {order} LIMIT 5")).unwrap();
+        let query = sql::parse(&format!(
+            "SELECT id, val FROM nullable ORDER BY val {order} LIMIT 5"
+        ))
+        .unwrap();
         let rows = query::execute(&file, &query).unwrap();
 
         let actual: Vec<(Option<i64>, Option<f64>)> = rows
@@ -785,7 +1070,10 @@ fn oracle_order_by_limit_top_n_matches_duckdb() {
             })
             .collect();
 
-        assert_eq!(actual, expected, "mismatch for ORDER BY val {order} LIMIT 5");
+        assert_eq!(
+            actual, expected,
+            "mismatch for ORDER BY val {order} LIMIT 5"
+        );
     }
 }
 
@@ -799,7 +1087,10 @@ fn oracle_large_file_100k_rows() {
         return;
     }
 
-    let tmp_path = std::env::temp_dir().join(format!("column-rs-oracle-large-{}.parquet", std::process::id()));
+    let tmp_path = std::env::temp_dir().join(format!(
+        "column-rs-oracle-large-{}.parquet",
+        std::process::id()
+    ));
     let tmp_path_str = tmp_path.to_string_lossy();
 
     let create_sql = format!(
@@ -840,20 +1131,30 @@ fn oracle_large_file_100k_rows() {
 #[test]
 fn oracle_query_vm_group_by_sum_matches_duckdb() {
     let path = fixture_path("mixed.parquet");
-    let csv = require_duckdb_or_skip!(&format!("SELECT flag, SUM(val) FROM '{path}' WHERE id > 100 GROUP BY flag ORDER BY flag"));
-    let expected: Vec<(bool, f64)> =
-        parse_csv_rows(&csv).iter().map(|row| (row[0].parse().unwrap(), row[1].parse().unwrap())).collect();
+    let csv = require_duckdb_or_skip!(&format!(
+        "SELECT flag, SUM(val) FROM '{path}' WHERE id > 100 GROUP BY flag ORDER BY flag"
+    ));
+    let expected: Vec<(bool, f64)> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| (row[0].parse().unwrap(), row[1].parse().unwrap()))
+        .collect();
 
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
-    let query = sql::parse("SELECT flag, SUM(val) FROM mixed WHERE id > 100 GROUP BY flag ORDER BY flag").unwrap();
+    let query =
+        sql::parse("SELECT flag, SUM(val) FROM mixed WHERE id > 100 GROUP BY flag ORDER BY flag")
+            .unwrap();
     let mut rows = query::execute(&file, &query).unwrap();
     rows.sort_by(|a, b| a[0].to_string().cmp(&b[0].to_string()));
 
     assert_eq!(rows.len(), expected.len());
     for ((flag, sum), row) in expected.iter().zip(&rows) {
         assert_eq!(row[0].to_string(), flag.to_string());
-        assert_eq!(row[1].as_f64().unwrap(), *sum, "sum mismatch for flag {flag}");
+        assert_eq!(
+            row[1].as_f64().unwrap(),
+            *sum,
+            "sum mismatch for flag {flag}"
+        );
     }
 }
 
@@ -885,8 +1186,10 @@ fn oracle_query_vm_where_count_matches_duckdb() {
 fn oracle_projection_of_unfiltered_columns_matches_duckdb() {
     let path = fixture_path("mixed.parquet");
     let csv = require_duckdb_or_skip!(&format!("SELECT id, name FROM '{path}' WHERE val > 1400"));
-    let expected: Vec<(i64, String)> =
-        parse_csv_rows(&csv).iter().map(|row| (row[0].parse().unwrap(), row[1].clone())).collect();
+    let expected: Vec<(i64, String)> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| (row[0].parse().unwrap(), row[1].clone()))
+        .collect();
 
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
@@ -898,6 +1201,10 @@ fn oracle_projection_of_unfiltered_columns_matches_duckdb() {
     assert_eq!(rows.len(), expected.len());
     for ((id, name), row) in expected.iter().zip(&rows) {
         assert_eq!(row[0], Value::Int(*id), "id mismatch");
-        assert_eq!(row[1], Value::Str(name.clone().into()), "name mismatch for id {id}");
+        assert_eq!(
+            row[1],
+            Value::Str(name.clone().into()),
+            "name mismatch for id {id}"
+        );
     }
 }

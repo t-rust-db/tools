@@ -12,13 +12,15 @@
 //! the query the register-machine model doesn't fit (materializing full
 //! tables and computing directly over them instead).
 
+use crate::vm::{Batch, MapOp, Opcode, Segment, Value};
 use db_parquet::footer::PhysicalType;
 use db_parquet::ParquetFile;
 use db_storage::{Vfs, VfsFile};
-use sql_expr::{AggFunc, BinOp, Expr, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec};
+use sql_expr::{
+    AggFunc, BinOp, Expr, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
+};
 use sql_join::JoinHashTable;
 use sql_types::Literal;
-use crate::vm::{Batch, MapOp, Opcode, Segment, Value};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -100,27 +102,44 @@ struct RowGroupSegment<'a, 'm> {
 
 impl<'a, 'm> Segment for RowGroupSegment<'a, 'm> {
     fn load(&self) -> Batch {
-        let rg = self.file.row_group(self.row_group_index).expect("row group index within range");
+        let rg = self
+            .file
+            .row_group(self.row_group_index)
+            .expect("row group index within range");
         let num_rows = rg.num_rows() as usize;
         let mut batch = Batch::new(num_rows);
         for (name, index, physical_type) in &self.columns {
             let values = match physical_type {
-                PhysicalType::Int64 => {
-                    rg.read_int64_column(*index).map(|col| col.into_iter().map(|v| v.map_or(Value::Null, Value::Int)).collect())
-                }
-                PhysicalType::Int32 => rg
-                    .read_int32_column(*index)
-                    .map(|col| col.into_iter().map(|v| v.map_or(Value::Null, |i| Value::Int(i as i64))).collect()),
-                PhysicalType::Double => {
-                    rg.read_double_column(*index).map(|col| col.into_iter().map(|v| v.map_or(Value::Null, Value::Float)).collect())
-                }
-                PhysicalType::Float => rg
-                    .read_float_column(*index)
-                    .map(|col| col.into_iter().map(|v| v.map_or(Value::Null, |f| Value::Float(f as f64))).collect()),
-                PhysicalType::Boolean => {
-                    rg.read_boolean_column(*index).map(|col| col.into_iter().map(|v| v.map_or(Value::Null, Value::Bool)).collect())
-                }
-                _ => rg.read_string_column(*index).map(|col| col.into_iter().map(|v| v.map_or(Value::Null, |s| Value::Str(s.into()))).collect()),
+                PhysicalType::Int64 => rg.read_int64_column(*index).map(|col| {
+                    col.into_iter()
+                        .map(|v| v.map_or(Value::Null, Value::Int))
+                        .collect()
+                }),
+                PhysicalType::Int32 => rg.read_int32_column(*index).map(|col| {
+                    col.into_iter()
+                        .map(|v| v.map_or(Value::Null, |i| Value::Int(i as i64)))
+                        .collect()
+                }),
+                PhysicalType::Double => rg.read_double_column(*index).map(|col| {
+                    col.into_iter()
+                        .map(|v| v.map_or(Value::Null, Value::Float))
+                        .collect()
+                }),
+                PhysicalType::Float => rg.read_float_column(*index).map(|col| {
+                    col.into_iter()
+                        .map(|v| v.map_or(Value::Null, |f| Value::Float(f as f64)))
+                        .collect()
+                }),
+                PhysicalType::Boolean => rg.read_boolean_column(*index).map(|col| {
+                    col.into_iter()
+                        .map(|v| v.map_or(Value::Null, Value::Bool))
+                        .collect()
+                }),
+                _ => rg.read_string_column(*index).map(|col| {
+                    col.into_iter()
+                        .map(|v| v.map_or(Value::Null, |s| Value::Str(s.into())))
+                        .collect()
+                }),
             }
             .unwrap_or_else(|_| vec![Value::Null; num_rows]);
             batch = batch.with_column(name.clone(), values);
@@ -203,13 +222,21 @@ pub(crate) fn compile(query: &Query) -> Plan {
     let mut program = Vec::new();
     let mut columns_to_load = Vec::new();
 
-    let load_column = |name: &str, program: &mut Vec<Opcode>, column_regs: &mut HashMap<String, usize>, next_reg: &mut usize, columns_to_load: &mut Vec<String>| -> usize {
+    let load_column = |name: &str,
+                       program: &mut Vec<Opcode>,
+                       column_regs: &mut HashMap<String, usize>,
+                       next_reg: &mut usize,
+                       columns_to_load: &mut Vec<String>|
+     -> usize {
         if let Some(reg) = column_regs.get(name) {
             return *reg;
         }
         let reg = *next_reg;
         *next_reg += 1;
-        program.push(Opcode::LoadColumn { reg, column: name.to_string().into() });
+        program.push(Opcode::LoadColumn {
+            reg,
+            column: name.to_string().into(),
+        });
         column_regs.insert(name.to_string(), reg);
         columns_to_load.push(name.to_string());
         reg
@@ -229,7 +256,10 @@ pub(crate) fn compile(query: &Query) -> Plan {
                 }
                 let reg = *next_reg;
                 *next_reg += 1;
-                program.push(Opcode::LoadColumn { reg, column: name.clone().into() });
+                program.push(Opcode::LoadColumn {
+                    reg,
+                    column: name.clone().into(),
+                });
                 column_regs.insert(name.clone(), reg);
                 columns_to_load.push(name.clone());
                 reg
@@ -237,7 +267,10 @@ pub(crate) fn compile(query: &Query) -> Plan {
             Expr::Literal(lit) => {
                 let reg = *next_reg;
                 *next_reg += 1;
-                program.push(Opcode::LoadConst { reg, value: literal_value(lit) });
+                program.push(Opcode::LoadConst {
+                    reg,
+                    value: literal_value(lit),
+                });
                 reg
             }
             Expr::InSubquery { .. } => {
@@ -249,7 +282,10 @@ pub(crate) fn compile(query: &Query) -> Plan {
                 // (no rows) rather than panicking.
                 let reg = *next_reg;
                 *next_reg += 1;
-                program.push(Opcode::LoadConst { reg, value: Value::Bool(false) });
+                program.push(Opcode::LoadConst {
+                    reg,
+                    value: Value::Bool(false),
+                });
                 reg
             }
             Expr::BinaryOp(lhs, op, rhs) => {
@@ -257,7 +293,12 @@ pub(crate) fn compile(query: &Query) -> Plan {
                 let b = compile_expr(rhs, program, column_regs, next_reg, columns_to_load);
                 let dst = *next_reg;
                 *next_reg += 1;
-                program.push(Opcode::Map { dst, op: map_bin_op(*op), a, b });
+                program.push(Opcode::Map {
+                    dst,
+                    op: map_bin_op(*op),
+                    a,
+                    b,
+                });
                 dst
             }
         }
@@ -269,13 +310,25 @@ pub(crate) fn compile(query: &Query) -> Plan {
     // batch's full (pre-filter) length and desync from filtered registers.
     let mut group_by_regs = Vec::new();
     for name in &query.group_by {
-        group_by_regs.push(load_column(name, &mut program, &mut column_regs, &mut next_reg, &mut columns_to_load));
+        group_by_regs.push(load_column(
+            name,
+            &mut program,
+            &mut column_regs,
+            &mut next_reg,
+            &mut columns_to_load,
+        ));
     }
     let mut agg_srcs = Vec::new();
     for item in &query.columns {
         match item {
             SelectItem::Agg(_, Some(name)) => {
-                agg_srcs.push(load_column(name, &mut program, &mut column_regs, &mut next_reg, &mut columns_to_load));
+                agg_srcs.push(load_column(
+                    name,
+                    &mut program,
+                    &mut column_regs,
+                    &mut next_reg,
+                    &mut columns_to_load,
+                ));
             }
             // Plain projected columns are emitted (not aggregated), but they
             // must be loaded here for the same reason as the keys above: a
@@ -285,7 +338,13 @@ pub(crate) fn compile(query: &Query) -> Plan {
             // so the projection code further down reuses these registers
             // instead of emitting a second LoadColumn.
             SelectItem::Column(name) if query.group_by.is_empty() => {
-                load_column(name, &mut program, &mut column_regs, &mut next_reg, &mut columns_to_load);
+                load_column(
+                    name,
+                    &mut program,
+                    &mut column_regs,
+                    &mut next_reg,
+                    &mut columns_to_load,
+                );
                 agg_srcs.push(0);
             }
             _ => agg_srcs.push(0),
@@ -293,7 +352,13 @@ pub(crate) fn compile(query: &Query) -> Plan {
     }
 
     if let Some(where_clause) = &query.where_clause {
-        let predicate = compile_expr(where_clause, &mut program, &mut column_regs, &mut next_reg, &mut columns_to_load);
+        let predicate = compile_expr(
+            where_clause,
+            &mut program,
+            &mut column_regs,
+            &mut next_reg,
+            &mut columns_to_load,
+        );
         program.push(Opcode::Filter { predicate });
     }
 
@@ -349,21 +414,45 @@ pub(crate) fn compile(query: &Query) -> Plan {
             // `group_by_regs` above) -- SQL requires non-aggregated SELECT
             // columns to be group-by keys, so this doesn't double-emit.
             if query.group_by.is_empty() {
-                let reg = load_column(name, &mut program, &mut column_regs, &mut next_reg, &mut columns_to_load);
+                let reg = load_column(
+                    name,
+                    &mut program,
+                    &mut column_regs,
+                    &mut next_reg,
+                    &mut columns_to_load,
+                );
                 emit_regs.push(reg);
             }
         }
     }
 
     if !aggs.is_empty() || !group_by_regs.is_empty() {
-        program.push(Opcode::GroupReduce { group_by: group_by_regs.into(), aggs: aggs.into(), agg_dst: agg_dst.into() });
+        program.push(Opcode::GroupReduce {
+            group_by: group_by_regs.into(),
+            aggs: aggs.into(),
+            agg_dst: agg_dst.into(),
+        });
     }
 
-    program.push(Opcode::Emit { registers: emit_regs.into() });
+    program.push(Opcode::Emit {
+        registers: emit_regs.into(),
+    });
 
-    let order_by = query.order_by.as_ref().and_then(|OrderBy { column, descending }| select_output_index(query, column).map(|pos| (pos, *descending)));
+    let order_by = query
+        .order_by
+        .as_ref()
+        .and_then(|OrderBy { column, descending }| {
+            select_output_index(query, column).map(|pos| (pos, *descending))
+        });
 
-    Plan { columns_to_load, program, agg_parts, num_group_keys: query.group_by.len(), order_by, limit: query.limit }
+    Plan {
+        columns_to_load,
+        program,
+        agg_parts,
+        num_group_keys: query.group_by.len(),
+        order_by,
+        limit: query.limit,
+    }
 }
 
 /// Combine two emitted rows for the same group key, applying the
@@ -373,7 +462,8 @@ fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) {
         match part {
             AggPart::GroupKey => {}
             AggPart::Sum | AggPart::Count => {
-                into[i] = Value::Float(into[i].as_f64().unwrap_or(0.0) + from[i].as_f64().unwrap_or(0.0));
+                into[i] =
+                    Value::Float(into[i].as_f64().unwrap_or(0.0) + from[i].as_f64().unwrap_or(0.0));
             }
             AggPart::Min => {
                 if let (Some(a), Some(b)) = (into[i].as_f64(), from[i].as_f64()) {
@@ -403,8 +493,15 @@ fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Vec<Value> {
         }
         match part {
             AggPart::Avg(sum_i, count_i) => {
-                let (sum, count) = (row[*sum_i].as_f64().unwrap_or(0.0), row[*count_i].as_f64().unwrap_or(0.0));
-                out.push(if count == 0.0 { Value::Null } else { Value::Float(sum / count) });
+                let (sum, count) = (
+                    row[*sum_i].as_f64().unwrap_or(0.0),
+                    row[*count_i].as_f64().unwrap_or(0.0),
+                );
+                out.push(if count == 0.0 {
+                    Value::Null
+                } else {
+                    Value::Float(sum / count)
+                });
                 skip = Some(*count_i);
             }
             _ => out.push(row[i].clone()),
@@ -430,14 +527,21 @@ pub fn execute(file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Value>>> {
     }
 
     let has_group_by = !query.group_by.is_empty();
-    let has_aggs = query.columns.iter().any(|c| matches!(c, SelectItem::Agg(..)));
+    let has_aggs = query
+        .columns
+        .iter()
+        .any(|c| matches!(c, SelectItem::Agg(..)));
 
     // `ORDER BY ... LIMIT ...` with no `GROUP BY`/aggregate can be resolved
     // as a bounded top-N during the parallel scan itself (#109), instead of
     // materializing every row and fully sorting in `post_process`.
     let top_n_spec = match (&query.order_by, query.limit, has_group_by || has_aggs) {
         (Some(OrderBy { column, descending }), Some(limit), false) => {
-            select_output_index(query, column).map(|col| crate::vm::TopN { col, descending: *descending, limit })
+            select_output_index(query, column).map(|col| crate::vm::TopN {
+                col,
+                descending: *descending,
+                limit,
+            })
         }
         _ => None,
     };
@@ -446,7 +550,13 @@ pub fn execute(file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Value>>> {
         Some(spec) => run_program_top_n(file, &plan.columns_to_load, &plan.program, spec)?,
         None => run_program(file, &plan.columns_to_load, &plan.program)?,
     };
-    Ok(post_process(&plan.agg_parts, plan.num_group_keys, plan.order_by, plan.limit, rows))
+    Ok(post_process(
+        &plan.agg_parts,
+        plan.num_group_keys,
+        plan.order_by,
+        plan.limit,
+        rows,
+    ))
 }
 
 /// Load `columns_to_load` from every row group of `file` and run the
@@ -456,11 +566,21 @@ pub fn execute(file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Value>>> {
 /// it. [`execute`] is built on this plus [`post_process`]; codegen'd
 /// binaries (`codegen.rs`, #98) call this directly since their `program`
 /// is a `const` baked in ahead of time, not compiled from a live `Query`.
-pub fn run_program(file: &ParquetFile, columns_to_load: &[impl AsRef<str>], program: &[Opcode]) -> Result<Vec<Vec<Value>>> {
+pub fn run_program(
+    file: &ParquetFile,
+    columns_to_load: &[impl AsRef<str>],
+    program: &[Opcode],
+) -> Result<Vec<Vec<Value>>> {
     let columns = resolve_program_columns(file, columns_to_load)?;
 
     let segments: Vec<Box<dyn Segment + '_>> = (0..file.num_row_groups())
-        .map(|i| Box::new(RowGroupSegment { file, row_group_index: i, columns: columns.clone() }) as Box<dyn Segment + '_>)
+        .map(|i| {
+            Box::new(RowGroupSegment {
+                file,
+                row_group_index: i,
+                columns: columns.clone(),
+            }) as Box<dyn Segment + '_>
+        })
         .collect();
 
     Ok(crate::vm::run_parallel(&segments, program)?)
@@ -469,14 +589,22 @@ pub fn run_program(file: &ParquetFile, columns_to_load: &[impl AsRef<str>], prog
 /// Resolve `columns_to_load` (bare column names) against `file`'s leaf
 /// schema into `(name, column_index, physical_type)` triples -- shared by
 /// [`run_program`] and [`bounded_scan`].
-fn resolve_program_columns(file: &ParquetFile, columns_to_load: &[impl AsRef<str>]) -> Result<Vec<(String, usize, PhysicalType)>> {
+fn resolve_program_columns(
+    file: &ParquetFile,
+    columns_to_load: &[impl AsRef<str>],
+) -> Result<Vec<(String, usize, PhysicalType)>> {
     let leaves = leaf_columns(file);
-    let column_lookup: HashMap<&str, (usize, PhysicalType)> = leaves.iter().map(|(n, i, t)| (n.as_str(), (*i, *t))).collect();
+    let column_lookup: HashMap<&str, (usize, PhysicalType)> = leaves
+        .iter()
+        .map(|(n, i, t)| (n.as_str(), (*i, *t)))
+        .collect();
 
     let mut columns = Vec::new();
     for name in columns_to_load {
         let name = name.as_ref();
-        let (index, physical_type) = *column_lookup.get(name).ok_or_else(|| QueryError::UnknownColumn(name.to_string()))?;
+        let (index, physical_type) = *column_lookup
+            .get(name)
+            .ok_or_else(|| QueryError::UnknownColumn(name.to_string()))?;
         columns.push((name.to_string(), index, physical_type));
     }
     Ok(columns)
@@ -489,7 +617,11 @@ fn bounded_scan_limit(query: &Query) -> Option<usize> {
     if query.where_clause.is_some() || query.order_by.is_some() || !query.group_by.is_empty() {
         return None;
     }
-    if query.columns.iter().any(|c| matches!(c, SelectItem::Agg(..) | SelectItem::Window(_))) {
+    if query
+        .columns
+        .iter()
+        .any(|c| matches!(c, SelectItem::Agg(..) | SelectItem::Window(_)))
+    {
         return None;
     }
     query.limit
@@ -499,14 +631,23 @@ fn bounded_scan_limit(query: &Query) -> Option<usize> {
 /// each one's freshly-loaded batch, stopping (and truncating to exactly
 /// `limit` rows) as soon as enough have been collected -- row groups past
 /// that point are never read or decoded.
-fn bounded_scan(file: &ParquetFile, columns_to_load: &[impl AsRef<str>], program: &[Opcode], limit: usize) -> Result<Vec<Vec<Value>>> {
+fn bounded_scan(
+    file: &ParquetFile,
+    columns_to_load: &[impl AsRef<str>],
+    program: &[Opcode],
+    limit: usize,
+) -> Result<Vec<Vec<Value>>> {
     let columns = resolve_program_columns(file, columns_to_load)?;
     let mut rows = Vec::with_capacity(limit);
     for row_group_index in 0..file.num_row_groups() {
         if rows.len() >= limit {
             break;
         }
-        let segment = RowGroupSegment { file, row_group_index, columns: columns.to_vec() };
+        let segment = RowGroupSegment {
+            file,
+            row_group_index,
+            columns: columns.to_vec(),
+        };
         let batch = segment.load();
         let mut vm = crate::vm::Vm::new();
         vm.execute(&batch, program)?;
@@ -520,11 +661,22 @@ fn bounded_scan(file: &ParquetFile, columns_to_load: &[impl AsRef<str>], program
 /// each segment (and the final merge) to `spec.limit` rows via
 /// [`crate::vm::run_parallel_top_n`] (#109) instead of materializing every
 /// row before sorting in `post_process`.
-fn run_program_top_n(file: &ParquetFile, columns_to_load: &[impl AsRef<str>], program: &[Opcode], spec: &crate::vm::TopN) -> Result<Vec<Vec<Value>>> {
+fn run_program_top_n(
+    file: &ParquetFile,
+    columns_to_load: &[impl AsRef<str>],
+    program: &[Opcode],
+    spec: &crate::vm::TopN,
+) -> Result<Vec<Vec<Value>>> {
     let columns = resolve_program_columns(file, columns_to_load)?;
 
     let segments: Vec<Box<dyn Segment + '_>> = (0..file.num_row_groups())
-        .map(|i| Box::new(RowGroupSegment { file, row_group_index: i, columns: columns.clone() }) as Box<dyn Segment + '_>)
+        .map(|i| {
+            Box::new(RowGroupSegment {
+                file,
+                row_group_index: i,
+                columns: columns.clone(),
+            }) as Box<dyn Segment + '_>
+        })
         .collect();
 
     Ok(crate::vm::run_parallel_top_n(&segments, program, spec)?)
@@ -535,13 +687,23 @@ fn run_program_top_n(file: &ParquetFile, columns_to_load: &[impl AsRef<str>], pr
 /// directly by codegen'd binaries (#98, #101), which have `agg_parts`/
 /// `num_group_keys`/`order_by`/`limit` as `const`s rather than a live
 /// [`Query`].
-pub fn post_process(agg_parts: &[AggPart], num_group_keys: usize, order_by: Option<(usize, bool)>, limit: Option<usize>, rows: Vec<Vec<Value>>) -> Vec<Vec<Value>> {
+pub fn post_process(
+    agg_parts: &[AggPart],
+    num_group_keys: usize,
+    order_by: Option<(usize, bool)>,
+    limit: Option<usize>,
+    rows: Vec<Vec<Value>>,
+) -> Vec<Vec<Value>> {
     let mut result_rows = if !agg_parts.is_empty() {
         let mut groups: Vec<(Vec<Value>, Vec<Value>)> = Vec::new();
         let mut index: HashMap<String, usize> = HashMap::new();
         for row in rows {
             let key: Vec<Value> = row[..num_group_keys].to_vec();
-            let key_str = key.iter().map(Value::to_string).collect::<Vec<_>>().join("\u{0}");
+            let key_str = key
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\u{0}");
             match index.get(&key_str) {
                 Some(&i) => merge_rows(agg_parts, &mut groups[i].1, &row),
                 None => {
@@ -550,7 +712,10 @@ pub fn post_process(agg_parts: &[AggPart], num_group_keys: usize, order_by: Opti
                 }
             }
         }
-        groups.into_iter().map(|(_, row)| finalize_row(agg_parts, row)).collect()
+        groups
+            .into_iter()
+            .map(|(_, row)| finalize_row(agg_parts, row))
+            .collect()
     } else {
         rows
     };
@@ -576,13 +741,21 @@ fn split_qualified(name: &str) -> (Option<&str>, &str) {
 
 /// Resolve `names` against a file's leaf columns, keeping each name's
 /// original (possibly-qualified) display form as the batch column key.
-fn resolve_columns(leaves: &[(String, usize, PhysicalType)], names: &[String]) -> Result<Vec<(String, usize, PhysicalType)>> {
-    let lookup: HashMap<&str, (usize, PhysicalType)> = leaves.iter().map(|(n, i, t)| (n.as_str(), (*i, *t))).collect();
+fn resolve_columns(
+    leaves: &[(String, usize, PhysicalType)],
+    names: &[String],
+) -> Result<Vec<(String, usize, PhysicalType)>> {
+    let lookup: HashMap<&str, (usize, PhysicalType)> = leaves
+        .iter()
+        .map(|(n, i, t)| (n.as_str(), (*i, *t)))
+        .collect();
     names
         .iter()
         .map(|name| {
             let (_, col) = split_qualified(name);
-            let (index, physical_type) = *lookup.get(col).ok_or_else(|| QueryError::UnknownColumn(name.clone()))?;
+            let (index, physical_type) = *lookup
+                .get(col)
+                .ok_or_else(|| QueryError::UnknownColumn(name.clone()))?;
             Ok((name.clone(), index, physical_type))
         })
         .collect()
@@ -598,12 +771,20 @@ fn read_whole_table(file: &ParquetFile, columns: &[(String, usize, PhysicalType)
         merged.columns.insert(name.clone(), Vec::new());
     }
     for row_group_index in 0..file.num_row_groups() {
-        let segment = RowGroupSegment { file, row_group_index, columns: columns.to_vec() };
+        let segment = RowGroupSegment {
+            file,
+            row_group_index,
+            columns: columns.to_vec(),
+        };
         let batch = segment.load();
         merged.num_rows += batch.num_rows;
         for (name, _, _) in columns {
             if let Some(values) = batch.columns.get(name) {
-                merged.columns.get_mut(name).unwrap().extend(values.iter().cloned());
+                merged
+                    .columns
+                    .get_mut(name)
+                    .unwrap()
+                    .extend(values.iter().cloned());
             }
         }
     }
@@ -626,8 +807,15 @@ impl Segment for InMemorySegment {
 /// parallel-scan win to preserve. An unqualified column name is assumed to
 /// belong to the `FROM` table; a right-table column must be qualified
 /// (`table.column`) to disambiguate.
-pub fn execute_joined(left_file: &ParquetFile, right_file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Value>>> {
-    let join = query.joins.first().expect("execute_joined requires at least one join");
+pub fn execute_joined(
+    left_file: &ParquetFile,
+    right_file: &ParquetFile,
+    query: &Query,
+) -> Result<Vec<Vec<Value>>> {
+    let join = query
+        .joins
+        .first()
+        .expect("execute_joined requires at least one join");
     let plan = compile(query);
 
     let mut needed: Vec<String> = plan.columns_to_load.clone();
@@ -657,18 +845,25 @@ pub fn execute_joined(left_file: &ParquetFile, right_file: &ParquetFile, query: 
     let left_batch = read_whole_table(left_file, &left_columns);
     let right_batch = read_whole_table(right_file, &right_columns);
 
-    let right_key = right_batch.columns.get(&join.right_col).ok_or_else(|| QueryError::UnknownColumn(join.right_col.clone()))?;
+    let right_key = right_batch
+        .columns
+        .get(&join.right_col)
+        .ok_or_else(|| QueryError::UnknownColumn(join.right_col.clone()))?;
     // Flat open-addressing multimap (sql-join), not `HashMap<String,
     // Vec<usize>>`: no per-key `Vec` allocation, and no per-row `.to_string()`
     // just to obtain something `Hash` -- see JoinKey above. Duplicate right-side
     // keys (the normal foreign-key-on-the-build-side case) are each their own
     // entry rather than needing a `Vec<usize>` per key.
-    let mut right_index: JoinHashTable<JoinKey, usize> = JoinHashTable::with_capacity(right_key.len());
+    let mut right_index: JoinHashTable<JoinKey, usize> =
+        JoinHashTable::with_capacity(right_key.len());
     for (row, value) in right_key.iter().enumerate() {
         right_index.insert(JoinKey::from_value(value), row);
     }
 
-    let left_key = left_batch.columns.get(&join.left_col).ok_or_else(|| QueryError::UnknownColumn(join.left_col.clone()))?;
+    let left_key = left_batch
+        .columns
+        .get(&join.left_col)
+        .ok_or_else(|| QueryError::UnknownColumn(join.left_col.clone()))?;
 
     // (left_row, right_row) pairs -- `right_row = None` for an unmatched LEFT JOIN row.
     let mut pairs: Vec<(usize, Option<usize>)> = Vec::new();
@@ -687,16 +882,31 @@ pub fn execute_joined(left_file: &ParquetFile, right_file: &ParquetFile, query: 
     let mut joined = Batch::new(pairs.len());
     for name in &left_names {
         let column = &left_batch.columns[name];
-        joined.columns.insert(name.clone(), pairs.iter().map(|(l, _)| column[*l].clone()).collect());
+        joined.columns.insert(
+            name.clone(),
+            pairs.iter().map(|(l, _)| column[*l].clone()).collect(),
+        );
     }
     for name in &right_names {
         let column = &right_batch.columns[name];
-        joined.columns.insert(name.clone(), pairs.iter().map(|(_, r)| r.map_or(Value::Null, |r| column[r].clone())).collect());
+        joined.columns.insert(
+            name.clone(),
+            pairs
+                .iter()
+                .map(|(_, r)| r.map_or(Value::Null, |r| column[r].clone()))
+                .collect(),
+        );
     }
 
     let segments: Vec<Box<dyn Segment>> = vec![Box::new(InMemorySegment(joined))];
     let rows = crate::vm::run_parallel(&segments, &plan.program)?;
-    Ok(post_process(&plan.agg_parts, plan.num_group_keys, plan.order_by, plan.limit, rows))
+    Ok(post_process(
+        &plan.agg_parts,
+        plan.num_group_keys,
+        plan.order_by,
+        plan.limit,
+        rows,
+    ))
 }
 
 /// Execute a query whose entire `WHERE` clause is `col IN (SELECT ...)` (a
@@ -704,19 +914,30 @@ pub fn execute_joined(left_file: &ParquetFile, right_file: &ParquetFile, query: 
 /// anywhere in the subquery's (single-column) result, run against
 /// `sub_file`. Combining the `IN` clause with other conditions via `AND`/`OR`
 /// isn't supported -- the semi-join must be the whole `WHERE` clause.
-pub fn execute_semi_join(main_file: &ParquetFile, sub_file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Value>>> {
+pub fn execute_semi_join(
+    main_file: &ParquetFile,
+    sub_file: &ParquetFile,
+    query: &Query,
+) -> Result<Vec<Vec<Value>>> {
     let Some(Expr::InSubquery { expr, subquery }) = &query.where_clause else {
-        return Err(QueryError::UnsupportedSemiJoin("WHERE clause must be exactly `col IN (SELECT ...)`".to_string()));
+        return Err(QueryError::UnsupportedSemiJoin(
+            "WHERE clause must be exactly `col IN (SELECT ...)`".to_string(),
+        ));
     };
     let Expr::Column(col_name) = expr.as_ref() else {
-        return Err(QueryError::UnsupportedSemiJoin("IN's left-hand side must be a bare column".to_string()));
+        return Err(QueryError::UnsupportedSemiJoin(
+            "IN's left-hand side must be a bare column".to_string(),
+        ));
     };
 
     let sub_rows = execute(sub_file, subquery)?;
     if sub_rows.first().is_some_and(|row| row.len() != 1) {
-        return Err(QueryError::UnsupportedSemiJoin("IN subquery must select exactly one column".to_string()));
+        return Err(QueryError::UnsupportedSemiJoin(
+            "IN subquery must select exactly one column".to_string(),
+        ));
     }
-    let allowed: std::collections::HashSet<String> = sub_rows.into_iter().map(|row| row[0].to_string()).collect();
+    let allowed: std::collections::HashSet<String> =
+        sub_rows.into_iter().map(|row| row[0].to_string()).collect();
 
     let mut stripped = query.clone();
     stripped.where_clause = None;
@@ -731,18 +952,32 @@ pub fn execute_semi_join(main_file: &ParquetFile, sub_file: &ParquetFile, query:
     let columns = resolve_columns(&leaves, &needed)?;
     let batch = read_whole_table(main_file, &columns);
 
-    let key = batch.columns.get(col_name).ok_or_else(|| QueryError::UnknownColumn(col_name.clone()))?;
-    let keep: Vec<usize> = (0..batch.num_rows).filter(|&i| allowed.contains(&key[i].to_string())).collect();
+    let key = batch
+        .columns
+        .get(col_name)
+        .ok_or_else(|| QueryError::UnknownColumn(col_name.clone()))?;
+    let keep: Vec<usize> = (0..batch.num_rows)
+        .filter(|&i| allowed.contains(&key[i].to_string()))
+        .collect();
 
     let mut filtered = Batch::new(keep.len());
     for name in &needed {
         let column = &batch.columns[name];
-        filtered.columns.insert(name.clone(), keep.iter().map(|&i| column[i].clone()).collect());
+        filtered.columns.insert(
+            name.clone(),
+            keep.iter().map(|&i| column[i].clone()).collect(),
+        );
     }
 
     let segments: Vec<Box<dyn Segment>> = vec![Box::new(InMemorySegment(filtered))];
     let rows = crate::vm::run_parallel(&segments, &plan.program)?;
-    Ok(post_process(&plan.agg_parts, plan.num_group_keys, plan.order_by, plan.limit, rows))
+    Ok(post_process(
+        &plan.agg_parts,
+        plan.num_group_keys,
+        plan.order_by,
+        plan.limit,
+        rows,
+    ))
 }
 
 /// Execute a query whose `SELECT` list contains one or more window functions
@@ -788,8 +1023,17 @@ pub fn execute_windowed(file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Val
     let batch = read_whole_table(file, &columns);
     let num_rows = batch.num_rows;
 
-    let window_outputs: Vec<Option<Vec<Value>>> =
-        query.columns.iter().map(|item| if let SelectItem::Window(spec) = item { Some(compute_window(&batch, spec, num_rows)) } else { None }).collect();
+    let window_outputs: Vec<Option<Vec<Value>>> = query
+        .columns
+        .iter()
+        .map(|item| {
+            if let SelectItem::Window(spec) = item {
+                Some(compute_window(&batch, spec, num_rows))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     let mut rows: Vec<Vec<Value>> = (0..num_rows)
         .map(|row| {
@@ -824,7 +1068,12 @@ fn compute_window(batch: &Batch, spec: &WindowSpec, num_rows: usize) -> Vec<Valu
     let mut partitions: HashMap<String, Vec<usize>> = HashMap::new();
     let mut partition_order: Vec<String> = Vec::new();
     for row in 0..num_rows {
-        let key = spec.partition_by.iter().map(|p| batch.columns[p][row].to_string()).collect::<Vec<_>>().join("\u{0}");
+        let key = spec
+            .partition_by
+            .iter()
+            .map(|p| batch.columns[p][row].to_string())
+            .collect::<Vec<_>>()
+            .join("\u{0}");
         if !partitions.contains_key(&key) {
             partition_order.push(key.clone());
         }
@@ -836,7 +1085,11 @@ fn compute_window(batch: &Batch, spec: &WindowSpec, num_rows: usize) -> Vec<Valu
         let mut indices = partitions[key].clone();
         indices.sort_by(|&a, &b| {
             for (col, desc) in &spec.order_by {
-                let ord = crate::vm::compare_for_order(&batch.columns[col][a], &batch.columns[col][b], *desc);
+                let ord = crate::vm::compare_for_order(
+                    &batch.columns[col][a],
+                    &batch.columns[col][b],
+                    *desc,
+                );
                 if ord != std::cmp::Ordering::Equal {
                     return ord;
                 }
@@ -857,27 +1110,48 @@ fn compute_window(batch: &Batch, spec: &WindowSpec, num_rows: usize) -> Vec<Valu
                 for (pos, &row) in indices.iter().enumerate() {
                     let is_new = match prev {
                         None => true,
-                        Some(prev_row) => spec.order_by.iter().any(|(col, _)| batch.columns[col][row].to_string() != batch.columns[col][prev_row].to_string()),
+                        Some(prev_row) => spec.order_by.iter().any(|(col, _)| {
+                            batch.columns[col][row].to_string()
+                                != batch.columns[col][prev_row].to_string()
+                        }),
                     };
                     if is_new {
                         rank = (pos + 1) as i64;
                         dense += 1;
                     }
-                    output[row] = Value::Int(if spec.func == WindowFunc::Rank { rank } else { dense });
+                    output[row] = Value::Int(if spec.func == WindowFunc::Rank {
+                        rank
+                    } else {
+                        dense
+                    });
                     prev = Some(row);
                 }
             }
             WindowFunc::Lag | WindowFunc::Lead => {
                 let offset = spec.offset.unwrap_or(1);
-                let arg = spec.arg.as_ref().expect("LAG/LEAD always have an argument column");
+                let arg = spec
+                    .arg
+                    .as_ref()
+                    .expect("LAG/LEAD always have an argument column");
                 let n = indices.len() as i64;
                 for (pos, &row) in indices.iter().enumerate() {
-                    let target = if spec.func == WindowFunc::Lag { pos as i64 - offset } else { pos as i64 + offset };
-                    output[row] = if target >= 0 && target < n { batch.columns[arg][indices[target as usize]].clone() } else { Value::Null };
+                    let target = if spec.func == WindowFunc::Lag {
+                        pos as i64 - offset
+                    } else {
+                        pos as i64 + offset
+                    };
+                    output[row] = if target >= 0 && target < n {
+                        batch.columns[arg][indices[target as usize]].clone()
+                    } else {
+                        Value::Null
+                    };
                 }
             }
             WindowFunc::FirstValue => {
-                let arg = spec.arg.as_ref().expect("FIRST_VALUE always has an argument column");
+                let arg = spec
+                    .arg
+                    .as_ref()
+                    .expect("FIRST_VALUE always has an argument column");
                 if let Some(&first) = indices.first() {
                     let v = batch.columns[arg][first].clone();
                     for &row in &indices {
@@ -886,7 +1160,10 @@ fn compute_window(batch: &Batch, spec: &WindowSpec, num_rows: usize) -> Vec<Valu
                 }
             }
             WindowFunc::LastValue => {
-                let arg = spec.arg.as_ref().expect("LAST_VALUE always has an argument column");
+                let arg = spec
+                    .arg
+                    .as_ref()
+                    .expect("LAST_VALUE always has an argument column");
                 for &row in &indices {
                     output[row] = batch.columns[arg][row].clone();
                 }
@@ -943,15 +1220,26 @@ fn compute_window(batch: &Batch, spec: &WindowSpec, num_rows: usize) -> Vec<Valu
 /// `SUM`/`AVG`/`COUNT OVER (PARTITION BY ... )` with no `ORDER BY`: the
 /// default frame is the whole partition, so every row in it gets the same
 /// aggregate value.
-fn whole_partition_aggregate(func: WindowFunc, batch: &Batch, arg: Option<&str>, indices: &[usize]) -> Value {
+fn whole_partition_aggregate(
+    func: WindowFunc,
+    batch: &Batch,
+    arg: Option<&str>,
+    indices: &[usize],
+) -> Value {
     if func == WindowFunc::Count {
         let count = match arg {
-            Some(a) => indices.iter().filter(|&&r| !matches!(batch.columns[a][r], Value::Null)).count(),
+            Some(a) => indices
+                .iter()
+                .filter(|&&r| !matches!(batch.columns[a][r], Value::Null))
+                .count(),
             None => indices.len(),
         };
         return Value::Int(count as i64);
     }
-    let values: Vec<f64> = indices.iter().filter_map(|&r| arg.and_then(|a| batch.columns[a][r].as_f64())).collect();
+    let values: Vec<f64> = indices
+        .iter()
+        .filter_map(|&r| arg.and_then(|a| batch.columns[a][r].as_f64()))
+        .collect();
     if values.is_empty() {
         return Value::Null;
     }
@@ -963,7 +1251,10 @@ fn whole_partition_aggregate(func: WindowFunc, batch: &Batch, arg: Option<&str>,
 }
 
 fn select_output_index(query: &Query, column: &str) -> Option<usize> {
-    query.columns.iter().position(|item| matches!(item, SelectItem::Column(name) if name == column))
+    query
+        .columns
+        .iter()
+        .position(|item| matches!(item, SelectItem::Column(name) if name == column))
 }
 
 /// Derive each `SELECT`-list item's output column header (e.g. `SUM(amount)`,
@@ -1028,18 +1319,37 @@ impl QueryEngine {
             .and_then(|f| f.mmap())
             .map_err(|e| QueryError::Io(format!("{}: {e}", path.display())))?;
         let file = ParquetFile::open(&data)?;
-        let table_name = name.unwrap_or_else(|| path.file_stem().and_then(|s| s.to_str()).unwrap_or("data").to_string());
+        let table_name = name.unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("data")
+                .to_string()
+        });
         if self.tables.iter().any(|t| t.name == table_name) {
             return Err(QueryError::DuplicateTable(table_name));
         }
         // Skip first element (schema root).
-        let column_names = file.metadata().schema.iter().skip(1).map(|e| e.name.clone()).collect();
-        self.tables.push(Table { name: table_name, data, column_names });
+        let column_names = file
+            .metadata()
+            .schema
+            .iter()
+            .skip(1)
+            .map(|e| e.name.clone())
+            .collect();
+        self.tables.push(Table {
+            name: table_name,
+            data,
+            column_names,
+        });
         Ok(())
     }
 
     fn table_data(&self, name: &str) -> Result<&[u8]> {
-        self.tables.iter().find(|t| t.name == name).map(|t| &t.data[..]).ok_or_else(|| QueryError::UnknownTable(name.to_string()))
+        self.tables
+            .iter()
+            .find(|t| t.name == name)
+            .map(|t| &t.data[..])
+            .ok_or_else(|| QueryError::UnknownTable(name.to_string()))
     }
 
     /// Execute a SQL query and return results. Dispatches to a `JOIN`,
@@ -1050,7 +1360,10 @@ impl QueryEngine {
         let main_data = self.table_data(&query.from)?;
         let main_file = ParquetFile::open(main_data)?;
 
-        let has_window = query.columns.iter().any(|c| matches!(c, SelectItem::Window(_)));
+        let has_window = query
+            .columns
+            .iter()
+            .any(|c| matches!(c, SelectItem::Window(_)));
         let rows = if let Some(Expr::InSubquery { subquery, .. }) = &query.where_clause {
             let sub_data = self.table_data(&subquery.from)?;
             let sub_file = ParquetFile::open(sub_data)?;
@@ -1065,7 +1378,10 @@ impl QueryEngine {
             execute(&main_file, &query)?
         };
 
-        Ok(QueryResult { columns: output_column_names(&query), rows })
+        Ok(QueryResult {
+            columns: output_column_names(&query),
+            rows,
+        })
     }
 
     /// List loaded table names, in load order.
@@ -1075,7 +1391,10 @@ impl QueryEngine {
 
     /// Get schema information: (table_name, columns), in load order.
     pub fn schemas(&self) -> Vec<(&str, Vec<String>)> {
-        self.tables.iter().map(|t| (t.name.as_str(), t.column_names.clone())).collect()
+        self.tables
+            .iter()
+            .map(|t| (t.name.as_str(), t.column_names.clone()))
+            .collect()
     }
 
     /// Build a human-readable execution plan for `query` without running it
@@ -1087,7 +1406,10 @@ impl QueryEngine {
         let main_file = ParquetFile::open(main_data)?;
         let mut b = PlanBuilder::new("QUERY PLAN");
 
-        let has_window = query.columns.iter().any(|c| matches!(c, SelectItem::Window(_)));
+        let has_window = query
+            .columns
+            .iter()
+            .any(|c| matches!(c, SelectItem::Window(_)));
         let is_semi_join = matches!(query.where_clause, Some(Expr::InSubquery { .. }));
         let join = query.joins.first();
 
@@ -1104,7 +1426,12 @@ impl QueryEngine {
         };
 
         let mut main_cols: Vec<String> = match (&plan, join) {
-            (Some(p), Some(_)) => p.columns_to_load.iter().filter(|n| split_qualified(n).0.is_none_or(|t| t == query.from)).cloned().collect(),
+            (Some(p), Some(_)) => p
+                .columns_to_load
+                .iter()
+                .filter(|n| split_qualified(n).0.is_none_or(|t| t == query.from))
+                .cloned()
+                .collect(),
             (Some(p), None) => p.columns_to_load.clone(),
             (None, _) => referenced_columns(query),
         };
@@ -1130,20 +1457,38 @@ impl QueryEngine {
                 if !sub_cols.is_empty() {
                     b.push(sub_scan, format!("LOAD COLUMNS: {}", sub_cols.join(", ")));
                 }
-                let sub_select: Vec<String> = subquery.columns.iter().map(select_item_label).collect();
-                b.push(0, format!("SEMI JOIN: {} IN (SELECT {} FROM {})", expr_to_string(expr), sub_select.join(", "), subquery.from));
+                let sub_select: Vec<String> =
+                    subquery.columns.iter().map(select_item_label).collect();
+                b.push(
+                    0,
+                    format!(
+                        "SEMI JOIN: {} IN (SELECT {} FROM {})",
+                        expr_to_string(expr),
+                        sub_select.join(", "),
+                        subquery.from
+                    ),
+                );
             }
         } else if let Some(join) = join {
             let right_data = self.table_data(&join.table)?;
             let right_file = ParquetFile::open(right_data)?;
             let mut right_cols: Vec<String> = plan
                 .as_ref()
-                .map(|p| p.columns_to_load.iter().filter(|n| split_qualified(n).0 == Some(join.table.as_str())).cloned().collect())
+                .map(|p| {
+                    p.columns_to_load
+                        .iter()
+                        .filter(|n| split_qualified(n).0 == Some(join.table.as_str()))
+                        .cloned()
+                        .collect()
+                })
                 .unwrap_or_default();
             push_unique(&mut right_cols, join.right_col.clone());
             let right_scan = b.push(0, scan_detail(&join.table, &right_file));
             if !right_cols.is_empty() {
-                b.push(right_scan, format!("LOAD COLUMNS: {}", right_cols.join(", ")));
+                b.push(
+                    right_scan,
+                    format!("LOAD COLUMNS: {}", right_cols.join(", ")),
+                );
             }
             let kind = match join.kind {
                 JoinKind::Inner => "HASH JOIN",
@@ -1159,7 +1504,11 @@ impl QueryEngine {
                 }
             }
         } else if let Some(plan) = &plan {
-            if plan.program.iter().any(|op| matches!(op, Opcode::Filter { .. })) {
+            if plan
+                .program
+                .iter()
+                .any(|op| matches!(op, Opcode::Filter { .. }))
+            {
                 if let Some(where_clause) = &query.where_clause {
                     b.push(0, format!("FILTER: {}", expr_to_string(where_clause)));
                 }
@@ -1168,7 +1517,10 @@ impl QueryEngine {
                 let group_node = b.push(0, format!("GROUP BY: {}", query.group_by.join(", ")));
                 for item in &query.columns {
                     if matches!(item, SelectItem::Agg(..)) {
-                        b.push(group_node, format!("AGGREGATE: {}", select_item_label(item)));
+                        b.push(
+                            group_node,
+                            format!("AGGREGATE: {}", select_item_label(item)),
+                        );
                     }
                 }
             } else {
@@ -1181,7 +1533,13 @@ impl QueryEngine {
         }
 
         if let Some(OrderBy { column, descending }) = &query.order_by {
-            b.push(0, format!("ORDER BY: {column}{}", if *descending { " DESC" } else { "" }));
+            b.push(
+                0,
+                format!(
+                    "ORDER BY: {column}{}",
+                    if *descending { " DESC" } else { "" }
+                ),
+            );
         }
         if let Some(limit) = query.limit {
             b.push(0, format!("LIMIT: {limit}"));
@@ -1210,13 +1568,24 @@ struct PlanBuilder {
 
 impl PlanBuilder {
     fn new(root_detail: impl Into<String>) -> Self {
-        PlanBuilder { nodes: vec![PlanNode { id: 0, parent: 0, detail: root_detail.into() }], next_id: 1 }
+        PlanBuilder {
+            nodes: vec![PlanNode {
+                id: 0,
+                parent: 0,
+                detail: root_detail.into(),
+            }],
+            next_id: 1,
+        }
     }
 
     fn push(&mut self, parent: u32, detail: impl Into<String>) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
-        self.nodes.push(PlanNode { id, parent, detail: detail.into() });
+        self.nodes.push(PlanNode {
+            id,
+            parent,
+            detail: detail.into(),
+        });
         id
     }
 
@@ -1227,7 +1596,11 @@ impl PlanBuilder {
 
 fn scan_detail(table: &str, file: &ParquetFile) -> String {
     let groups = file.num_row_groups();
-    format!("SCAN {table} ({groups} row group{}, ~{} rows)", if groups == 1 { "" } else { "s" }, file.num_rows())
+    format!(
+        "SCAN {table} ({groups} row group{}, ~{} rows)",
+        if groups == 1 { "" } else { "s" },
+        file.num_rows()
+    )
 }
 
 fn agg_func_name(func: AggFunc) -> &'static str {
@@ -1269,14 +1642,27 @@ fn select_item_label(item: &SelectItem) -> String {
 }
 
 fn window_detail(spec: &WindowSpec) -> String {
-    let mut detail = format!("{}({})", window_func_name(spec.func), spec.arg.as_deref().unwrap_or(""));
+    let mut detail = format!(
+        "{}({})",
+        window_func_name(spec.func),
+        spec.arg.as_deref().unwrap_or("")
+    );
     let mut over = Vec::new();
     if !spec.partition_by.is_empty() {
         over.push(format!("PARTITION BY {}", spec.partition_by.join(", ")));
     }
     if !spec.order_by.is_empty() {
-        let cols: Vec<String> =
-            spec.order_by.iter().map(|(col, desc)| if *desc { format!("{col} DESC") } else { col.clone() }).collect();
+        let cols: Vec<String> = spec
+            .order_by
+            .iter()
+            .map(|(col, desc)| {
+                if *desc {
+                    format!("{col} DESC")
+                } else {
+                    col.clone()
+                }
+            })
+            .collect();
         over.push(format!("ORDER BY {}", cols.join(", ")));
     }
     if !over.is_empty() {
@@ -1318,8 +1704,17 @@ fn expr_to_string(expr: &Expr) -> String {
     match expr {
         Expr::Column(name) => name.clone(),
         Expr::Literal(lit) => literal_to_string(lit),
-        Expr::BinaryOp(lhs, op, rhs) => format!("{} {} {}", expr_to_string(lhs), bin_op_str(*op), expr_to_string(rhs)),
-        Expr::InSubquery { expr, subquery } => format!("{} IN (SELECT ... FROM {})", expr_to_string(expr), subquery.from),
+        Expr::BinaryOp(lhs, op, rhs) => format!(
+            "{} {} {}",
+            expr_to_string(lhs),
+            bin_op_str(*op),
+            expr_to_string(rhs)
+        ),
+        Expr::InSubquery { expr, subquery } => format!(
+            "{} IN (SELECT ... FROM {})",
+            expr_to_string(expr),
+            subquery.from
+        ),
     }
 }
 
@@ -1393,26 +1788,53 @@ mod tests {
 
     #[test]
     fn bounded_scan_limit_rejects_where_order_by_group_by_and_aggregates() {
-        assert_eq!(bounded_scan_limit(&sql::parse("SELECT id FROM t WHERE id > 1 LIMIT 10").unwrap()), None);
-        assert_eq!(bounded_scan_limit(&sql::parse("SELECT id FROM t ORDER BY id LIMIT 10").unwrap()), None);
-        assert_eq!(bounded_scan_limit(&sql::parse("SELECT id, SUM(amount) FROM t GROUP BY id LIMIT 10").unwrap()), None);
-        assert_eq!(bounded_scan_limit(&sql::parse("SELECT COUNT(*) FROM t LIMIT 10").unwrap()), None);
-        assert_eq!(bounded_scan_limit(&sql::parse("SELECT id FROM t").unwrap()), None);
+        assert_eq!(
+            bounded_scan_limit(&sql::parse("SELECT id FROM t WHERE id > 1 LIMIT 10").unwrap()),
+            None
+        );
+        assert_eq!(
+            bounded_scan_limit(&sql::parse("SELECT id FROM t ORDER BY id LIMIT 10").unwrap()),
+            None
+        );
+        assert_eq!(
+            bounded_scan_limit(
+                &sql::parse("SELECT id, SUM(amount) FROM t GROUP BY id LIMIT 10").unwrap()
+            ),
+            None
+        );
+        assert_eq!(
+            bounded_scan_limit(&sql::parse("SELECT COUNT(*) FROM t LIMIT 10").unwrap()),
+            None
+        );
+        assert_eq!(
+            bounded_scan_limit(&sql::parse("SELECT id FROM t").unwrap()),
+            None
+        );
     }
 
     #[test]
     fn compile_where_and_group_by_builds_expected_program_shape() {
-        let query = sql::parse("SELECT region, SUM(amount) FROM t WHERE amount > 10 GROUP BY region").unwrap();
+        let query =
+            sql::parse("SELECT region, SUM(amount) FROM t WHERE amount > 10 GROUP BY region")
+                .unwrap();
         let plan = compile(&query);
         assert!(plan.columns_to_load.contains(&"region".to_string()));
         assert!(plan.columns_to_load.contains(&"amount".to_string()));
         assert!(matches!(plan.program.last(), Some(Opcode::Emit { .. })));
-        assert!(plan.program.iter().any(|op| matches!(op, Opcode::GroupReduce { .. })));
-        assert!(plan.program.iter().any(|op| matches!(op, Opcode::Filter { .. })));
+        assert!(plan
+            .program
+            .iter()
+            .any(|op| matches!(op, Opcode::GroupReduce { .. })));
+        assert!(plan
+            .program
+            .iter()
+            .any(|op| matches!(op, Opcode::Filter { .. })));
     }
 
     fn fixture_path(name: &str) -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
     }
 
     fn details(nodes: &[PlanNode]) -> Vec<&str> {
@@ -1422,49 +1844,79 @@ mod tests {
     #[test]
     fn explain_plain_filter_group_by_aggregate() {
         let mut engine = QueryEngine::default();
-        engine.add_table(&fixture_path("production.parquet"), None).unwrap();
+        engine
+            .add_table(&fixture_path("production.parquet"), None)
+            .unwrap();
         let query = sql::parse("SELECT region, SUM(amount), COUNT(*) FROM production WHERE id > 1000 GROUP BY region ORDER BY region").unwrap();
         let nodes = engine.explain(&query).unwrap();
 
         assert_eq!(nodes[0].detail, "QUERY PLAN");
-        assert!(nodes[0].parent == nodes[0].id, "root's parent must equal its own id");
-        assert!(details(&nodes).iter().any(|d| d.starts_with("SCAN production (") && d.ends_with("row groups, ~5000 rows)")));
+        assert!(
+            nodes[0].parent == nodes[0].id,
+            "root's parent must equal its own id"
+        );
+        assert!(details(&nodes)
+            .iter()
+            .any(|d| d.starts_with("SCAN production (") && d.ends_with("row groups, ~5000 rows)")));
         assert!(details(&nodes).contains(&"LOAD COLUMNS: region, amount, id"));
         assert!(details(&nodes).contains(&"FILTER: id > 1000"));
         assert!(details(&nodes).contains(&"GROUP BY: region"));
         assert!(details(&nodes).contains(&"AGGREGATE: SUM(amount)"));
         assert!(details(&nodes).contains(&"AGGREGATE: COUNT(*)"));
         assert!(details(&nodes).contains(&"ORDER BY: region"));
-        assert_eq!(nodes.last().unwrap().detail, "EMIT: region, SUM(amount), COUNT(*)");
+        assert_eq!(
+            nodes.last().unwrap().detail,
+            "EMIT: region, SUM(amount), COUNT(*)"
+        );
 
         // AGGREGATE nodes must nest under the GROUP BY node, not the root.
-        let group_id = nodes.iter().find(|n| n.detail == "GROUP BY: region").unwrap().id;
-        let agg_parents: Vec<u32> = nodes.iter().filter(|n| n.detail.starts_with("AGGREGATE")).map(|n| n.parent).collect();
+        let group_id = nodes
+            .iter()
+            .find(|n| n.detail == "GROUP BY: region")
+            .unwrap()
+            .id;
+        let agg_parents: Vec<u32> = nodes
+            .iter()
+            .filter(|n| n.detail.starts_with("AGGREGATE"))
+            .map(|n| n.parent)
+            .collect();
         assert_eq!(agg_parents, vec![group_id, group_id]);
     }
 
     #[test]
     fn explain_limit_without_group_by() {
         let mut engine = QueryEngine::default();
-        engine.add_table(&fixture_path("orders.parquet"), None).unwrap();
+        engine
+            .add_table(&fixture_path("orders.parquet"), None)
+            .unwrap();
         let query = sql::parse("SELECT id, region_key FROM orders LIMIT 3").unwrap();
         let nodes = engine.explain(&query).unwrap();
         assert!(details(&nodes).contains(&"LIMIT: 3"));
-        assert!(!details(&nodes).iter().any(|d| d.starts_with("FILTER") || d.starts_with("GROUP BY")));
+        assert!(!details(&nodes)
+            .iter()
+            .any(|d| d.starts_with("FILTER") || d.starts_with("GROUP BY")));
     }
 
     #[test]
     fn explain_join_describes_both_scans_and_condition() {
         let mut engine = QueryEngine::default();
-        engine.add_table(&fixture_path("orders.parquet"), None).unwrap();
-        engine.add_table(&fixture_path("regions.parquet"), None).unwrap();
+        engine
+            .add_table(&fixture_path("orders.parquet"), None)
+            .unwrap();
+        engine
+            .add_table(&fixture_path("regions.parquet"), None)
+            .unwrap();
         let query =
             sql::parse("SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.key ORDER BY orders.id")
                 .unwrap();
         let nodes = engine.explain(&query).unwrap();
 
-        assert!(details(&nodes).iter().any(|d| d.starts_with("SCAN orders (")));
-        assert!(details(&nodes).iter().any(|d| d.starts_with("SCAN regions (")));
+        assert!(details(&nodes)
+            .iter()
+            .any(|d| d.starts_with("SCAN orders (")));
+        assert!(details(&nodes)
+            .iter()
+            .any(|d| d.starts_with("SCAN regions (")));
         assert!(details(&nodes).contains(&"LOAD COLUMNS: orders.id, orders.region_key"));
         assert!(details(&nodes).contains(&"LOAD COLUMNS: regions.budget, regions.key"));
         assert!(details(&nodes).contains(&"HASH JOIN: orders.region_key = regions.key"));
@@ -1473,9 +1925,16 @@ mod tests {
     #[test]
     fn explain_semi_join_describes_subquery() {
         let mut engine = QueryEngine::default();
-        engine.add_table(&fixture_path("orders.parquet"), None).unwrap();
-        engine.add_table(&fixture_path("regions.parquet"), None).unwrap();
-        let query = sql::parse("SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions) ORDER BY id").unwrap();
+        engine
+            .add_table(&fixture_path("orders.parquet"), None)
+            .unwrap();
+        engine
+            .add_table(&fixture_path("regions.parquet"), None)
+            .unwrap();
+        let query = sql::parse(
+            "SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions) ORDER BY id",
+        )
+        .unwrap();
         let nodes = engine.explain(&query).unwrap();
 
         assert!(details(&nodes).contains(&"SEMI JOIN: region_key IN (SELECT key FROM regions)"));
@@ -1488,12 +1947,18 @@ mod tests {
     #[test]
     fn explain_window_describes_partition_and_order() {
         let mut engine = QueryEngine::default();
-        engine.add_table(&fixture_path("orders.parquet"), None).unwrap();
+        engine
+            .add_table(&fixture_path("orders.parquet"), None)
+            .unwrap();
         let query = sql::parse("SELECT id, region_key, ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id) FROM orders ORDER BY id").unwrap();
         let nodes = engine.explain(&query).unwrap();
 
-        assert!(details(&nodes).contains(&"WINDOW: ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id)"));
-        assert_eq!(nodes.last().unwrap().detail, "EMIT: id, region_key, ROW_NUMBER()");
+        assert!(details(&nodes)
+            .contains(&"WINDOW: ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id)"));
+        assert_eq!(
+            nodes.last().unwrap().detail,
+            "EMIT: id, region_key, ROW_NUMBER()"
+        );
     }
 
     #[test]

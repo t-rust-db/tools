@@ -84,7 +84,10 @@ fn run_query(paths: &[PathBuf], sql: &str) -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(output @ Output::Plan(_)) => {
-            println!("{}", db_cli::ReplHandler::format(&handler, &output, OutputMode::Table));
+            println!(
+                "{}",
+                db_cli::ReplHandler::format(&handler, &output, OutputMode::Table)
+            );
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -104,7 +107,11 @@ fn run_column_repl(paths: &[PathBuf]) -> ExitCode {
     let history_file = history_path("column-rs");
     let result = run_repl(
         handler,
-        ReplOptions { prompt: "column> ", continuation_prompt: "     -> ", history_file: history_file.as_deref() },
+        ReplOptions {
+            prompt: "column> ",
+            continuation_prompt: "     -> ",
+            history_file: history_file.as_deref(),
+        },
     );
     match result {
         Ok(()) => ExitCode::SUCCESS,
