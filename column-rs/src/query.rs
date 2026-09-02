@@ -59,6 +59,11 @@ pub enum QueryError {
     UnknownTable(String),
     DuplicateTable(String),
     UnsupportedSemiJoin(String),
+    /// `Right`/`Full`/`Cross` are parseable (`sql_expr::JoinKind`) but
+    /// `execute_joined` only implements `Inner`/`Left` hash-join execution
+    /// so far -- see the module doc comment. Tracked as follow-up work,
+    /// not attempted in this pass.
+    UnsupportedJoinKind(JoinKind),
     Vm(crate::vm::VmError),
     File(db_parquet::FileError),
     Io(String),
@@ -68,6 +73,12 @@ impl fmt::Display for QueryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             QueryError::UnsupportedSemiJoin(msg) => write!(f, "unsupported semi-join: {msg}"),
+            QueryError::UnsupportedJoinKind(kind) => {
+                write!(
+                    f,
+                    "join kind {kind:?} is not yet executable (only Inner/Left are implemented)"
+                )
+            }
             QueryError::UnknownColumn(name) => write!(f, "unknown column: {name}"),
             QueryError::UnknownTable(name) => write!(f, "unknown table: {name}"),
             QueryError::DuplicateTable(name) => write!(f, "table already loaded: {name}"),
@@ -298,6 +309,34 @@ pub(crate) fn compile(query: &Query) -> Plan {
                     op: map_bin_op(*op),
                     a,
                     b,
+                });
+                dst
+            }
+            Expr::Not(inner) => {
+                let a = compile_expr(inner, program, column_regs, next_reg, columns_to_load);
+                let dst = *next_reg;
+                *next_reg += 1;
+                program.push(Opcode::Map {
+                    dst,
+                    op: MapOp::Not,
+                    a,
+                    b: a,
+                });
+                dst
+            }
+            Expr::IsNull { expr, negated } => {
+                let a = compile_expr(expr, program, column_regs, next_reg, columns_to_load);
+                let dst = *next_reg;
+                *next_reg += 1;
+                program.push(Opcode::Map {
+                    dst,
+                    op: if *negated {
+                        MapOp::IsNotNull
+                    } else {
+                        MapOp::IsNull
+                    },
+                    a,
+                    b: a,
                 });
                 dst
             }
@@ -816,6 +855,9 @@ pub fn execute_joined(
         .joins
         .first()
         .expect("execute_joined requires at least one join");
+    if !matches!(join.kind, JoinKind::Inner | JoinKind::Left) {
+        return Err(QueryError::UnsupportedJoinKind(join.kind));
+    }
     let plan = compile(query);
 
     let mut needed: Vec<String> = plan.columns_to_load.clone();
@@ -1014,7 +1056,7 @@ pub fn execute_windowed(file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Val
                     push_needed(o, &mut needed);
                 }
             }
-            SelectItem::Agg(..) => {}
+            SelectItem::Agg(..) | SelectItem::Star => {}
         }
     }
 
@@ -1044,7 +1086,7 @@ pub fn execute_windowed(file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Val
                 .map(|(i, item)| match item {
                     SelectItem::Column(name) => batch.columns[name][row].clone(),
                     SelectItem::Window(_) => window_outputs[i].as_ref().unwrap()[row].clone(),
-                    SelectItem::Agg(..) => Value::Null,
+                    SelectItem::Agg(..) | SelectItem::Star => Value::Null,
                 })
                 .collect()
         })
@@ -1493,6 +1535,9 @@ impl QueryEngine {
             let kind = match join.kind {
                 JoinKind::Inner => "HASH JOIN",
                 JoinKind::Left => "LEFT HASH JOIN",
+                JoinKind::Right => "RIGHT HASH JOIN",
+                JoinKind::Full => "FULL HASH JOIN",
+                JoinKind::Cross => "CROSS JOIN",
             };
             b.push(0, format!("{kind}: {} = {}", join.left_col, join.right_col));
         }
@@ -1633,6 +1678,7 @@ fn window_func_name(func: WindowFunc) -> &'static str {
 fn select_item_label(item: &SelectItem) -> String {
     match item {
         SelectItem::Column(name) => name.clone(),
+        SelectItem::Star => "*".to_string(),
         SelectItem::Agg(func, arg) => match arg {
             Some(col) => format!("{}({col})", agg_func_name(*func)),
             None => format!("{}(*)", agg_func_name(*func)),
@@ -1715,6 +1761,12 @@ fn expr_to_string(expr: &Expr) -> String {
             expr_to_string(expr),
             subquery.from
         ),
+        Expr::Not(inner) => format!("NOT {}", expr_to_string(inner)),
+        Expr::IsNull { expr, negated } => format!(
+            "{} IS {}NULL",
+            expr_to_string(expr),
+            if *negated { "NOT " } else { "" }
+        ),
     }
 }
 
@@ -1733,6 +1785,8 @@ fn collect_expr_columns(expr: &Expr, out: &mut Vec<String>) {
             collect_expr_columns(rhs, out);
         }
         Expr::InSubquery { expr, .. } => collect_expr_columns(expr, out),
+        Expr::Not(inner) => collect_expr_columns(inner, out),
+        Expr::IsNull { expr, .. } => collect_expr_columns(expr, out),
     }
 }
 
@@ -1747,6 +1801,7 @@ fn referenced_columns(query: &Query) -> Vec<String> {
     for item in &query.columns {
         match item {
             SelectItem::Column(name) => push_unique(&mut out, name.clone()),
+            SelectItem::Star => {}
             SelectItem::Agg(_, Some(name)) => push_unique(&mut out, name.clone()),
             SelectItem::Agg(_, None) => {}
             SelectItem::Window(spec) => {

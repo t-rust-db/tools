@@ -87,6 +87,16 @@ pub enum MapOp {
     Ge,
     And,
     Or,
+    /// `NOT a` -- unary; `b` is unused (callers pass the same register as
+    /// `a`). `NOT NULL` is `NULL`, per the general null-propagation rule
+    /// below.
+    Not,
+    /// `a IS NULL` -- unary; `b` is unused. Unlike every other op, this
+    /// does *not* propagate `NULL` -- testing a value for nullness must
+    /// itself always produce `true`/`false`.
+    IsNull,
+    /// `a IS NOT NULL` -- unary; `b` is unused. See [`MapOp::IsNull`].
+    IsNotNull,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -588,6 +598,12 @@ fn reduce_values(func: AggFunc, values: &[Value]) -> Value {
 }
 
 fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
+    if matches!(op, MapOp::IsNull) {
+        return Value::Bool(matches!(a, Value::Null));
+    }
+    if matches!(op, MapOp::IsNotNull) {
+        return Value::Bool(!matches!(a, Value::Null));
+    }
     if matches!(a, Value::Null) || matches!(b, Value::Null) {
         return Value::Null;
     }
@@ -631,6 +647,8 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
         }
         MapOp::And => Value::Bool(as_bool(a) && as_bool(b)),
         MapOp::Or => Value::Bool(as_bool(a) || as_bool(b)),
+        MapOp::Not => Value::Bool(!as_bool(a)),
+        MapOp::IsNull | MapOp::IsNotNull => unreachable!("handled above"),
     }
 }
 
