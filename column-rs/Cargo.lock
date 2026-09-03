@@ -197,6 +197,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sql-error"
+version = "0.1.0"
+
+[[package]]
 name = "sql-expr"
 version = "0.1.0"
 dependencies = [
@@ -211,6 +215,7 @@ version = "0.1.0"
 name = "sql-parser"
 version = "0.1.0"
 dependencies = [
+ "sql-error",
  "sql-expr",
  "sql-types",
 ]
