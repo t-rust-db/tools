@@ -597,6 +597,18 @@ fn render_opcode(op: &Opcode) -> String {
             format!("Opcode::NextSegment {{ loop_start: {loop_start} }}")
         }
         Opcode::Halt => "Opcode::Halt".to_string(),
+        // column-rs's own `compile()` (this file's caller) never emits
+        // these three -- `execute_joined`/`execute_windowed` still bypass
+        // the VM program entirely (see this module's top doc comment),
+        // so no `Plan`/`Program` this codegen ever renders can contain
+        // them. Not a feature gap to silently paper over with a fake
+        // rendering: if `compile()` ever starts emitting these (the
+        // HashBuild/HashProbe/Window opcodes db-core#2/#4 added), this
+        // arm should become a real render_* implementation at that point,
+        // not before.
+        Opcode::HashBuild { .. } | Opcode::HashProbe { .. } | Opcode::Window { .. } => {
+            unreachable!("column-rs's compile() does not emit {op:?} yet")
+        }
     }
 }
 
