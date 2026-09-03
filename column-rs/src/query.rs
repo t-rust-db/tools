@@ -154,6 +154,7 @@ fn map_bin_op(op: BinOp) -> MapOp {
         BinOp::Ge => MapOp::Ge,
         BinOp::And => MapOp::And,
         BinOp::Or => MapOp::Or,
+        BinOp::Concat => MapOp::Concat,
     }
 }
 
@@ -289,6 +290,18 @@ pub(crate) fn compile(query: &Query) -> Plan {
                 program.push(Opcode::Map {
                     dst,
                     op: MapOp::Not,
+                    a,
+                    b: a,
+                });
+                dst
+            }
+            Expr::Neg(inner) => {
+                let a = compile_expr(inner, program, column_regs, next_reg, columns_to_load);
+                let dst = *next_reg;
+                *next_reg += 1;
+                program.push(Opcode::Map {
+                    dst,
+                    op: MapOp::Neg,
                     a,
                     b: a,
                 });
@@ -1607,6 +1620,7 @@ fn bin_op_str(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "AND",
         BinOp::Or => "OR",
+        BinOp::Concat => "||",
     }
 }
 
@@ -1628,6 +1642,7 @@ fn expr_to_string(expr: &Expr) -> String {
             subquery.from
         ),
         Expr::Not(inner) => format!("NOT {}", expr_to_string(inner)),
+        Expr::Neg(inner) => format!("-{}", expr_to_string(inner)),
         Expr::IsNull { expr, negated } => format!(
             "{} IS {}NULL",
             expr_to_string(expr),
@@ -1652,6 +1667,7 @@ fn collect_expr_columns(expr: &Expr, out: &mut Vec<String>) {
         }
         Expr::InSubquery { expr, .. } => collect_expr_columns(expr, out),
         Expr::Not(inner) => collect_expr_columns(inner, out),
+        Expr::Neg(inner) => collect_expr_columns(inner, out),
         Expr::IsNull { expr, .. } => collect_expr_columns(expr, out),
     }
 }

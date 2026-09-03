@@ -500,6 +500,7 @@ fn render_expr(expr: &Expr) -> String {
             render_query(subquery)
         ),
         Expr::Not(inner) => format!("Expr::Not(Box::new({}))", render_expr(inner)),
+        Expr::Neg(inner) => format!("Expr::Neg(Box::new({}))", render_expr(inner)),
         Expr::IsNull { expr, negated } => format!(
             "Expr::IsNull {{ expr: Box::new({}), negated: {negated} }}",
             render_expr(expr)
@@ -529,6 +530,7 @@ fn render_bin_op(op: BinOp) -> &'static str {
         BinOp::Ge => "Ge",
         BinOp::And => "And",
         BinOp::Or => "Or",
+        BinOp::Concat => "Concat",
     }
 }
 
@@ -647,6 +649,8 @@ fn render_map_op(op: MapOp) -> &'static str {
         MapOp::Not => "Not",
         MapOp::IsNull => "IsNull",
         MapOp::IsNotNull => "IsNotNull",
+        MapOp::Concat => "Concat",
+        MapOp::Neg => "Neg",
     }
 }
 
