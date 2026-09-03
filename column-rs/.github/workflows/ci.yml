@@ -12,7 +12,31 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # `.cargo/config.toml` patches db-storage/db-core/db-parquet/db-cli to
+      # sibling paths (`../db-core`, etc.) for local monorepo development --
+      # that patch applies unconditionally, so CI checks out column-rs and
+      # its siblings all directly under $GITHUB_WORKSPACE (rather than
+      # relying on the default double-nested checkout dir) so the relative
+      # paths resolve the same way they do locally.
       - uses: actions/checkout@v4
+        with:
+          path: column-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: t-rust-db/db-storage
+          path: db-storage
+      - uses: actions/checkout@v4
+        with:
+          repository: t-rust-db/db-core
+          path: db-core
+      - uses: actions/checkout@v4
+        with:
+          repository: t-rust-db/db-parquet
+          path: db-parquet
+      - uses: actions/checkout@v4
+        with:
+          repository: t-rust-db/db-cli
+          path: db-cli
 
       - name: Install pinned DuckDB (oracle for tests/oracle.rs)
         run: |
@@ -26,10 +50,13 @@ jobs:
           components: clippy
 
       - name: Build
+        working-directory: column-rs
         run: cargo build --all-targets
 
       - name: Test
+        working-directory: column-rs
         run: cargo test
 
       - name: Clippy
+        working-directory: column-rs
         run: cargo clippy --all-targets -- -D warnings
