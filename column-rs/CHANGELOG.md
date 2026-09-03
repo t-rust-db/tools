@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.15.2] - 2026-09-03
+
+### Fixed
+
+- **CI now checks out sibling repos** (`fix/ci-checkout-sibling-repos`): `.cargo/config.toml` patches db-storage/db-core/db-parquet/db-cli to sibling relative paths for local monorepo development, but CI only checked out column-rs itself, causing immediate cargo build failure at dependency resolution. CI now checks out all four siblings alongside column-rs so the relative-path layout resolves the same way locally and in CI.
+
 ## [0.15.1] - 2026-09-02
 
 ### Fixed
