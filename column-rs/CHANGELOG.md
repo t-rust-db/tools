@@ -2,6 +2,16 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.17.0] - 2026-09-04
+
+### Added
+
+- **`SELECT *` now works** (#9): `QueryEngine::execute` resolves `*` against the queried table's schema (or, for a `JOIN`, both tables' schemas qualified `table.column`) via db-core's `expand_star` before dispatch, instead of falling through unhandled. `*` combined with `GROUP BY`/an aggregate/a window function returns a clear `QueryError::StarWithAggregation` instead of silently wrong output.
+
+### Changed
+
+- `db-core` dependency bumped to `v0.17.0` (pulls in `expand_star`/`PlanError::StarWithAggregation` from v0.15.0, plus an unrelated `emit` codegen fix from v0.17.0 -- see db-core's own changelog).
+
 ## [0.16.0] - 2026-09-04
 
 ### Changed
