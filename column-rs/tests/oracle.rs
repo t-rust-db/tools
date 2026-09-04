@@ -1209,3 +1209,130 @@ fn oracle_projection_of_unfiltered_columns_matches_duckdb() {
         );
     }
 }
+
+/// #9: `SELECT *` expands against the loaded table's schema (via db-core's
+/// `expand_star`) before dispatch, so it returns every column with the
+/// right names and values, matching DuckDB.
+#[test]
+fn oracle_select_star_matches_duckdb() {
+    use column_rs::query::QueryEngine;
+
+    let path = fixture_path("mixed.parquet");
+    let csv = require_duckdb_or_skip!(&format!("SELECT * FROM '{path}'"));
+    let expected = parse_csv_rows(&csv);
+
+    let engine = QueryEngine::open(Path::new(&path)).unwrap();
+    let result = engine.execute("SELECT * FROM mixed").unwrap();
+
+    assert_eq!(result.columns, vec!["id", "val", "flag", "name"]);
+    assert_eq!(result.rows.len(), expected.len());
+    for (expected_row, row) in expected.iter().zip(&result.rows) {
+        assert_eq!(row[0], Value::Int(cell_as_i64(&expected_row[0]).unwrap()));
+        assert_eq!(row[1], Value::Float(cell_as_f64(&expected_row[1]).unwrap()));
+        assert_eq!(row[2], Value::Bool(cell_as_bool(&expected_row[2]).unwrap()));
+        assert_eq!(
+            row[3],
+            Value::Str(cell_as_string(&expected_row[3]).unwrap().into())
+        );
+    }
+}
+
+/// #9: a mixed `SELECT id, *` keeps `id` first, then expands `*` after it
+/// (duplicating `id`), matching DuckDB's own behavior for the same query.
+#[test]
+fn oracle_select_mixed_star_matches_duckdb() {
+    use column_rs::query::QueryEngine;
+
+    let path = fixture_path("mixed.parquet");
+    let csv = require_duckdb_or_skip!(&format!("SELECT id, * FROM '{path}'"));
+    let expected = parse_csv_rows(&csv);
+
+    let engine = QueryEngine::open(Path::new(&path)).unwrap();
+    let result = engine.execute("SELECT id, * FROM mixed").unwrap();
+
+    assert_eq!(result.columns, vec!["id", "id", "val", "flag", "name"]);
+    assert_eq!(result.rows.len(), expected.len());
+    for (expected_row, row) in expected.iter().zip(&result.rows) {
+        assert_eq!(row[0], Value::Int(cell_as_i64(&expected_row[0]).unwrap()));
+        assert_eq!(row[1], Value::Int(cell_as_i64(&expected_row[1]).unwrap()));
+    }
+}
+
+/// #9: `SELECT *` composes with `WHERE`/`ORDER BY`/`LIMIT`.
+#[test]
+fn oracle_select_star_with_where_order_limit_matches_duckdb() {
+    use column_rs::query::QueryEngine;
+
+    let path = fixture_path("mixed.parquet");
+    let csv = require_duckdb_or_skip!(&format!(
+        "SELECT * FROM '{path}' WHERE id > 100 ORDER BY id LIMIT 5"
+    ));
+    let expected = parse_csv_rows(&csv);
+
+    let engine = QueryEngine::open(Path::new(&path)).unwrap();
+    let result = engine
+        .execute("SELECT * FROM mixed WHERE id > 100 ORDER BY id LIMIT 5")
+        .unwrap();
+
+    assert_eq!(result.rows.len(), expected.len());
+    for (expected_row, row) in expected.iter().zip(&result.rows) {
+        assert_eq!(row[0], Value::Int(cell_as_i64(&expected_row[0]).unwrap()));
+    }
+}
+
+/// #9: `*` combined with `GROUP BY` is a clear error, not silently wrong
+/// results -- db-core's `expand_star` rejects it (`PlanError::StarWithAggregation`),
+/// mapped here to `QueryError::StarWithAggregation`.
+#[test]
+fn select_star_with_group_by_is_rejected() {
+    use column_rs::query::{QueryEngine, QueryError};
+
+    let path = fixture_path("production.parquet");
+    let engine = QueryEngine::open(Path::new(&path)).unwrap();
+    let err = match engine.execute("SELECT * FROM production GROUP BY region") {
+        Err(e) => e,
+        Ok(_) => panic!("expected StarWithAggregation error"),
+    };
+    assert!(matches!(err, QueryError::StarWithAggregation));
+}
+
+/// #9: `*` combined with an aggregate (even without `GROUP BY`) is likewise
+/// rejected.
+#[test]
+fn select_star_with_aggregate_is_rejected() {
+    use column_rs::query::{QueryEngine, QueryError};
+
+    let path = fixture_path("production.parquet");
+    let engine = QueryEngine::open(Path::new(&path)).unwrap();
+    let err = match engine.execute("SELECT *, SUM(amount) FROM production") {
+        Err(e) => e,
+        Ok(_) => panic!("expected StarWithAggregation error"),
+    };
+    assert!(matches!(err, QueryError::StarWithAggregation));
+}
+
+/// #9: `SELECT * FROM orders JOIN regions ON ...` expands against both
+/// tables' schemas, qualified `table.column` per the existing join-column
+/// naming convention (see `oracle_inner_join_matches_duckdb`).
+#[test]
+fn oracle_select_star_join_matches_duckdb() {
+    use column_rs::query::QueryEngine;
+    use std::path::PathBuf;
+
+    let orders_path = fixture_path("orders.parquet");
+    let regions_path = fixture_path("regions.parquet");
+    let csv = require_duckdb_or_skip!(&format!(
+        "SELECT * FROM '{orders_path}' orders JOIN '{regions_path}' regions \
+         ON orders.region_key = regions.key ORDER BY orders.id"
+    ));
+    let expected = parse_csv_rows(&csv);
+
+    let paths = vec![PathBuf::from(&orders_path), PathBuf::from(&regions_path)];
+    let engine = QueryEngine::open_many(&paths).unwrap();
+    let result = engine
+        .execute("SELECT * FROM orders JOIN regions ON orders.region_key = regions.key ORDER BY orders.id")
+        .unwrap();
+
+    assert_eq!(result.columns.len(), expected[0].len());
+    assert_eq!(result.rows.len(), expected.len());
+}
