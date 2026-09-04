@@ -20,7 +20,7 @@ use db_storage::{ParquetFile, Vfs, VfsFile};
 use std::collections::HashMap;
 use std::fmt;
 
-pub use db_core::codegen::batch::PlanNode;
+pub use db_core::codegen::batch::{OpcodeRow, OpcodeSection, PlanNode};
 
 #[derive(Debug)]
 pub enum QueryError {
@@ -495,6 +495,13 @@ impl QueryEngine {
                 .expect("every table the query references was opened above")
         }))
     }
+
+    /// Build a bare `EXPLAIN`'s opcode listing for `query` (#55): the
+    /// planner's [`db_core::codegen::batch::explain_opcodes`], one section
+    /// per phase the executor actually runs.
+    pub fn explain_opcodes(&self, query: &Query) -> Result<Vec<OpcodeSection>> {
+        Ok(planner::explain_opcodes(query)?)
+    }
 }
 
 #[cfg(test)]
@@ -633,15 +640,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_explain_strips_prefix_and_query_plan_variant() {
+    fn parse_explain_distinguishes_opcodes_from_query_plan() {
+        use db_core::parser::Explain;
+
         let (explain, query) = sql::parse_explain("EXPLAIN SELECT id FROM orders").unwrap();
-        assert!(explain);
+        assert_eq!(explain, Explain::Opcodes);
         assert_eq!(query.from, "orders");
 
         let (explain, _) = sql::parse_explain("EXPLAIN QUERY PLAN SELECT id FROM orders").unwrap();
-        assert!(explain);
+        assert_eq!(explain, Explain::QueryPlan);
 
         let (explain, _) = sql::parse_explain("SELECT id FROM orders").unwrap();
-        assert!(!explain);
+        assert_eq!(explain, Explain::None);
     }
 }
