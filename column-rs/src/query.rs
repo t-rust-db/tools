@@ -31,6 +31,9 @@ pub enum QueryError {
     /// `Right`/`Full`/`Cross` are parseable (`db_core::expr::JoinKind`) but
     /// only `Inner`/`Left` hash-join execution exists so far.
     UnsupportedJoinKind(JoinKind),
+    /// `SELECT *` (or a mixed `SELECT col, *`) combined with `GROUP BY`, an
+    /// aggregate, or a window function.
+    StarWithAggregation,
     Vm(crate::vm::VmError),
     File(db_storage::FileError),
     Io(String),
@@ -46,6 +49,10 @@ impl fmt::Display for QueryError {
                     "join kind {kind:?} is not yet executable (only Inner/Left are implemented)"
                 )
             }
+            QueryError::StarWithAggregation => write!(
+                f,
+                "SELECT * cannot be combined with GROUP BY, an aggregate, or a window function"
+            ),
             QueryError::UnknownColumn(name) => write!(f, "unknown column: {name}"),
             QueryError::UnknownTable(name) => write!(f, "unknown table: {name}"),
             QueryError::DuplicateTable(name) => write!(f, "table already loaded: {name}"),
@@ -76,6 +83,7 @@ impl From<PlanError> for QueryError {
             PlanError::UnknownColumn(name) => QueryError::UnknownColumn(name),
             PlanError::UnsupportedSemiJoin(msg) => QueryError::UnsupportedSemiJoin(msg),
             PlanError::UnsupportedJoinKind(kind) => QueryError::UnsupportedJoinKind(kind),
+            PlanError::StarWithAggregation => QueryError::StarWithAggregation,
         }
     }
 }
@@ -386,12 +394,38 @@ impl QueryEngine {
             .ok_or_else(|| QueryError::UnknownTable(name.to_string()))
     }
 
+    fn table_schema(&self, name: &str) -> Result<&[String]> {
+        self.tables
+            .iter()
+            .find(|t| t.name == name)
+            .map(|t| t.column_names.as_slice())
+            .ok_or_else(|| QueryError::UnknownTable(name.to_string()))
+    }
+
     /// Execute a SQL query and return results. Dispatches to a `JOIN`,
     /// `IN (SELECT ...)` semi-join, windowed, or plain single-table
     /// execution path depending on the parsed query's shape.
     pub fn execute(&self, sql: &str) -> Result<QueryResult> {
         let query =
             db_core::parser::parse(sql).map_err(|e| QueryError::UnknownColumn(e.to_string()))?;
+
+        // Resolve `*` against the queried table(s)' schema before anything
+        // else touches `query.columns` -- a `JOIN` expands against both
+        // sides, qualified `table.column` per the naming convention
+        // `compile_join` already uses for its `left_columns`/`right_columns`.
+        let schema: Vec<String> = if let Some(join) = query.joins.first() {
+            let left_schema = self.table_schema(&query.from)?;
+            let right_schema = self.table_schema(&join.table)?;
+            left_schema
+                .iter()
+                .map(|c| format!("{}.{c}", query.from))
+                .chain(right_schema.iter().map(|c| format!("{}.{c}", join.table)))
+                .collect()
+        } else {
+            self.table_schema(&query.from)?.to_vec()
+        };
+        let query = planner::expand_star(&query, &schema)?;
+
         let main_data = self.table_data(&query.from)?;
         let main_file = ParquetFile::open(main_data)?;
 
