@@ -1,4 +1,4 @@
-//! Glue between [`sql_expr`]/[`sql_parser`], [`crate::vm`] and
+//! Glue between [`db_core::expr`]/[`db_core::parser`], [`crate::vm`] and
 //! `db_storage`'s `column::parquet` module: compiles a parsed `Query`
 //! into a VM program, executes it
 //! across a Parquet file's row groups in parallel, and merges partial
@@ -14,12 +14,12 @@
 //! tables and computing directly over them instead).
 
 use crate::vm::{Batch, MapOp, Opcode, Segment, Value};
-use db_storage::column::parquet::footer::PhysicalType;
-use db_storage::{ParquetFile, Vfs, VfsFile};
-use sql_expr::{
+use db_core::expr::{
     AggFunc, BinOp, Expr, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
 };
-use sql_types::Literal;
+use db_core::types::Literal;
+use db_storage::column::parquet::footer::PhysicalType;
+use db_storage::{ParquetFile, Vfs, VfsFile};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -29,7 +29,7 @@ pub enum QueryError {
     UnknownTable(String),
     DuplicateTable(String),
     UnsupportedSemiJoin(String),
-    /// `Right`/`Full`/`Cross` are parseable (`sql_expr::JoinKind`) but
+    /// `Right`/`Full`/`Cross` are parseable (`db_core::expr::JoinKind`) but
     /// `execute_joined` only implements `Inner`/`Left` hash-join execution
     /// so far -- see the module doc comment. Tracked as follow-up work,
     /// not attempted in this pass.
@@ -1021,9 +1021,9 @@ pub fn execute_semi_join(
     ))
 }
 
-/// `sql_expr::WindowFunc` and `sql_vm::batch::WindowFunc` are separate
-/// types (same variants) so that `sql-expr` (AST) doesn't depend on
-/// `sql-vm` (execution) -- convert at the point `execute_windowed` hands a
+/// `db_core::expr::WindowFunc` and `db_core::vm::batch::WindowFunc` are separate
+/// types (same variants) so that `db_core::expr` (AST) doesn't depend on
+/// `db_core::vm` (execution) -- convert at the point `execute_windowed` hands a
 /// spec to the VM.
 fn map_window_func(func: WindowFunc) -> crate::vm::WindowFunc {
     match func {
@@ -1085,7 +1085,7 @@ pub fn execute_windowed(file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Val
 
     // `needed[i]` was loaded into register `i` (see the `LoadColumn` loop
     // below); each `Opcode::Window` writes its result into a fresh register
-    // past those, one per window `SelectItem`, computed by `sql_vm::batch`
+    // past those, one per window `SelectItem`, computed by `db_core::vm::batch`
     // instead of a bespoke partition/sort/frame implementation here.
     let column_reg = |name: &str| {
         needed
@@ -1277,7 +1277,8 @@ impl QueryEngine {
     /// `IN (SELECT ...)` semi-join, windowed, or plain single-table
     /// execution path depending on the parsed query's shape.
     pub fn execute(&self, sql: &str) -> Result<QueryResult> {
-        let query = sql_parser::parse(sql).map_err(|e| QueryError::UnknownColumn(e.to_string()))?;
+        let query =
+            db_core::parser::parse(sql).map_err(|e| QueryError::UnknownColumn(e.to_string()))?;
         let main_data = self.table_data(&query.from)?;
         let main_file = ParquetFile::open(main_data)?;
 
@@ -1715,7 +1716,7 @@ fn referenced_columns(query: &Query) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sql_parser as sql;
+    use db_core::parser as sql;
 
     #[test]
     fn bounded_scan_limit_accepts_bare_limit() {
