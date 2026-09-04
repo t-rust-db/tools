@@ -142,7 +142,8 @@ impl Screen {
                 while j < bytes.len() && bytes[j].is_ascii_digit() {
                     j += 1;
                 }
-                let n: usize = if j > start {
+                let had_digits = j > start;
+                let n: usize = if had_digits {
                     std::str::from_utf8(&bytes[start..j])
                         .unwrap()
                         .parse()
@@ -162,6 +163,13 @@ impl Screen {
                             self.cur_col = self.cur_col.saturating_sub(n);
                             self.pending_wrap = false;
                         }
+                        b'J' if had_digits && n == 2 => {
+                            // Whole-screen clear (Ctrl-L's `\x1b[2J`); cursor unmoved.
+                            let cols = self.cols();
+                            for row in self.rows.iter_mut() {
+                                *row = vec![' '; cols];
+                            }
+                        }
                         b'J' => {
                             // Clear from cursor to end of screen.
                             let cols = self.cols();
@@ -171,6 +179,12 @@ impl Screen {
                             for r in (self.cur_row + 1)..self.rows.len() {
                                 self.rows[r] = vec![' '; cols];
                             }
+                        }
+                        b'H' => {
+                            // Cursor home (Ctrl-L's `\x1b[H`, no params).
+                            self.cur_row = 0;
+                            self.cur_col = 0;
+                            self.pending_wrap = false;
                         }
                         _ => {}
                     }
@@ -329,6 +343,137 @@ fn three_row_wrap_supports_home_end_and_left_navigation() {
     assert_eq!(h.screen.row_text(0), "column> 0123456789AB");
     assert_eq!(h.screen.row_text(1), "CDEFGHIJKLMNOPQRSTUV");
     assert_eq!(h.screen.row_text(2), "WXYZ012");
+
+    h.finish();
+}
+
+/// #2: Ctrl-A/E/B/F are emacs/readline aliases for Home/End/Left/Right.
+#[test]
+fn ctrl_a_e_b_f_move_cursor_like_home_end_left_right() {
+    let mut h = Harness::start();
+
+    h.send(b"hello world"); // prompt(8) + 11 = 19, fits on one row.
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 19));
+
+    h.send(b"\x01"); // Ctrl-A
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 8));
+
+    h.send(b"\x05"); // Ctrl-E
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 19));
+
+    h.send(b"\x02"); // Ctrl-B
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 18));
+
+    h.send(b"\x06"); // Ctrl-F
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 19));
+
+    h.finish();
+}
+
+/// #2: Ctrl-K kills to end of line, Ctrl-U kills to start, Ctrl-W kills the
+/// previous word.
+#[test]
+fn ctrl_k_u_w_kill_bindings() {
+    let mut h = Harness::start();
+
+    h.send(b"hello world");
+    h.send(b"\x01"); // Ctrl-A -> cursor 0
+    h.send(b"\x06\x06\x06\x06\x06\x06"); // Ctrl-F x6 -> cursor after "hello "
+    h.send(b"\x0b"); // Ctrl-K: kill to end of line
+    assert_eq!(h.screen.row_text(0), "column> hello");
+
+    h.send(b"\x15"); // Ctrl-U: kill to start of line
+    assert_eq!(h.screen.row_text(0), "column>");
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 8));
+
+    h.send(b"foo   bar"); // multiple spaces between words
+    h.send(b"\x17"); // Ctrl-W: kill the previous word ("bar")
+    assert_eq!(h.screen.row_text(0), "column> foo");
+
+    h.finish();
+}
+
+/// #2: Alt-B/Alt-F move by word (whitespace-delimited), sharing the same
+/// boundary logic as Ctrl-W.
+#[test]
+fn alt_b_and_alt_f_move_by_word() {
+    let mut h = Harness::start();
+
+    h.send(b"foo bar baz"); // prompt(8) + 11 = 19; cursor at true end.
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 19));
+
+    h.send(b"\x1bb"); // Alt-B -> start of "baz"
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 16));
+
+    h.send(b"\x1bb"); // Alt-B -> start of "bar"
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 12));
+
+    h.send(b"\x1bf"); // Alt-F -> start of "baz" (word end + trailing space)
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 16));
+
+    h.finish();
+}
+
+/// #2: Ctrl-L clears the screen and redraws the current line at the top.
+#[test]
+fn ctrl_l_clears_screen_and_redraws_at_top() {
+    let mut h = Harness::start();
+
+    h.send(b"hello");
+    h.send(b"\x0c"); // Ctrl-L
+    assert_eq!(h.screen.row_text(0), "column> hello");
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 13));
+    // Nothing left over from wherever the cursor was before the clear.
+    assert_eq!(h.screen.row_text(1), "");
+
+    h.finish();
+}
+
+/// #2: Ctrl-P/Ctrl-N are emacs/readline aliases for history Up/Down.
+#[test]
+fn ctrl_p_n_navigate_history_like_up_down() {
+    let mut h = Harness::start();
+
+    h.send(b"first line");
+    h.send(b"\n");
+    h.send(b"second");
+    h.send(b"\n");
+
+    h.send(b"\x10"); // Ctrl-P -> most recent ("second")
+    assert_eq!(h.screen.row_text(2), "column> second");
+
+    h.send(b"\x10"); // Ctrl-P -> older ("first line")
+    assert_eq!(h.screen.row_text(2), "column> first line");
+
+    h.send(b"\x0e"); // Ctrl-N -> back to "second"
+    assert_eq!(h.screen.row_text(2), "column> second");
+
+    h.send(b"\x0e"); // Ctrl-N -> past the newest entry, back to blank
+    assert_eq!(h.screen.row_text(2), "column>");
+
+    h.finish();
+}
+
+/// #2: word motion (Alt-B here) must still work correctly once the line has
+/// wrapped past the terminal width -- the redraw-wrap fix (#1) is exactly
+/// what a broken redraw would show up as at a wrap point.
+#[test]
+fn alt_b_word_motion_works_across_a_wrapped_line() {
+    let mut h = Harness::start();
+
+    // prompt(8) + "aaaa bbbb cccc dddd" (19 chars) = 27 -> wraps onto row 1.
+    h.send(b"aaaa bbbb cccc dddd");
+    assert_eq!(h.screen.row_text(0), "column> aaaa bbbb cc");
+    assert_eq!(h.screen.row_text(1), "cc dddd");
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (1, 7));
+
+    h.send(b"\x1bb"); // Alt-B -> start of "dddd"
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (1, 3));
+    assert!(
+        !h.screen.row_text(1).contains("column>"),
+        "prompt leaked onto the wrapped row during word motion: {:?}",
+        h.screen.row_text(1)
+    );
 
     h.finish();
 }

@@ -132,6 +132,15 @@ impl<H: ReplHandler> Repl<H> {
                 ".quit / .exit  Exit".to_string(),
             ];
             lines.extend(self.handler.help_extra());
+            lines.push(String::new());
+            lines.push("Keybindings:".to_string());
+            lines.push("  Ctrl-A / Ctrl-E   line start / end".to_string());
+            lines.push("  Ctrl-B / Ctrl-F   char left / right".to_string());
+            lines.push("  Ctrl-K / Ctrl-U   kill to end / start of line".to_string());
+            lines.push("  Ctrl-W            kill previous word".to_string());
+            lines.push("  Alt-B / Alt-F     word left / right".to_string());
+            lines.push("  Ctrl-L            clear screen".to_string());
+            lines.push("  Ctrl-P / Ctrl-N   history previous / next".to_string());
             return Step::Print(lines.join("\n"));
         }
         if !cmd.is_empty() && "mode".starts_with(cmd) {
