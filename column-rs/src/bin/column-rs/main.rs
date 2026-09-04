@@ -83,7 +83,7 @@ fn run_query(paths: &[PathBuf], sql: &str) -> ExitCode {
             print_rows_streaming(&result.columns, result.rows.into_iter());
             ExitCode::SUCCESS
         }
-        Ok(output @ Output::Plan(_)) => {
+        Ok(output @ (Output::Plan(_) | Output::Opcodes(_))) => {
             println!(
                 "{}",
                 db_cli::ReplHandler::format(&handler, &output, OutputMode::Table)

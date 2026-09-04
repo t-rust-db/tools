@@ -53,8 +53,8 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.17.0"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.17.0#bb25673c26aa97951775cfda9bce9f50c56703ed"
+version = "0.21.0"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.21.0#8d7d093f10e2f18741d434cf2f9a2f861eeb5284"
 dependencies = [
  "rayon",
 ]
