@@ -9,7 +9,7 @@ fn main() {
     loop {
         match ed.read_line("column> ") {
             Ok(line) if line.trim() == "quit" => break,
-            Ok(_) => {}
+            Ok(line) => ed.add_history_entry(&line),
             Err(_) => break,
         }
     }

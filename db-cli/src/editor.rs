@@ -140,6 +140,83 @@ impl Readline {
                         self.redraw_at(prompt, &line, cursor, &mut stdout);
                     }
                 }
+                // Ctrl-A / Ctrl-E: emacs/readline aliases for Home/End.
+                term::Key::Char('\x01') => {
+                    cursor = 0;
+                    self.redraw_at(prompt, &line, cursor, &mut stdout);
+                }
+                term::Key::Char('\x05') => {
+                    cursor = line.chars().count();
+                    self.redraw_at(prompt, &line, cursor, &mut stdout);
+                }
+                // Ctrl-B / Ctrl-F: emacs/readline aliases for Left/Right.
+                term::Key::Char('\x02') => {
+                    if cursor > 0 {
+                        cursor -= 1;
+                        self.redraw_at(prompt, &line, cursor, &mut stdout);
+                    }
+                }
+                term::Key::Char('\x06') => {
+                    if cursor < line.chars().count() {
+                        cursor += 1;
+                        self.redraw_at(prompt, &line, cursor, &mut stdout);
+                    }
+                }
+                // Ctrl-K: kill from the cursor to end of line.
+                term::Key::Char('\x0b') => {
+                    let idx = char_byte_index(&line, cursor);
+                    line.truncate(idx);
+                    self.redraw_at(prompt, &line, cursor, &mut stdout);
+                }
+                // Ctrl-U: kill from the cursor to start of line.
+                term::Key::Char('\x15') => {
+                    let idx = char_byte_index(&line, cursor);
+                    line.drain(..idx);
+                    cursor = 0;
+                    self.redraw_at(prompt, &line, cursor, &mut stdout);
+                }
+                // Ctrl-W: kill the previous word.
+                term::Key::Char('\x17') => {
+                    let start = prev_word_boundary(&line, cursor);
+                    let start_idx = char_byte_index(&line, start);
+                    let cursor_idx = char_byte_index(&line, cursor);
+                    line.drain(start_idx..cursor_idx);
+                    cursor = start;
+                    self.redraw_at(prompt, &line, cursor, &mut stdout);
+                }
+                // Alt-B / Alt-F: word left / right.
+                term::Key::Alt('b') => {
+                    cursor = prev_word_boundary(&line, cursor);
+                    self.redraw_at(prompt, &line, cursor, &mut stdout);
+                }
+                term::Key::Alt('f') => {
+                    cursor = next_word_boundary(&line, cursor);
+                    self.redraw_at(prompt, &line, cursor, &mut stdout);
+                }
+                // Ctrl-L: clear screen, then redraw at the top.
+                term::Key::Char('\x0c') => {
+                    print!("\x1b[2J\x1b[H");
+                    self.prev_cursor_row = 0;
+                    self.redraw_at(prompt, &line, cursor, &mut stdout);
+                }
+                // Ctrl-P / Ctrl-N: emacs/readline aliases for history Up/Down.
+                term::Key::Char('\x10') => {
+                    if let Some(prev) = self.history.prev(&mut hist_idx) {
+                        line = prev.to_string();
+                        cursor = line.chars().count();
+                        self.redraw_at(prompt, &line, cursor, &mut stdout);
+                    }
+                }
+                term::Key::Char('\x0e') => {
+                    if let Some(next) = self.history.next(&mut hist_idx) {
+                        line = next.to_string();
+                    } else {
+                        hist_idx = None;
+                        line.clear();
+                    }
+                    cursor = line.chars().count();
+                    self.redraw_at(prompt, &line, cursor, &mut stdout);
+                }
                 term::Key::Char(c) if !c.is_control() => {
                     let idx = char_byte_index(&line, cursor);
                     line.insert(idx, c);
@@ -342,6 +419,106 @@ mod layout_tests {
     }
 }
 
+/// Previous word boundary (char index) from `cursor` in `line`, whitespace-
+/// delimited: skip any whitespace immediately before the cursor, then skip
+/// back through the word before that -- readline/emacs's Ctrl-W / Alt-B
+/// convention. Operates on char indices, never bytes, so it's safe on
+/// multibyte input.
+fn prev_word_boundary(line: &str, cursor: usize) -> usize {
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = cursor.min(chars.len());
+    while i > 0 && chars[i - 1].is_whitespace() {
+        i -= 1;
+    }
+    while i > 0 && !chars[i - 1].is_whitespace() {
+        i -= 1;
+    }
+    i
+}
+
+/// Next word boundary (char index) from `cursor` in `line`: skip the rest
+/// of the current word, then any whitespace after it -- Alt-F's
+/// convention.
+fn next_word_boundary(line: &str, cursor: usize) -> usize {
+    let chars: Vec<char> = line.chars().collect();
+    let len = chars.len();
+    let mut i = cursor.min(len);
+    while i < len && !chars[i].is_whitespace() {
+        i += 1;
+    }
+    while i < len && chars[i].is_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+#[cfg(test)]
+mod word_boundary_tests {
+    use super::{next_word_boundary, prev_word_boundary};
+
+    #[test]
+    fn prev_boundary_from_end_of_last_word() {
+        assert_eq!(prev_word_boundary("hello world", 11), 6);
+    }
+
+    #[test]
+    fn prev_boundary_skips_multiple_spaces() {
+        assert_eq!(prev_word_boundary("hello   world", 13), 8);
+    }
+
+    #[test]
+    fn prev_boundary_with_leading_spaces_stops_at_zero() {
+        assert_eq!(prev_word_boundary("   hello", 8), 3);
+        assert_eq!(prev_word_boundary("   hello", 2), 0);
+    }
+
+    #[test]
+    fn prev_boundary_mid_word_stops_at_word_start() {
+        assert_eq!(prev_word_boundary("hello world", 8), 6);
+    }
+
+    #[test]
+    fn prev_boundary_at_start_is_zero() {
+        assert_eq!(prev_word_boundary("hello", 0), 0);
+    }
+
+    #[test]
+    fn prev_boundary_handles_multibyte_chars() {
+        // "héllo wörld": both non-ASCII chars count as one char each.
+        assert_eq!(prev_word_boundary("héllo wörld", 11), 6);
+    }
+
+    #[test]
+    fn next_boundary_from_start_of_first_word() {
+        assert_eq!(next_word_boundary("hello world", 0), 6);
+    }
+
+    #[test]
+    fn next_boundary_skips_multiple_spaces() {
+        assert_eq!(next_word_boundary("hello   world", 0), 8);
+    }
+
+    #[test]
+    fn next_boundary_with_trailing_spaces_stops_at_end() {
+        assert_eq!(next_word_boundary("hello   ", 0), 8);
+    }
+
+    #[test]
+    fn next_boundary_mid_word_skips_to_start_of_next_word() {
+        assert_eq!(next_word_boundary("hello world", 2), 6);
+    }
+
+    #[test]
+    fn next_boundary_at_end_is_line_length() {
+        assert_eq!(next_word_boundary("hello", 5), 5);
+    }
+
+    #[test]
+    fn next_boundary_handles_multibyte_chars() {
+        assert_eq!(next_word_boundary("héllo wörld", 0), 6);
+    }
+}
+
 fn char_byte_index(s: &str, char_idx: usize) -> usize {
     s.char_indices()
         .nth(char_idx)
@@ -393,6 +570,9 @@ mod term {
     #[derive(Debug)]
     pub enum Key {
         Char(char),
+        /// `ESC <c>` for some non-`[` byte `c` (an Alt/Meta-modified key,
+        /// e.g. Alt-B/Alt-F for word-left/word-right).
+        Alt(char),
         Up,
         Down,
         Left,
@@ -502,6 +682,18 @@ mod term {
         80
     }
 
+    /// What immediately follows an `ESC` byte decides between a CSI escape
+    /// sequence (`ESC [ ...`, arrows/Home/End/Delete) and an Alt-modified
+    /// key (`ESC <c>` for any other `c`) -- pulled out of [`read_key`] as a
+    /// pure function so this decision is unit-testable without a tty.
+    fn decode_escape(first: u8) -> Option<char> {
+        if first == b'[' {
+            None
+        } else {
+            Some(first as char)
+        }
+    }
+
     /// Read a single key from stdin (raw mode).
     pub fn read_key() -> io::Result<Key> {
         let mut buf = [0u8; 1];
@@ -509,25 +701,32 @@ mod term {
 
         match buf[0] {
             0x1b => {
-                let mut seq = [0u8; 2];
-                if read_eintr(&mut seq)? == 2 && seq[0] == b'[' {
-                    match seq[1] {
-                        b'A' => return Ok(Key::Up),
-                        b'B' => return Ok(Key::Down),
-                        b'C' => return Ok(Key::Right),
-                        b'D' => return Ok(Key::Left),
-                        b'H' => return Ok(Key::Home),
-                        b'F' => return Ok(Key::End),
-                        b'3' => {
-                            let mut tilde = [0u8; 1];
-                            if read_exact_eintr(&mut tilde).is_ok() && tilde[0] == b'~' {
-                                return Ok(Key::Delete);
-                            }
-                        }
-                        _ => {}
-                    }
+                let mut first = [0u8; 1];
+                if read_eintr(&mut first)? != 1 {
+                    return Ok(Key::Unknown);
                 }
-                Ok(Key::Unknown)
+                let Some(alt) = decode_escape(first[0]) else {
+                    let mut seq = [0u8; 1];
+                    if read_eintr(&mut seq)? == 1 {
+                        match seq[0] {
+                            b'A' => return Ok(Key::Up),
+                            b'B' => return Ok(Key::Down),
+                            b'C' => return Ok(Key::Right),
+                            b'D' => return Ok(Key::Left),
+                            b'H' => return Ok(Key::Home),
+                            b'F' => return Ok(Key::End),
+                            b'3' => {
+                                let mut tilde = [0u8; 1];
+                                if read_exact_eintr(&mut tilde).is_ok() && tilde[0] == b'~' {
+                                    return Ok(Key::Delete);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    return Ok(Key::Unknown);
+                };
+                Ok(Key::Alt(alt))
             }
             0x7f => Ok(Key::Backspace),
             b => Ok(Key::Char(b as char)),
@@ -540,6 +739,23 @@ mod term {
     pub const GREEN: &str = "\x1b[32m";
     pub const CYAN: &str = "\x1b[36m";
     pub const YELLOW: &str = "\x1b[33m";
+
+    #[cfg(test)]
+    mod decode_escape_tests {
+        use super::decode_escape;
+
+        #[test]
+        fn esc_followed_by_bracket_is_a_csi_sequence() {
+            assert_eq!(decode_escape(b'['), None);
+        }
+
+        #[test]
+        fn esc_followed_by_non_bracket_decodes_as_alt() {
+            assert_eq!(decode_escape(b'b'), Some('b'));
+            assert_eq!(decode_escape(b'f'), Some('f'));
+            assert_eq!(decode_escape(b'x'), Some('x'));
+        }
+    }
 }
 
 /// SQL syntax highlighting, generic across any SQL-speaking engine.
