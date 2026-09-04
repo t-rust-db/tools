@@ -1,7 +1,9 @@
-//! Epic #98's sub-ticket 4 (see #101): actually compile a codegen'd `.rs`
-//! file with `rustc` (linking against the already-built `column_rs` rlib)
-//! and run the resulting binary, rather than only asserting on the
-//! generated source text (that's what `src/codegen.rs`'s unit tests do).
+//! Epic #98's sub-ticket 4 (see #101): actually compile an emitted `.rs`
+//! file (`db_core::emit::batch::generate`, the AOT emitter column-rs's
+//! `codegen` subcommand wraps) with `rustc` (linking against the
+//! already-built `column_rs` rlib) and run the resulting binary, rather
+//! than only asserting on the generated source text (that's what the
+//! emitter's own unit tests in db-core do).
 //! Confirms the generated binary's output matches `QueryEngine::execute`
 //! for the same query, against a real fixture with more than one row group
 //! (`production.parquet`) so `GROUP BY` merging across segments is
@@ -95,7 +97,7 @@ fn compile_and_run(src: &str, args: &[&str]) -> String {
 #[test]
 fn codegen_group_by_matches_query_engine_across_multiple_row_groups() {
     let sql = "SELECT region, SUM(amount) FROM production GROUP BY region ORDER BY region";
-    let src = column_rs::codegen::generate(sql).unwrap();
+    let src = db_core::emit::batch::generate("column_rs", sql).unwrap();
     let fixture = fixture_path("production.parquet");
 
     let generated_output = compile_and_run(&src, &[&fixture]);
@@ -115,7 +117,7 @@ fn codegen_group_by_matches_query_engine_across_multiple_row_groups() {
 #[test]
 fn codegen_flat_filter_matches_query_engine() {
     let sql = "SELECT id, name FROM mixed WHERE id > 995";
-    let src = column_rs::codegen::generate(sql).unwrap();
+    let src = db_core::emit::batch::generate("column_rs", sql).unwrap();
     let fixture = fixture_path("mixed.parquet");
 
     let generated_output = compile_and_run(&src, &[&fixture]);
@@ -139,7 +141,7 @@ fn codegen_flat_filter_matches_query_engine() {
 #[test]
 fn codegen_join_matches_query_engine() {
     let sql = "SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.key ORDER BY orders.id";
-    let src = column_rs::codegen::generate(sql).unwrap();
+    let src = db_core::emit::batch::generate("column_rs", sql).unwrap();
     let orders = fixture_path("orders.parquet");
     let regions = fixture_path("regions.parquet");
 
@@ -163,13 +165,13 @@ fn codegen_join_matches_query_engine() {
 
 /// #1: `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` -- the window
 /// shape reconstructs `Query` as a literal the same way the `JOIN` shape
-/// does (see `render_windowed` in `src/codegen.rs`) and calls
+/// does (see `render_windowed` in `db_core::emit::batch`) and calls
 /// `execute_windowed` at runtime.
 #[test]
 fn codegen_row_number_window_matches_query_engine() {
     let sql =
         "SELECT id, region_key, ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id) FROM orders ORDER BY id";
-    let src = column_rs::codegen::generate(sql).unwrap();
+    let src = db_core::emit::batch::generate("column_rs", sql).unwrap();
     let fixture = fixture_path("orders.parquet");
 
     let generated_output = compile_and_run(&src, &[&fixture]);
@@ -193,7 +195,7 @@ fn codegen_row_number_window_matches_query_engine() {
 #[test]
 fn codegen_lag_lead_window_matches_query_engine() {
     let sql = "SELECT id, region_key, LAG(id) OVER (PARTITION BY region_key ORDER BY id), LEAD(id, 2) OVER (PARTITION BY region_key ORDER BY id) FROM orders ORDER BY id";
-    let src = column_rs::codegen::generate(sql).unwrap();
+    let src = db_core::emit::batch::generate("column_rs", sql).unwrap();
     let fixture = fixture_path("orders.parquet");
 
     let generated_output = compile_and_run(&src, &[&fixture]);
@@ -216,7 +218,7 @@ fn codegen_lag_lead_window_matches_query_engine() {
 #[test]
 fn codegen_sum_over_window_matches_query_engine() {
     let sql = "SELECT region, amount, SUM(amount) OVER (PARTITION BY region) FROM production ORDER BY region";
-    let src = column_rs::codegen::generate(sql).unwrap();
+    let src = db_core::emit::batch::generate("column_rs", sql).unwrap();
     let fixture = fixture_path("production.parquet");
 
     let generated_output = compile_and_run(&src, &[&fixture]);
@@ -237,7 +239,7 @@ fn codegen_sum_over_window_matches_query_engine() {
 #[test]
 fn codegen_semi_join_matches_query_engine() {
     let sql = "SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions)";
-    let src = column_rs::codegen::generate(sql).unwrap();
+    let src = db_core::emit::batch::generate("column_rs", sql).unwrap();
     let orders = fixture_path("orders.parquet");
     let regions = fixture_path("regions.parquet");
 

@@ -22,16 +22,16 @@ crates and are pulled in as dependencies (see `Cargo.toml` and
 
 What stays in this repo:
 
-- `src/vm.rs` — the columnar VM: opcodes, `Batch`/`Value`, vectorized
-  execution over row-group segments (`run_parallel`)
-- `src/query.rs` — the query planner: compiles `sql_expr::Query` into a
-  VM program, plus the join/semi-join/window execution paths the
-  register-machine model doesn't fit
-- `src/codegen.rs` — compiles a SQL query ahead of time into a standalone
-  `.rs` source file with a `const PROGRAM`, for embedding without a
-  runtime parser
+- `src/query.rs` — the Parquet glue only: resolve a planned program's
+  columns against a file's leaf schema, expose each row group as a
+  `Segment`, materialize whole tables for join/semi-join/window queries,
+  and `QueryEngine` (table registry + dispatch). The planner
+  (`db_core::codegen::batch`), the VM (`db_core::vm::batch`) and the
+  cross-segment engine that applies the terminal `Finalize` opcode
+  (`db_core::vm::engine`) all live in db-core (its ADR 0007).
 - `src/bin/column-rs/` — the CLI binary: REPL (via `db_cli::run_repl`),
-  one-shot `-c` mode, `codegen` subcommand
+  one-shot `-c` mode, `codegen` subcommand (wraps db-core's AOT emitter,
+  `db_core::emit::batch`)
 
 `src/lib.rs` re-exports `column_rs::sql::*` and `column_rs::file::*` as
 thin compatibility shims over `sql-parser`/`sql-expr`/`sql-types` and

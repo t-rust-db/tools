@@ -2,6 +2,15 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.16.0] - 2026-09-04
+
+### Changed
+
+- **Planner and post-processing moved to db-core** (db-core ADR 0007). `src/query.rs` shrinks to Parquet glue: `RowGroupSegment`, column resolution, `read_whole_table`, the four `execute*` entry points (now thin: plan via `db_core::codegen::batch`, materialize, hand to `db_core::vm::engine`) and `QueryEngine`. Gone from this crate: `compile`/`Plan`, `AggPart`, `post_process`, `merge_rows`/`finalize_row`, `bounded_scan`/`run_program_top_n` (the engine decides those from the program), `output_column_names`, and the `EXPLAIN` tree builder (`PlanNode` is re-exported from `db_core::codegen::batch`). Execution results are unchanged -- the 35 DuckDB oracle tests and the 7 `codegen_e2e` tests pass as before.
+- **`src/codegen.rs` deleted.** It was a near-verbatim duplicate of what is now `db_core::emit::batch`; the `column-rs codegen` subcommand calls `db_core::emit::batch::generate("column_rs", sql)`. Generated programs now embed the whole planned program including its terminal `Opcode::Finalize` (no `COLUMNS_TO_LOAD`/`AGG_PARTS`/`NUM_GROUP_KEYS`/`ORDER_BY`/`LIMIT` consts) and call `column_rs::query::run_program(&file, PROGRAM)`.
+- **`query::run_program(file, &[Opcode])`** drops its `columns_to_load` parameter -- the columns are derived from the program's `LoadColumn` instructions.
+- `db-core` dependency features: `["parser-column", "vm-batch", "codegen-batch", "emit-batch"]`.
+
 ## [0.15.2] - 2026-09-03
 
 ### Fixed

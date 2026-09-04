@@ -1,10 +1,11 @@
-pub mod codegen;
 pub mod query;
 
 /// Re-exports preserving column-rs's pre-extraction `column_rs::vm::*`
 /// surface — the actual implementation now lives in `db-core`'s
 /// `BatchExecutor` (`db_core::vm::batch`), alongside `vm::row`/`vm::stream`
-/// stubs for the other two executors that column-rs doesn't use.
+/// stubs for the other two executors that column-rs doesn't use. Emitted
+/// binaries (`column-rs codegen`, via `db_core::emit::batch`) import
+/// `column_rs::vm::{AggPart, MapOp, Opcode, Value}` from here.
 pub mod vm {
     pub use db_core::vm::batch::*;
 }
