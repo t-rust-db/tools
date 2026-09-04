@@ -1,5 +1,6 @@
 //! Glue between [`sql_expr`]/[`sql_parser`], [`crate::vm`] and
-//! [`db_parquet`]: compiles a parsed `Query` into a VM program, executes it
+//! `db_storage`'s `column::parquet` module: compiles a parsed `Query`
+//! into a VM program, executes it
 //! across a Parquet file's row groups in parallel, and merges partial
 //! per-segment aggregates.
 //!
@@ -13,45 +14,14 @@
 //! tables and computing directly over them instead).
 
 use crate::vm::{Batch, MapOp, Opcode, Segment, Value};
-use db_parquet::footer::PhysicalType;
-use db_parquet::ParquetFile;
-use db_storage::{Vfs, VfsFile};
+use db_storage::column::parquet::footer::PhysicalType;
+use db_storage::{ParquetFile, Vfs, VfsFile};
 use sql_expr::{
     AggFunc, BinOp, Expr, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
 };
-use sql_join::JoinHashTable;
 use sql_types::Literal;
 use std::collections::HashMap;
 use std::fmt;
-
-/// Hashable/`Eq` stand-in for a join key. `Value` itself only derives
-/// `PartialEq` (it holds `f64`, and blanket-deriving `Eq`/`Hash` on the
-/// type used throughout the VM's registers would be a bigger, riskier
-/// change than a join needs) -- so join code converts to this narrower
-/// type at the point of use instead. `Float` compares by bit pattern
-/// (`f64::to_bits`), matching how every other bitwise-equal float already
-/// behaves as a join key; `NaN` keys simply never match another `NaN`,
-/// consistent with SQL equality semantics for `NaN`.
-#[derive(Clone, PartialEq, Eq, Hash)]
-enum JoinKey {
-    Int(i64),
-    Float(u64),
-    Bool(bool),
-    Str(std::borrow::Cow<'static, str>),
-    Null,
-}
-
-impl JoinKey {
-    fn from_value(v: &Value) -> Self {
-        match v {
-            Value::Int(n) => JoinKey::Int(*n),
-            Value::Float(f) => JoinKey::Float(f.to_bits()),
-            Value::Bool(b) => JoinKey::Bool(*b),
-            Value::Str(s) => JoinKey::Str(s.clone()),
-            Value::Null => JoinKey::Null,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub enum QueryError {
@@ -65,7 +35,7 @@ pub enum QueryError {
     /// not attempted in this pass.
     UnsupportedJoinKind(JoinKind),
     Vm(crate::vm::VmError),
-    File(db_parquet::FileError),
+    File(db_storage::FileError),
     Io(String),
 }
 
@@ -97,8 +67,8 @@ impl From<crate::vm::VmError> for QueryError {
     }
 }
 
-impl From<db_parquet::FileError> for QueryError {
-    fn from(e: db_parquet::FileError) -> Self {
+impl From<db_storage::FileError> for QueryError {
+    fn from(e: db_storage::FileError) -> Self {
         QueryError::File(e)
     }
 }
@@ -184,6 +154,7 @@ fn map_bin_op(op: BinOp) -> MapOp {
         BinOp::Ge => MapOp::Ge,
         BinOp::And => MapOp::And,
         BinOp::Or => MapOp::Or,
+        BinOp::Concat => MapOp::Concat,
     }
 }
 
@@ -319,6 +290,18 @@ pub(crate) fn compile(query: &Query) -> Plan {
                 program.push(Opcode::Map {
                     dst,
                     op: MapOp::Not,
+                    a,
+                    b: a,
+                });
+                dst
+            }
+            Expr::Neg(inner) => {
+                let a = compile_expr(inner, program, column_regs, next_reg, columns_to_load);
+                let dst = *next_reg;
+                *next_reg += 1;
+                program.push(Opcode::Map {
+                    dst,
+                    op: MapOp::Neg,
                     a,
                     b: a,
                 });
@@ -887,57 +870,73 @@ pub fn execute_joined(
     let left_batch = read_whole_table(left_file, &left_columns);
     let right_batch = read_whole_table(right_file, &right_columns);
 
-    let right_key = right_batch
-        .columns
-        .get(&join.right_col)
+    // Build side: load every right-table column into registers 0..len,
+    // then hash it on the join key (all registers doubling as payload, so
+    // the key column itself is also NULL-filled on an unmatched LEFT JOIN
+    // probe row, same as any other right-table column).
+    let right_key_reg = right_names
+        .iter()
+        .position(|n| n == &join.right_col)
         .ok_or_else(|| QueryError::UnknownColumn(join.right_col.clone()))?;
-    // Flat open-addressing multimap (sql-join), not `HashMap<String,
-    // Vec<usize>>`: no per-key `Vec` allocation, and no per-row `.to_string()`
-    // just to obtain something `Hash` -- see JoinKey above. Duplicate right-side
-    // keys (the normal foreign-key-on-the-build-side case) are each their own
-    // entry rather than needing a `Vec<usize>` per key.
-    let mut right_index: JoinHashTable<JoinKey, usize> =
-        JoinHashTable::with_capacity(right_key.len());
-    for (row, value) in right_key.iter().enumerate() {
-        right_index.insert(JoinKey::from_value(value), row);
-    }
+    let build_program: Vec<Opcode> = right_names
+        .iter()
+        .enumerate()
+        .map(|(reg, name)| Opcode::LoadColumn {
+            reg,
+            column: name.clone().into(),
+        })
+        .chain(std::iter::once(Opcode::HashBuild {
+            key_cols: vec![right_key_reg].into(),
+            payload_cols: (0..right_names.len()).collect::<Vec<_>>().into(),
+            table: 0,
+        }))
+        .collect();
 
-    let left_key = left_batch
-        .columns
-        .get(&join.left_col)
+    let mut vm = crate::vm::Vm::new();
+    vm.execute(&right_batch, &build_program)?;
+    vm.clear_registers();
+
+    // Probe side: load every left-table column, then probe the hash table,
+    // landing the right side's payload columns right after the left ones.
+    let left_key_reg = left_names
+        .iter()
+        .position(|n| n == &join.left_col)
         .ok_or_else(|| QueryError::UnknownColumn(join.left_col.clone()))?;
+    let payload_dst: Vec<usize> = (0..right_names.len())
+        .map(|i| left_names.len() + i)
+        .collect();
+    let join_kind = match join.kind {
+        JoinKind::Inner => crate::vm::JoinKind::Inner,
+        JoinKind::Left => crate::vm::JoinKind::Left,
+        _ => unreachable!("checked at the top of execute_joined"),
+    };
+    let probe_program: Vec<Opcode> = left_names
+        .iter()
+        .enumerate()
+        .map(|(reg, name)| Opcode::LoadColumn {
+            reg,
+            column: name.clone().into(),
+        })
+        .chain(std::iter::once(Opcode::HashProbe {
+            key_cols: vec![left_key_reg].into(),
+            table: 0,
+            payload_dst: payload_dst.clone().into(),
+            kind: join_kind,
+        }))
+        .collect();
+    vm.execute(&left_batch, &probe_program)?;
 
-    // (left_row, right_row) pairs -- `right_row = None` for an unmatched LEFT JOIN row.
-    let mut pairs: Vec<(usize, Option<usize>)> = Vec::new();
-    for (left_row, key) in left_key.iter().enumerate() {
-        let key = JoinKey::from_value(key);
-        let mut matched = false;
-        for &right_row in right_index.get_all(&key) {
-            pairs.push((left_row, Some(right_row)));
-            matched = true;
-        }
-        if !matched && join.kind == JoinKind::Left {
-            pairs.push((left_row, None));
-        }
+    let num_rows = vm.register(0)?.len();
+    let mut joined = Batch::new(num_rows);
+    for (reg, name) in left_names.iter().enumerate() {
+        joined
+            .columns
+            .insert(name.clone(), vm.register(reg)?.to_vec());
     }
-
-    let mut joined = Batch::new(pairs.len());
-    for name in &left_names {
-        let column = &left_batch.columns[name];
-        joined.columns.insert(
-            name.clone(),
-            pairs.iter().map(|(l, _)| column[*l].clone()).collect(),
-        );
-    }
-    for name in &right_names {
-        let column = &right_batch.columns[name];
-        joined.columns.insert(
-            name.clone(),
-            pairs
-                .iter()
-                .map(|(_, r)| r.map_or(Value::Null, |r| column[r].clone()))
-                .collect(),
-        );
+    for (name, &reg) in right_names.iter().zip(&payload_dst) {
+        joined
+            .columns
+            .insert(name.clone(), vm.register(reg)?.to_vec());
     }
 
     let segments: Vec<Box<dyn Segment>> = vec![Box::new(InMemorySegment(joined))];
@@ -1022,6 +1021,25 @@ pub fn execute_semi_join(
     ))
 }
 
+/// `sql_expr::WindowFunc` and `sql_vm::batch::WindowFunc` are separate
+/// types (same variants) so that `sql-expr` (AST) doesn't depend on
+/// `sql-vm` (execution) -- convert at the point `execute_windowed` hands a
+/// spec to the VM.
+fn map_window_func(func: WindowFunc) -> crate::vm::WindowFunc {
+    match func {
+        WindowFunc::RowNumber => crate::vm::WindowFunc::RowNumber,
+        WindowFunc::Rank => crate::vm::WindowFunc::Rank,
+        WindowFunc::DenseRank => crate::vm::WindowFunc::DenseRank,
+        WindowFunc::Lag => crate::vm::WindowFunc::Lag,
+        WindowFunc::Lead => crate::vm::WindowFunc::Lead,
+        WindowFunc::FirstValue => crate::vm::WindowFunc::FirstValue,
+        WindowFunc::LastValue => crate::vm::WindowFunc::LastValue,
+        WindowFunc::Sum => crate::vm::WindowFunc::Sum,
+        WindowFunc::Avg => crate::vm::WindowFunc::Avg,
+        WindowFunc::Count => crate::vm::WindowFunc::Count,
+    }
+}
+
 /// Execute a query whose `SELECT` list contains one or more window functions
 /// (`ROW_NUMBER`/`RANK`/`DENSE_RANK`, `LAG`/`LEAD`, `FIRST_VALUE`/
 /// `LAST_VALUE`, `SUM`/`AVG`/`COUNT OVER`). Window functions need the whole
@@ -1065,17 +1083,67 @@ pub fn execute_windowed(file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Val
     let batch = read_whole_table(file, &columns);
     let num_rows = batch.num_rows;
 
-    let window_outputs: Vec<Option<Vec<Value>>> = query
+    // `needed[i]` was loaded into register `i` (see the `LoadColumn` loop
+    // below); each `Opcode::Window` writes its result into a fresh register
+    // past those, one per window `SelectItem`, computed by `sql_vm::batch`
+    // instead of a bespoke partition/sort/frame implementation here.
+    let column_reg = |name: &str| {
+        needed
+            .iter()
+            .position(|n| n == name)
+            .expect("needed columns include every window spec's arg/partition_by/order_by column")
+    };
+
+    let mut program: Vec<Opcode> = needed
+        .iter()
+        .enumerate()
+        .map(|(reg, name)| Opcode::LoadColumn {
+            reg,
+            column: name.clone().into(),
+        })
+        .collect();
+
+    let mut next_reg = needed.len();
+    let window_regs: Vec<Option<usize>> = query
         .columns
         .iter()
         .map(|item| {
-            if let SelectItem::Window(spec) = item {
-                Some(compute_window(&batch, spec, num_rows))
-            } else {
-                None
-            }
+            let SelectItem::Window(spec) = item else {
+                return None;
+            };
+            let dst = next_reg;
+            next_reg += 1;
+            program.push(Opcode::Window {
+                func: map_window_func(spec.func),
+                arg: spec.arg.as_deref().map(column_reg),
+                offset: spec.offset,
+                partition_by: spec
+                    .partition_by
+                    .iter()
+                    .map(|p| column_reg(p))
+                    .collect::<Vec<_>>()
+                    .into(),
+                order_by: spec
+                    .order_by
+                    .iter()
+                    .map(|(o, desc)| (column_reg(o), *desc))
+                    .collect::<Vec<_>>()
+                    .into(),
+                dst,
+            });
+            Some(dst)
         })
         .collect();
+
+    let mut vm = crate::vm::Vm::new();
+    vm.execute(&batch, &program)?;
+    let window_outputs: Vec<Option<Vec<Value>>> = window_regs
+        .iter()
+        .map(|reg| {
+            reg.map(|r| vm.register(r).map(<[Value]>::to_vec))
+                .transpose()
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut rows: Vec<Vec<Value>> = (0..num_rows)
         .map(|row| {
@@ -1101,195 +1169,6 @@ pub fn execute_windowed(file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Val
         rows.truncate(limit);
     }
     Ok(rows)
-}
-
-/// Compute one window function's value for every row (indexed by original
-/// row order), partitioning by `spec.partition_by` and, within each
-/// partition, sorting by `spec.order_by`.
-fn compute_window(batch: &Batch, spec: &WindowSpec, num_rows: usize) -> Vec<Value> {
-    let mut partitions: HashMap<String, Vec<usize>> = HashMap::new();
-    let mut partition_order: Vec<String> = Vec::new();
-    for row in 0..num_rows {
-        let key = spec
-            .partition_by
-            .iter()
-            .map(|p| batch.columns[p][row].to_string())
-            .collect::<Vec<_>>()
-            .join("\u{0}");
-        if !partitions.contains_key(&key) {
-            partition_order.push(key.clone());
-        }
-        partitions.entry(key).or_default().push(row);
-    }
-
-    let mut output = vec![Value::Null; num_rows];
-    for key in &partition_order {
-        let mut indices = partitions[key].clone();
-        indices.sort_by(|&a, &b| {
-            for (col, desc) in &spec.order_by {
-                let ord = crate::vm::compare_for_order(
-                    &batch.columns[col][a],
-                    &batch.columns[col][b],
-                    *desc,
-                );
-                if ord != std::cmp::Ordering::Equal {
-                    return ord;
-                }
-            }
-            std::cmp::Ordering::Equal
-        });
-
-        match spec.func {
-            WindowFunc::RowNumber => {
-                for (pos, &row) in indices.iter().enumerate() {
-                    output[row] = Value::Int((pos + 1) as i64);
-                }
-            }
-            WindowFunc::Rank | WindowFunc::DenseRank => {
-                let mut rank = 0i64;
-                let mut dense = 0i64;
-                let mut prev: Option<usize> = None;
-                for (pos, &row) in indices.iter().enumerate() {
-                    let is_new = match prev {
-                        None => true,
-                        Some(prev_row) => spec.order_by.iter().any(|(col, _)| {
-                            batch.columns[col][row].to_string()
-                                != batch.columns[col][prev_row].to_string()
-                        }),
-                    };
-                    if is_new {
-                        rank = (pos + 1) as i64;
-                        dense += 1;
-                    }
-                    output[row] = Value::Int(if spec.func == WindowFunc::Rank {
-                        rank
-                    } else {
-                        dense
-                    });
-                    prev = Some(row);
-                }
-            }
-            WindowFunc::Lag | WindowFunc::Lead => {
-                let offset = spec.offset.unwrap_or(1);
-                let arg = spec
-                    .arg
-                    .as_ref()
-                    .expect("LAG/LEAD always have an argument column");
-                let n = indices.len() as i64;
-                for (pos, &row) in indices.iter().enumerate() {
-                    let target = if spec.func == WindowFunc::Lag {
-                        pos as i64 - offset
-                    } else {
-                        pos as i64 + offset
-                    };
-                    output[row] = if target >= 0 && target < n {
-                        batch.columns[arg][indices[target as usize]].clone()
-                    } else {
-                        Value::Null
-                    };
-                }
-            }
-            WindowFunc::FirstValue => {
-                let arg = spec
-                    .arg
-                    .as_ref()
-                    .expect("FIRST_VALUE always has an argument column");
-                if let Some(&first) = indices.first() {
-                    let v = batch.columns[arg][first].clone();
-                    for &row in &indices {
-                        output[row] = v.clone();
-                    }
-                }
-            }
-            WindowFunc::LastValue => {
-                let arg = spec
-                    .arg
-                    .as_ref()
-                    .expect("LAST_VALUE always has an argument column");
-                for &row in &indices {
-                    output[row] = batch.columns[arg][row].clone();
-                }
-            }
-            WindowFunc::Sum | WindowFunc::Avg | WindowFunc::Count => {
-                let arg = spec.arg.as_deref();
-                if spec.order_by.is_empty() {
-                    let agg = whole_partition_aggregate(spec.func, batch, arg, &indices);
-                    for &row in &indices {
-                        output[row] = agg.clone();
-                    }
-                } else {
-                    let mut running_sum = 0.0;
-                    let mut running_count = 0i64;
-                    for &row in &indices {
-                        let counted = match arg {
-                            Some(a) => !matches!(batch.columns[a][row], Value::Null),
-                            None => true,
-                        };
-                        if counted {
-                            running_count += 1;
-                            if let Some(a) = arg {
-                                if let Some(v) = batch.columns[a][row].as_f64() {
-                                    running_sum += v;
-                                }
-                            }
-                        }
-                        output[row] = match spec.func {
-                            WindowFunc::Count => Value::Int(running_count),
-                            WindowFunc::Sum => {
-                                if running_count > 0 {
-                                    Value::Float(running_sum)
-                                } else {
-                                    Value::Null
-                                }
-                            }
-                            WindowFunc::Avg => {
-                                if running_count > 0 {
-                                    Value::Float(running_sum / running_count as f64)
-                                } else {
-                                    Value::Null
-                                }
-                            }
-                            _ => unreachable!(),
-                        };
-                    }
-                }
-            }
-        }
-    }
-    output
-}
-
-/// `SUM`/`AVG`/`COUNT OVER (PARTITION BY ... )` with no `ORDER BY`: the
-/// default frame is the whole partition, so every row in it gets the same
-/// aggregate value.
-fn whole_partition_aggregate(
-    func: WindowFunc,
-    batch: &Batch,
-    arg: Option<&str>,
-    indices: &[usize],
-) -> Value {
-    if func == WindowFunc::Count {
-        let count = match arg {
-            Some(a) => indices
-                .iter()
-                .filter(|&&r| !matches!(batch.columns[a][r], Value::Null))
-                .count(),
-            None => indices.len(),
-        };
-        return Value::Int(count as i64);
-    }
-    let values: Vec<f64> = indices
-        .iter()
-        .filter_map(|&r| arg.and_then(|a| batch.columns[a][r].as_f64()))
-        .collect();
-    if values.is_empty() {
-        return Value::Null;
-    }
-    match func {
-        WindowFunc::Sum => Value::Float(values.iter().sum()),
-        WindowFunc::Avg => Value::Float(values.iter().sum::<f64>() / values.len() as f64),
-        _ => unreachable!(),
-    }
 }
 
 fn select_output_index(query: &Query, column: &str) -> Option<usize> {
@@ -1741,6 +1620,7 @@ fn bin_op_str(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "AND",
         BinOp::Or => "OR",
+        BinOp::Concat => "||",
     }
 }
 
@@ -1762,6 +1642,7 @@ fn expr_to_string(expr: &Expr) -> String {
             subquery.from
         ),
         Expr::Not(inner) => format!("NOT {}", expr_to_string(inner)),
+        Expr::Neg(inner) => format!("-{}", expr_to_string(inner)),
         Expr::IsNull { expr, negated } => format!(
             "{} IS {}NULL",
             expr_to_string(expr),
@@ -1786,6 +1667,7 @@ fn collect_expr_columns(expr: &Expr, out: &mut Vec<String>) {
         }
         Expr::InSubquery { expr, .. } => collect_expr_columns(expr, out),
         Expr::Not(inner) => collect_expr_columns(inner, out),
+        Expr::Neg(inner) => collect_expr_columns(inner, out),
         Expr::IsNull { expr, .. } => collect_expr_columns(expr, out),
     }
 }
