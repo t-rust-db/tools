@@ -27,6 +27,10 @@ pub struct Readline {
     history: History,
     tty: bool,
     color: bool,
+    /// Physical row (0-indexed from the top row of the current line's
+    /// rendering) the cursor was left on after the last redraw -- how many
+    /// rows `redraw_at` must move up before reprinting.
+    prev_cursor_row: usize,
 }
 
 impl Default for Readline {
@@ -41,6 +45,7 @@ impl Readline {
             history: History::new(),
             tty: is_tty(),
             color: true,
+            prev_cursor_row: 0,
         }
     }
 
@@ -81,6 +86,7 @@ impl Readline {
         let mut line = String::new();
         let mut hist_idx: Option<usize> = None;
         let mut cursor: usize = 0;
+        self.prev_cursor_row = 0;
 
         // Enable raw mode for key-by-key input.
         let _raw = match term::RawMode::enable() {
@@ -103,18 +109,18 @@ impl Readline {
 
             match key {
                 term::Key::Char('\n') | term::Key::Char('\r') => {
-                    println!();
+                    self.finish_line(prompt, &line);
                     return Ok(line);
                 }
                 term::Key::Char('\x03') => {
                     // Ctrl-C
-                    println!();
+                    self.finish_line(prompt, &line);
                     return Err(ReadlineError::Interrupted);
                 }
                 term::Key::Char('\x04') => {
                     // Ctrl-D
                     if line.is_empty() {
-                        println!();
+                        self.finish_line(prompt, &line);
                         return Err(ReadlineError::Eof);
                     }
                 }
@@ -182,19 +188,157 @@ impl Readline {
         }
     }
 
-    fn redraw_at(&self, prompt: &str, line: &str, cursor: usize, stdout: &mut io::Stdout) {
+    /// Redraw the whole logical input line (prompt + current text), correctly
+    /// even once it has wrapped past the terminal width: move up to the
+    /// first row of the previous render, clear everything below (a wrapped
+    /// line spans multiple physical rows, so `\x1b[K` alone -- which only
+    /// clears the cursor's *current* row -- isn't enough), reprint, then
+    /// reposition the cursor at its logical (row, column).
+    fn redraw_at(&mut self, prompt: &str, line: &str, cursor: usize, stdout: &mut io::Stdout) {
         let display = if self.color {
             highlight::highlight(line)
         } else {
             line.to_string()
         };
-        // Clear line, reprint, then move the cursor back to its logical position.
-        let trailing = line.chars().count() - cursor;
-        print!("\r\x1b[K{prompt}{display}");
-        if trailing > 0 {
-            print!("\x1b[{trailing}D");
+        let width = term::width();
+        let prompt_chars = prompt.chars().count();
+        let line_chars = line.chars().count();
+        let (_, end_row, end_col) = layout(prompt_chars, line_chars, line_chars, width);
+        let (_, target_row, target_col) = layout(prompt_chars, line_chars, cursor, width);
+
+        if self.prev_cursor_row > 0 {
+            print!("\x1b[{}A", self.prev_cursor_row);
         }
+        print!("\r\x1b[J{prompt}{display}");
+
+        // After printing, the physical cursor sits at (end_row, end_col) --
+        // unless `end_col == width` (the rendered length is an exact
+        // multiple of the terminal width), where the terminal defers
+        // advancing to a new row until the next character is actually
+        // written ("pending wrap"). Moving the cursor up while in that
+        // state is unreliable across terminals, so force the wrap
+        // deterministically first whenever we need to move away from it.
+        let mut current_row = end_row;
+        if target_row < end_row && end_col == width {
+            println!();
+            current_row += 1;
+        }
+
+        let up = current_row - target_row;
+        if up > 0 {
+            print!("\x1b[{up}A");
+        }
+        print!("\r");
+        if target_col > 0 {
+            print!("\x1b[{target_col}C");
+        }
+
+        self.prev_cursor_row = target_row;
         stdout.flush().ok();
+    }
+
+    /// Move the cursor to the last physical row of the current render
+    /// before newlining on Enter/Ctrl-C/Ctrl-D -- otherwise, if the cursor
+    /// is left on an earlier wrapped row, the newline's output would land
+    /// on top of the remaining wrapped rows below it instead of after them.
+    fn finish_line(&self, prompt: &str, line: &str) {
+        let width = term::width();
+        let prompt_chars = prompt.chars().count();
+        let line_chars = line.chars().count();
+        let (_, end_row, _) = layout(prompt_chars, line_chars, line_chars, width);
+        let down = end_row.saturating_sub(self.prev_cursor_row);
+        if down > 0 {
+            print!("\x1b[{down}B");
+        }
+        println!();
+    }
+}
+
+/// Compute how many physical rows the rendered `prompt`+`line` occupy at
+/// terminal `width` columns, and which (row, column) the cursor -- at char
+/// position `cursor` within `line` -- lands on. `rows`/`cursor_row` are
+/// 0-indexed from the first row of the rendered text.
+///
+/// All size inputs are **character** counts of the uncolored text --
+/// ANSI color escapes have zero visible width and must never be counted
+/// here (the caller measures `prompt`/`line`, never the colorized display
+/// string).
+///
+/// A cursor at the true end of the line (`cursor == line_chars`) is
+/// resolved from `rows` directly rather than `pos / width`: when the
+/// rendered length is an exact multiple of `width`, terminals defer
+/// wrapping to a new row until the next character is actually written (the
+/// "pending wrap" state), so `pos / width` would place the cursor one row
+/// past where it physically still is.
+fn layout(
+    prompt_chars: usize,
+    line_chars: usize,
+    cursor: usize,
+    width: usize,
+) -> (usize, usize, usize) {
+    let width = width.max(1);
+    let total = prompt_chars + line_chars;
+    let rows = if total == 0 {
+        1
+    } else {
+        (total - 1) / width + 1
+    };
+    if cursor == line_chars {
+        let row = rows - 1;
+        let col = total - row * width;
+        (rows, row, col)
+    } else {
+        let pos = prompt_chars + cursor;
+        (rows, pos / width, pos % width)
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::layout;
+
+    #[test]
+    fn no_wrap_fits_on_one_row() {
+        // prompt "pr" (2) + line "abc" (3), cursor after 2 chars, width 80.
+        assert_eq!(layout(2, 3, 2, 80), (1, 0, 4));
+    }
+
+    #[test]
+    fn exact_wrap_boundary_is_pending_wrap_at_cursor() {
+        // 10 chars exactly fill a 10-wide row; cursor at the true end lands
+        // in the "pending wrap" cell (row 0, col == width), not row 1 col 0.
+        assert_eq!(layout(0, 10, 10, 10), (1, 0, 10));
+    }
+
+    #[test]
+    fn cursor_on_first_row_of_a_two_row_line() {
+        // prompt 0, line 8 chars, width 5 -> 2 rows; cursor at 3 is row 0.
+        assert_eq!(layout(0, 8, 3, 5), (2, 0, 3));
+    }
+
+    #[test]
+    fn cursor_on_last_row_of_a_two_row_line() {
+        // Same line/width; cursor at the true end (8) is row 1, col 3.
+        assert_eq!(layout(0, 8, 8, 5), (2, 1, 3));
+    }
+
+    #[test]
+    fn width_one_is_degenerate_but_does_not_panic() {
+        // Every character is its own row; cursor at the true end lands in
+        // the pending-wrap cell of the last row.
+        assert_eq!(layout(0, 3, 3, 1), (3, 2, 1));
+        // An interior cursor sits at the start of its own row.
+        assert_eq!(layout(0, 3, 1, 1), (3, 1, 0));
+    }
+
+    #[test]
+    fn zero_width_is_clamped_to_one_rather_than_dividing_by_zero() {
+        assert_eq!(layout(0, 2, 2, 0), layout(0, 2, 2, 1));
+    }
+
+    #[test]
+    fn empty_line_is_one_row_at_the_prompt_column() {
+        assert_eq!(layout(4, 0, 0, 80), (1, 0, 4));
     }
 }
 
@@ -333,6 +477,29 @@ mod term {
     pub fn is_tty() -> bool {
         // SAFETY: isatty is a simple query on a valid, always-open fd (stdin).
         unsafe { libc::isatty(libc::STDIN_FILENO) != 0 }
+    }
+
+    /// Terminal width in columns, re-queried on every redraw so a resize
+    /// takes effect on the next keystroke (no `SIGWINCH` handling). Falls
+    /// back to 80 when the query fails (e.g. stdout isn't a tty).
+    #[cfg(unix)]
+    pub fn width() -> usize {
+        // SAFETY: ioctl on a valid, always-open fd (stdout) with a
+        // correctly-sized, zero-initialized out-parameter is safe; a
+        // non-tty fd or any other failure just yields ws_col == 0, handled
+        // below by falling back to the default.
+        let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+        let ok = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) } == 0;
+        if ok && ws.ws_col > 0 {
+            ws.ws_col as usize
+        } else {
+            80
+        }
+    }
+
+    #[cfg(not(unix))]
+    pub fn width() -> usize {
+        80
     }
 
     /// Read a single key from stdin (raw mode).

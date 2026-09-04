@@ -1,6 +1,6 @@
 [package]
 name = "db-cli"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Generic REPL/readline infrastructure for t-rust-db engine CLIs"
 license = "Apache-2.0"
@@ -12,3 +12,11 @@ dirs = "5"
 [lib]
 name = "db_cli"
 path = "src/lib.rs"
+
+# Test-only helper: a minimal read_line loop, driven over a pty by
+# tests/redraw_pty.rs to verify the wrapped-line redraw fix end-to-end in a
+# real (virtual) terminal. Not part of the crate's public surface.
+[[bin]]
+name = "redraw-harness"
+path = "tests/fixtures/redraw_harness.rs"
+test = false
