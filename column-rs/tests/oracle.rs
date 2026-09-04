@@ -935,7 +935,8 @@ fn oracle_production_shaped_file_group_by_matches_duckdb() {
 /// a bounded prefix scan (`query::bounded_scan`) instead of decoding every
 /// row group -- this only checks correctness (right rows, in file order,
 /// even though the fixture spans 5 row groups); the actual perf win is
-/// covered by `benches/queries/scan.sql` (#100), not a unit test.
+/// covered by `t-rust-db/benchmark/parity/column-rs`'s `queries/scan.sql`
+/// (#100), not a unit test.
 #[test]
 fn oracle_limit_only_matches_duckdb() {
     let path = fixture_path("production.parquet");

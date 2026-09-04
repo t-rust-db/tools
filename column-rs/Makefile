@@ -38,12 +38,9 @@ fixtures-funky: ## Regenerate funky.parquet, a themed wide-type-mix smoke-test f
 	./tests/fixtures/generate_funky.sh
 
 # === Benchmarks ===
-
-bench-data: ## Generate the DuckDB parity benchmark datasets (benches/data/) -- requires duckdb on PATH
-	./benches/data/generate.sh
-
-bench: ## Run the DuckDB parity benchmark suite (#100) -- requires duckdb + hyperfine; SIZE=small|medium|large
-	./benches/run.sh $(or $(SIZE),medium)
+# DuckDB parity benchmarks live in t-rust-db/benchmark/parity/column-rs,
+# not here -- see this repo's README. Run them from that repo's checkout:
+#   cd ../benchmark/parity/column-rs && make data && make run
 
 
 # === Release ===
