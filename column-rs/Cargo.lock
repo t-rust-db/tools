@@ -13,7 +13,6 @@ name = "column-rs"
 version = "0.15.2"
 dependencies = [
  "db-cli",
- "db-parquet",
  "db-storage",
  "sql-expr",
  "sql-join",
@@ -56,18 +55,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "db-parquet"
-version = "0.1.0"
-dependencies = [
- "db-storage",
- "ruzstd",
-]
-
-[[package]]
 name = "db-storage"
 version = "0.1.0"
 dependencies = [
  "memmap2",
+ "ruzstd",
 ]
 
 [[package]]
@@ -198,18 +190,18 @@ dependencies = [
 
 [[package]]
 name = "sql-expr"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "sql-types",
 ]
 
 [[package]]
 name = "sql-join"
-version = "0.10.0"
+version = "0.11.0"
 
 [[package]]
 name = "sql-parser"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "sql-expr",
  "sql-types",
@@ -217,11 +209,11 @@ dependencies = [
 
 [[package]]
 name = "sql-types"
-version = "0.10.0"
+version = "0.11.0"
 
 [[package]]
 name = "sql-vm"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "rayon",
  "sql-expr",

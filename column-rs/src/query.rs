@@ -1,5 +1,6 @@
 //! Glue between [`sql_expr`]/[`sql_parser`], [`crate::vm`] and
-//! [`db_parquet`]: compiles a parsed `Query` into a VM program, executes it
+//! `db_storage`'s `column::parquet` module: compiles a parsed `Query`
+//! into a VM program, executes it
 //! across a Parquet file's row groups in parallel, and merges partial
 //! per-segment aggregates.
 //!
@@ -13,9 +14,8 @@
 //! tables and computing directly over them instead).
 
 use crate::vm::{Batch, MapOp, Opcode, Segment, Value};
-use db_parquet::footer::PhysicalType;
-use db_parquet::ParquetFile;
-use db_storage::{Vfs, VfsFile};
+use db_storage::column::parquet::footer::PhysicalType;
+use db_storage::{ParquetFile, Vfs, VfsFile};
 use sql_expr::{
     AggFunc, BinOp, Expr, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
 };
@@ -35,7 +35,7 @@ pub enum QueryError {
     /// not attempted in this pass.
     UnsupportedJoinKind(JoinKind),
     Vm(crate::vm::VmError),
-    File(db_parquet::FileError),
+    File(db_storage::FileError),
     Io(String),
 }
 
@@ -67,8 +67,8 @@ impl From<crate::vm::VmError> for QueryError {
     }
 }
 
-impl From<db_parquet::FileError> for QueryError {
-    fn from(e: db_parquet::FileError) -> Self {
+impl From<db_storage::FileError> for QueryError {
+    fn from(e: db_storage::FileError) -> Self {
         QueryError::File(e)
     }
 }
