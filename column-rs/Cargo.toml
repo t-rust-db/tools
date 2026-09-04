@@ -12,9 +12,7 @@ name = "column-rs"
 path = "src/bin/column-rs/main.rs"
 
 [dependencies]
-# TODO(db-storage#5 / column-rs#5): switch to a tagged release once
-# t-rust-db/db-storage#5 (folding db-parquet in, db-storage#4) merges.
-db-storage = { git = "https://github.com/t-rust-db/db-storage", branch = "feat/4-column-module" }
+db-storage = { git = "https://github.com/t-rust-db/db-storage", tag = "v0.2.0" }
 sql-types = { git = "https://github.com/t-rust-db/db-core", tag = "v0.4.1", package = "sql-types" }
 sql-expr = { git = "https://github.com/t-rust-db/db-core", tag = "v0.4.1", package = "sql-expr" }
 sql-parser = { git = "https://github.com/t-rust-db/db-core", tag = "v0.4.1", package = "sql-parser" }
