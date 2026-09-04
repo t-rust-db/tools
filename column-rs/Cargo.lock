@@ -45,7 +45,6 @@ checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 [[package]]
 name = "db-cli"
 version = "0.2.0"
-source = "git+https://github.com/t-rust-db/db-cli?tag=v0.2.0#632dd46426125fd68a1a81bb4ce8f521318ff2f5"
 dependencies = [
  "dirs",
  "libc",
@@ -53,8 +52,7 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.21.0"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.21.0#8d7d093f10e2f18741d434cf2f9a2f861eeb5284"
+version = "0.28.0"
 dependencies = [
  "rayon",
 ]
@@ -318,3 +316,7 @@ name = "windows_x86_64_msvc"
 version = "0.48.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed94fce61571a4006852b7389a063ab983c02eb1bb37b47f8272ce92d06d9538"
+
+[[patch.unused]]
+name = "db-storage"
+version = "0.4.0"
