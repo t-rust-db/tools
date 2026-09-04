@@ -44,8 +44,8 @@ checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 
 [[package]]
 name = "db-cli"
-version = "0.1.1"
-source = "git+https://github.com/t-rust-db/db-cli?tag=v0.1.1#e48efbc3596ad1c33b1f27d145edf4d30a11b225"
+version = "0.2.0"
+source = "git+https://github.com/t-rust-db/db-cli?tag=v0.2.0#632dd46426125fd68a1a81bb4ce8f521318ff2f5"
 dependencies = [
  "dirs",
  "libc",
