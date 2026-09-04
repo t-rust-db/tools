@@ -13,12 +13,8 @@ name = "column-rs"
 version = "0.15.2"
 dependencies = [
  "db-cli",
+ "db-core",
  "db-storage",
- "sql-expr",
- "sql-join",
- "sql-parser",
- "sql-types",
- "sql-vm",
 ]
 
 [[package]]
@@ -55,8 +51,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "db-core"
+version = "0.12.0"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "db-storage"
-version = "0.2.0"
+version = "0.4.0"
 dependencies = [
  "memmap2",
  "ruzstd",
@@ -186,38 +189,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fad02996bfc73da3e301efe90b1837be9ed8f4a462b6ed410aa35d00381de89f"
 dependencies = [
  "twox-hash",
-]
-
-[[package]]
-name = "sql-expr"
-version = "0.11.0"
-dependencies = [
- "sql-types",
-]
-
-[[package]]
-name = "sql-join"
-version = "0.11.0"
-
-[[package]]
-name = "sql-parser"
-version = "0.11.0"
-dependencies = [
- "sql-expr",
- "sql-types",
-]
-
-[[package]]
-name = "sql-types"
-version = "0.11.0"
-
-[[package]]
-name = "sql-vm"
-version = "0.11.0"
-dependencies = [
- "rayon",
- "sql-expr",
- "sql-join",
 ]
 
 [[package]]

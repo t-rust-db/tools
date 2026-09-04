@@ -15,11 +15,7 @@
 db-storage = { path = "../db-storage" }
 
 [patch."https://github.com/t-rust-db/db-core"]
-sql-types = { path = "../db-core/sql-types" }
-sql-expr = { path = "../db-core/sql-expr" }
-sql-parser = { path = "../db-core/sql-parser" }
-sql-join = { path = "../db-core/sql-join" }
-sql-vm = { path = "../db-core/sql-vm" }
+db-core = { path = "../db-core" }
 
 [patch."https://github.com/t-rust-db/db-cli"]
 db-cli = { path = "../db-cli" }
