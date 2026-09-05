@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 const MAX_HISTORY: usize = 1000;
 
+/// In-memory command history, capped at the most recent 1000 entries,
+/// with plain-text file persistence (one entry per line).
 pub struct History {
     entries: Vec<String>,
 }
@@ -16,12 +18,15 @@ impl Default for History {
 }
 
 impl History {
+    /// An empty history.
     pub fn new() -> Self {
         History {
             entries: Vec::new(),
         }
     }
 
+    /// Appends `line` (trimmed); blank lines and repeats of the last entry
+    /// are ignored, and the oldest entry is dropped past the cap.
     pub fn add(&mut self, line: &str) {
         let line = line.trim();
         if line.is_empty() {
@@ -37,6 +42,7 @@ impl History {
         }
     }
 
+    /// Appends the lines of `path`; a missing or unreadable file is a no-op.
     pub fn load(&mut self, path: &Path) {
         if let Ok(contents) = fs::read_to_string(path) {
             for line in contents.lines() {
@@ -50,6 +56,7 @@ impl History {
         }
     }
 
+    /// Writes all entries to `path`, creating parent directories as needed.
     pub fn save(&self, path: &Path) {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).ok();
@@ -83,10 +90,12 @@ impl History {
         self.entries.get(new_idx).map(|s| s.as_str())
     }
 
+    /// Number of entries.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// `true` when there are no entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -101,6 +110,13 @@ pub fn history_path(app_name: &str) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 mod tests {
     use super::*;
 

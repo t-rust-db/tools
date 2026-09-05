@@ -10,6 +10,17 @@
 //! Complements `editor::layout_tests` (the pure row/column math, unit
 //! tested in isolation): this test instead verifies the ANSI byte stream
 //! `redraw_at`/`finish_line` actually emit renders correctly end to end.
+// A real pty needs libc calls; test-only, and the only unsafe outside
+// `editor::term`.
+#![allow(unsafe_code, reason = "pty setup via libc in a test harness")]
+#![allow(
+    clippy::let_underscore_must_use,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 
 use std::ffi::CStr;
 use std::os::unix::io::{FromRawFd, RawFd};

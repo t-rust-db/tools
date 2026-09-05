@@ -20,3 +20,17 @@ path = "src/lib.rs"
 name = "redraw-harness"
 path = "tests/fixtures/redraw_harness.rs"
 test = false
+
+# sqlite-rs's lint bar (t-rust-db/db-cli#5); no mod.rs files here so
+# mod_module_files is enforced too.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+let_underscore_must_use = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+arithmetic_side_effects = "deny"
+mod_module_files = "deny"
