@@ -12,7 +12,10 @@ pub mod history;
 pub mod output;
 pub mod repl;
 
-pub use editor::{Readline, ReadlineError};
+pub use editor::{Completer, Highlighter, Readline, ReadlineError};
 pub use history::{history_path, History};
-pub use output::{render, render_csv, render_json, render_table, OutputMode};
+pub use output::{
+    render, render_column, render_csv, render_json, render_line, render_list, render_table,
+    OutputMode,
+};
 pub use repl::{run_repl, Repl, ReplHandler, ReplOptions, Step};

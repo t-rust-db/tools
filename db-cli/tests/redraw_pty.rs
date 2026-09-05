@@ -139,12 +139,22 @@ impl Screen {
             if b == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
                 let mut j = i + 2;
                 let start = j;
-                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                // CSI parameter bytes are digits *and* `;` (multi-param
+                // SGR color codes like `\x1b[1;34m` need the `;` skipped
+                // too, or the scan stops early and "34m" leaks out as
+                // literal text) -- only the leading digit run before any
+                // `;` is used as `n` (fine for the single-param sequences
+                // this editor actually emits for cursor movement/clear).
+                while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b';') {
                     j += 1;
                 }
-                let had_digits = j > start;
+                let digit_end = bytes[start..j]
+                    .iter()
+                    .position(|&b| b == b';')
+                    .map_or(j, |p| start + p);
+                let had_digits = digit_end > start;
                 let n: usize = if had_digits {
-                    std::str::from_utf8(&bytes[start..j])
+                    std::str::from_utf8(&bytes[start..digit_end])
                         .unwrap()
                         .parse()
                         .unwrap()
@@ -163,6 +173,9 @@ impl Screen {
                             self.cur_col = self.cur_col.saturating_sub(n);
                             self.pending_wrap = false;
                         }
+                        // SGR color codes (`\x1b[0m`, `\x1b[1;34m`, ...) --
+                        // no visible effect on this plain-text screen model.
+                        b'm' => {}
                         b'J' if had_digits && n == 2 => {
                             // Whole-screen clear (Ctrl-L's `\x1b[2J`); cursor unmoved.
                             let cols = self.cols();
@@ -237,10 +250,15 @@ struct Harness {
 
 impl Harness {
     fn start() -> Self {
+        Self::start_with_env(&[])
+    }
+
+    fn start_with_env(env: &[(&str, &str)]) -> Self {
         let (pty, slave) = Pty::open(ROWS as u16, COLS as u16);
         let bin = env!("CARGO_BIN_EXE_redraw-harness");
         let child = unsafe {
             Command::new(bin)
+                .envs(env.iter().copied())
                 .stdin(Stdio::from_raw_fd(libc::dup(slave)))
                 .stdout(Stdio::from_raw_fd(libc::dup(slave)))
                 .stderr(Stdio::piped())
@@ -474,6 +492,79 @@ fn alt_b_word_motion_works_across_a_wrapped_line() {
         "prompt leaked onto the wrapped row during word motion: {:?}",
         h.screen.row_text(1)
     );
+
+    h.finish();
+}
+
+/// #6: Tab does nothing when no `Completer` is installed (default
+/// behavior unchanged).
+#[test]
+fn tab_does_nothing_without_a_completer() {
+    let mut h = Harness::start();
+
+    h.send(b"SEL");
+    h.send(b"\t");
+    assert_eq!(h.screen.row_text(0), "column> SEL");
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 11));
+
+    h.finish();
+}
+
+/// #6: Tab with exactly one matching candidate completes the word
+/// outright.
+#[test]
+fn tab_with_a_single_candidate_completes_the_word() {
+    let mut h = Harness::start_with_env(&[("DB_CLI_TEST_COMPLETER", "1")]);
+
+    h.send(b"WHE");
+    h.send(b"\t"); // Only "WHERE" starts with "WHE" among SELECT/SELF/FROM/WHERE.
+    assert_eq!(h.screen.row_text(0), "column> WHERE");
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 13));
+
+    h.finish();
+}
+
+/// #6: Tab with multiple candidates inserts their longest common prefix
+/// (classic readline "partial completion") instead of picking one.
+#[test]
+fn tab_with_multiple_candidates_completes_the_longest_common_prefix() {
+    let mut h = Harness::start_with_env(&[("DB_CLI_TEST_COMPLETER", "1")]);
+
+    h.send(b"SE");
+    h.send(b"\t"); // "SELECT" and "SELF" both match "SE"; common prefix is "SEL".
+    assert_eq!(h.screen.row_text(0), "column> SEL");
+
+    // Tab again: still ambiguous (both "SELECT"/"SELF" still start with
+    // "SEL"), and the common prefix is already exactly what's typed, so
+    // nothing changes.
+    h.send(b"\t");
+    assert_eq!(h.screen.row_text(0), "column> SEL");
+
+    h.finish();
+}
+
+/// #6: Tab does nothing when the prefix at the cursor matches no
+/// candidate.
+#[test]
+fn tab_with_no_matching_candidates_does_nothing() {
+    let mut h = Harness::start_with_env(&[("DB_CLI_TEST_COMPLETER", "1")]);
+
+    h.send(b"XYZ");
+    h.send(b"\t");
+    assert_eq!(h.screen.row_text(0), "column> XYZ");
+
+    h.finish();
+}
+
+/// #6: a plugged-in `Highlighter` replaces the default keyword-based one.
+#[test]
+fn custom_highlighter_replaces_the_default() {
+    let mut h = Harness::start_with_env(&[("DB_CLI_TEST_HIGHLIGHTER", "1")]);
+
+    h.send(b"hello");
+    // TestHighlighter upper-cases the line.
+    assert_eq!(h.screen.row_text(0), "column> HELLO");
+    assert_eq!((h.screen.cur_row, h.screen.cur_col), (0, 13));
 
     h.finish();
 }
