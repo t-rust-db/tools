@@ -25,7 +25,9 @@ pub trait ReplHandler {
     fn execute(&mut self, input: &str) -> Result<Self::Output, String>;
 
     /// Render a previously-executed result under the given mode.
-    fn format(&self, output: &Self::Output, mode: OutputMode) -> String;
+    /// `headers` matches `sqlite3`'s `.headers` toggle (see
+    /// [`crate::output::render`]'s per-mode handling of it).
+    fn format(&self, output: &Self::Output, mode: OutputMode, headers: bool) -> String;
 
     /// Handle a dot-command (`name` without the leading `.`, plus any
     /// trailing argument text). Return `Some(lines to print)` if handled,
@@ -65,6 +67,12 @@ pub enum Step {
 pub struct Repl<H: ReplHandler> {
     handler: H,
     mode: OutputMode,
+    /// `.headers on|off` -- `false` by default, matching stock `sqlite3`.
+    headers: bool,
+    /// `.color on|off` -- `run_repl`'s loop syncs this to the `Readline`
+    /// it owns after every line, since `Repl` itself (unit-testable with
+    /// plain strings) never touches a real `Readline`.
+    color: bool,
     buffer: String,
 }
 
@@ -73,12 +81,25 @@ impl<H: ReplHandler> Repl<H> {
         Repl {
             handler,
             mode: OutputMode::Table,
+            headers: false,
+            color: true,
             buffer: String::new(),
         }
     }
 
     pub fn mode(&self) -> OutputMode {
         self.mode
+    }
+
+    /// Current `.headers` setting.
+    pub fn headers(&self) -> bool {
+        self.headers
+    }
+
+    /// Current `.color` setting -- `run_repl` reads this each loop
+    /// iteration to keep the `Readline` it owns in sync.
+    pub fn color(&self) -> bool {
+        self.color
     }
 
     /// True while a multi-line statement is still being buffered (i.e. the
@@ -107,7 +128,7 @@ impl<H: ReplHandler> Repl<H> {
                 return Step::Continue;
             }
             return match self.handler.execute(&stmt) {
-                Ok(output) => Step::Print(self.handler.format(&output, self.mode)),
+                Ok(output) => Step::Print(self.handler.format(&output, self.mode, self.headers)),
                 Err(e) => Step::Print(format!("error: {e}")),
             };
         }
@@ -128,7 +149,9 @@ impl<H: ReplHandler> Repl<H> {
         if !cmd.is_empty() && "help".starts_with(cmd) {
             let mut lines = vec![
                 ".help          Show this message".to_string(),
-                ".mode <table|json|csv>  Set output format".to_string(),
+                ".mode <table|list|column|line|csv|json>  Set output format".to_string(),
+                ".headers on|off  Toggle header row (list/column/csv)".to_string(),
+                ".color on|off  Toggle syntax highlighting".to_string(),
                 ".quit / .exit  Exit".to_string(),
             ];
             lines.extend(self.handler.help_extra());
@@ -149,7 +172,33 @@ impl<H: ReplHandler> Repl<H> {
                     self.mode = m;
                     Step::Print(format!("mode: {arg}"))
                 }
-                None => Step::Print(".mode table|json|csv".to_string()),
+                None => Step::Print(".mode table|list|column|line|csv|json".to_string()),
+            };
+        }
+        if !cmd.is_empty() && "headers".starts_with(cmd) {
+            return match arg {
+                "on" => {
+                    self.headers = true;
+                    Step::Continue
+                }
+                "off" => {
+                    self.headers = false;
+                    Step::Continue
+                }
+                _ => Step::Print("usage: .headers on|off".to_string()),
+            };
+        }
+        if !cmd.is_empty() && "color".starts_with(cmd) {
+            return match arg {
+                "on" => {
+                    self.color = true;
+                    Step::Continue
+                }
+                "off" => {
+                    self.color = false;
+                    Step::Continue
+                }
+                _ => Step::Print("usage: .color on|off".to_string()),
             };
         }
 
@@ -220,6 +269,8 @@ pub fn run_repl<H: ReplHandler>(handler: H, opts: ReplOptions) -> io::Result<()>
             Step::Print(text) => println!("{text}"),
             Step::Quit => break,
         }
+
+        editor.set_color(repl.color());
     }
 
     if let Some(hf) = opts.history_file {
@@ -247,8 +298,8 @@ mod tests {
             Ok((vec!["x".to_string()], vec![vec![input.to_string()]]))
         }
 
-        fn format(&self, output: &Self::Output, mode: OutputMode) -> String {
-            crate::output::render(mode, &output.0, &output.1)
+        fn format(&self, output: &Self::Output, mode: OutputMode, headers: bool) -> String {
+            crate::output::render(mode, &output.0, &output.1, headers)
         }
 
         fn command(&mut self, name: &str, arg: &str) -> Option<Vec<String>> {
@@ -317,5 +368,63 @@ mod tests {
     #[test]
     fn empty_statement_is_ignored() {
         assert!(matches!(mock().feed_line(";"), Step::Continue));
+    }
+
+    #[test]
+    fn mode_command_accepts_list_column_line() {
+        let mut repl = mock();
+        repl.feed_line(".mode list");
+        assert_eq!(repl.mode(), OutputMode::List);
+        repl.feed_line(".mode column");
+        assert_eq!(repl.mode(), OutputMode::Column);
+        repl.feed_line(".mode line");
+        assert_eq!(repl.mode(), OutputMode::Line);
+    }
+
+    #[test]
+    fn headers_default_off_and_toggled_by_dot_command() {
+        let mut repl = mock();
+        assert!(!repl.headers());
+        assert!(matches!(repl.feed_line(".headers on"), Step::Continue));
+        assert!(repl.headers());
+        assert!(matches!(repl.feed_line(".headers off"), Step::Continue));
+        assert!(!repl.headers());
+    }
+
+    #[test]
+    fn headers_command_rejects_bad_argument() {
+        match mock().feed_line(".headers bogus") {
+            Step::Print(text) => assert_eq!(text, "usage: .headers on|off"),
+            _ => panic!("expected Print"),
+        }
+    }
+
+    #[test]
+    fn headers_setting_reaches_format_via_execute() {
+        let mut repl = mock();
+        repl.feed_line(".mode list");
+        repl.feed_line(".headers on");
+        match repl.feed_line("select 1;") {
+            Step::Print(text) => assert!(text.starts_with("x\n")),
+            _ => panic!("expected Print"),
+        }
+    }
+
+    #[test]
+    fn color_default_on_and_toggled_by_dot_command() {
+        let mut repl = mock();
+        assert!(repl.color());
+        assert!(matches!(repl.feed_line(".color off"), Step::Continue));
+        assert!(!repl.color());
+        assert!(matches!(repl.feed_line(".color on"), Step::Continue));
+        assert!(repl.color());
+    }
+
+    #[test]
+    fn color_command_rejects_bad_argument() {
+        match mock().feed_line(".color bogus") {
+            Step::Print(text) => assert_eq!(text, "usage: .color on|off"),
+            _ => panic!("expected Print"),
+        }
     }
 }

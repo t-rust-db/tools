@@ -23,10 +23,56 @@ impl std::fmt::Display for ReadlineError {
     }
 }
 
+/// Colorizes a line of input for interactive display. The default,
+/// keyword-list-based implementation (`highlight::highlight`, unchanged
+/// from before this hook existed) stays column-rs's/any engine's default;
+/// an engine with its own tokenizer plugs a richer one in via
+/// [`Readline::set_highlighter`] (#6).
+///
+/// **Invariant:** `highlight(line)`'s return value must have the exact
+/// same *visible* character count as `line` -- `redraw_at`'s cursor-column
+/// math is computed from `line`'s raw char count and assumes the printed
+/// `display` string lines up with it one-for-one. ANSI escape codes are
+/// zero-width and fine to add; anything that inserts or removes visible
+/// characters (e.g. wrapping the line in brackets) will make the cursor
+/// land in the wrong column.
+pub trait Highlighter {
+    fn highlight(&self, line: &str) -> String;
+}
+
+struct DefaultHighlighter;
+
+impl Highlighter for DefaultHighlighter {
+    fn highlight(&self, line: &str) -> String {
+        highlight::highlight(line)
+    }
+}
+
+/// Tab-completion hook (#6): given the full `line` and the cursor's char
+/// position within it, returns `(prefix_start, candidates)` -- the char
+/// index where the word being completed begins (so the caller replaces
+/// `line[prefix_start..cursor]`) and the full replacement candidates for
+/// that prefix. An empty `candidates` list means "no completions". The
+/// default is a no-op; an engine supplies its own keyword/table/column
+/// list via [`Readline::set_completer`].
+pub trait Completer {
+    fn complete(&self, line: &str, cursor: usize) -> (usize, Vec<String>);
+}
+
+struct NoCompleter;
+
+impl Completer for NoCompleter {
+    fn complete(&self, _line: &str, cursor: usize) -> (usize, Vec<String>) {
+        (cursor, Vec::new())
+    }
+}
+
 pub struct Readline {
     history: History,
     tty: bool,
     color: bool,
+    highlighter: Box<dyn Highlighter>,
+    completer: Box<dyn Completer>,
     /// Physical row (0-indexed from the top row of the current line's
     /// rendering) the cursor was left on after the last redraw -- how many
     /// rows `redraw_at` must move up before reprinting.
@@ -45,12 +91,28 @@ impl Readline {
             history: History::new(),
             tty: is_tty(),
             color: true,
+            highlighter: Box::new(DefaultHighlighter),
+            completer: Box::new(NoCompleter),
             prev_cursor_row: 0,
         }
     }
 
     pub fn set_color(&mut self, enabled: bool) {
         self.color = enabled;
+    }
+
+    /// Plug in an engine-specific [`Highlighter`]. Default behavior
+    /// (`highlight::highlight`'s built-in keyword list) is unchanged until
+    /// this is called.
+    pub fn set_highlighter(&mut self, highlighter: impl Highlighter + 'static) {
+        self.highlighter = Box::new(highlighter);
+    }
+
+    /// Plug in an engine-specific [`Completer`]. Tab does nothing until
+    /// this is called (the default [`NoCompleter`] always returns no
+    /// candidates).
+    pub fn set_completer(&mut self, completer: impl Completer + 'static) {
+        self.completer = Box::new(completer);
     }
 
     pub fn load_history(&mut self, path: &Path) {
@@ -199,6 +261,31 @@ impl Readline {
                     self.prev_cursor_row = 0;
                     self.redraw_at(prompt, &line, cursor, &mut stdout);
                 }
+                // Tab: complete the word at the cursor via `self.completer`.
+                // One candidate inserts it outright; multiple candidates
+                // insert their longest common prefix (classic readline
+                // "partial completion") if it extends past what's already
+                // typed. No completer set (or zero candidates) does
+                // nothing.
+                term::Key::Char('\t') => {
+                    let (prefix_start, candidates) = self.completer.complete(&line, cursor);
+                    let replacement = match candidates.len() {
+                        0 => None,
+                        1 => Some(candidates[0].clone()),
+                        _ => {
+                            let lcp = longest_common_prefix(&candidates);
+                            let prefix_len = cursor.saturating_sub(prefix_start);
+                            (lcp.chars().count() > prefix_len).then_some(lcp)
+                        }
+                    };
+                    if let Some(replacement) = replacement {
+                        let start_idx = char_byte_index(&line, prefix_start);
+                        let cursor_idx = char_byte_index(&line, cursor);
+                        line.replace_range(start_idx..cursor_idx, &replacement);
+                        cursor = prefix_start + replacement.chars().count();
+                        self.redraw_at(prompt, &line, cursor, &mut stdout);
+                    }
+                }
                 // Ctrl-P / Ctrl-N: emacs/readline aliases for history Up/Down.
                 term::Key::Char('\x10') => {
                     if let Some(prev) = self.history.prev(&mut hist_idx) {
@@ -273,7 +360,7 @@ impl Readline {
     /// reposition the cursor at its logical (row, column).
     fn redraw_at(&mut self, prompt: &str, line: &str, cursor: usize, stdout: &mut io::Stdout) {
         let display = if self.color {
-            highlight::highlight(line)
+            self.highlighter.highlight(line)
         } else {
             line.to_string()
         };
@@ -516,6 +603,67 @@ mod word_boundary_tests {
     #[test]
     fn next_boundary_handles_multibyte_chars() {
         assert_eq!(next_word_boundary("héllo wörld", 0), 6);
+    }
+}
+
+/// The longest string every one of `strings` starts with (char-wise), for
+/// Tab's "partial completion" of multiple candidates. Empty for an empty
+/// input or when the strings share no common prefix.
+fn longest_common_prefix(strings: &[String]) -> String {
+    let Some(first) = strings.first() else {
+        return String::new();
+    };
+    let mut result: Vec<char> = first.chars().collect();
+    for s in &strings[1..] {
+        let s_chars: Vec<char> = s.chars().collect();
+        let mut i = 0;
+        while i < result.len() && i < s_chars.len() && result[i] == s_chars[i] {
+            i += 1;
+        }
+        result.truncate(i);
+        if result.is_empty() {
+            break;
+        }
+    }
+    result.into_iter().collect()
+}
+
+#[cfg(test)]
+mod longest_common_prefix_tests {
+    use super::longest_common_prefix;
+
+    #[test]
+    fn empty_input_is_empty() {
+        assert_eq!(longest_common_prefix(&[]), "");
+    }
+
+    #[test]
+    fn single_string_is_itself() {
+        assert_eq!(longest_common_prefix(&["select".to_string()]), "select");
+    }
+
+    #[test]
+    fn shared_prefix_across_several_strings() {
+        let strings = ["select".to_string(), "self".to_string()];
+        assert_eq!(longest_common_prefix(&strings), "sel");
+    }
+
+    #[test]
+    fn no_shared_prefix_is_empty() {
+        let strings = ["select".to_string(), "from".to_string()];
+        assert_eq!(longest_common_prefix(&strings), "");
+    }
+
+    #[test]
+    fn one_string_being_a_prefix_of_another() {
+        let strings = ["order".to_string(), "order_by".to_string()];
+        assert_eq!(longest_common_prefix(&strings), "order");
+    }
+
+    #[test]
+    fn handles_multibyte_chars() {
+        let strings = ["héllo".to_string(), "héllx".to_string()];
+        assert_eq!(longest_common_prefix(&strings), "héll");
     }
 }
 
