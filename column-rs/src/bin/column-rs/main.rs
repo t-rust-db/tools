@@ -86,7 +86,9 @@ fn run_query(paths: &[PathBuf], sql: &str) -> ExitCode {
         Ok(output @ (Output::Plan(_) | Output::Opcodes(_))) => {
             println!(
                 "{}",
-                db_cli::ReplHandler::format(&handler, &output, OutputMode::Table)
+                // headers is irrelevant here -- Plan/Opcodes ignore it (only
+                // Output::Rows, handled above via streaming, respects it).
+                db_cli::ReplHandler::format(&handler, &output, OutputMode::Table, true)
             );
             ExitCode::SUCCESS
         }

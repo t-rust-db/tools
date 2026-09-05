@@ -46,7 +46,7 @@ impl ReplHandler for ColumnHandler {
         }
     }
 
-    fn format(&self, output: &Self::Output, mode: OutputMode) -> String {
+    fn format(&self, output: &Self::Output, mode: OutputMode, headers: bool) -> String {
         match output {
             Output::Rows(result) => {
                 let rows: Vec<Vec<String>> = result
@@ -54,7 +54,7 @@ impl ReplHandler for ColumnHandler {
                     .iter()
                     .map(|row| row.iter().map(|v| v.to_string()).collect())
                     .collect();
-                render(mode, &result.columns, &rows)
+                render(mode, &result.columns, &rows, headers)
             }
             Output::Plan(nodes) => format_plan(nodes),
             Output::Opcodes(sections) => format_opcodes(sections),
