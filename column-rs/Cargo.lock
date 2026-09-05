@@ -28,13 +28,13 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.29.0"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.29.0#722c5e581dc7b4248bb3cbfcec97ede0fa2ea8dd"
+version = "0.30.0"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.30.0#6f5dfb9542f6cc6e3b4d33c0346db091c58f572f"
 
 [[package]]
 name = "db-storage"
-version = "0.4.0"
-source = "git+https://github.com/t-rust-db/db-storage?tag=v0.4.0#98a6580daf637dd4e276608d97034ccb15752633"
+version = "0.4.1"
+source = "git+https://github.com/t-rust-db/db-storage?tag=v0.4.1#7ea53e48be26bdcc677df8c5739f8eb3da050ecf"
 dependencies = [
  "memmap2",
  "ruzstd",
