@@ -6,10 +6,14 @@ use std::path::Path;
 
 use crate::history::History;
 
+/// Why [`Readline::read_line`] returned no line.
 #[derive(Debug)]
 pub enum ReadlineError {
+    /// End of input (Ctrl-D on an empty line, or stdin closed).
     Eof,
+    /// The user pressed Ctrl-C; the partial line is discarded.
     Interrupted,
+    /// A terminal or stdin I/O error.
     Io(io::Error),
 }
 
@@ -37,6 +41,8 @@ impl std::fmt::Display for ReadlineError {
 /// characters (e.g. wrapping the line in brackets) will make the cursor
 /// land in the wrong column.
 pub trait Highlighter {
+    /// Returns `line` with ANSI color codes inserted; must not add or
+    /// remove visible characters (see the trait doc).
     fn highlight(&self, line: &str) -> String;
 }
 
@@ -56,6 +62,8 @@ impl Highlighter for DefaultHighlighter {
 /// default is a no-op; an engine supplies its own keyword/table/column
 /// list via [`Readline::set_completer`].
 pub trait Completer {
+    /// Completions for the word ending at `cursor` in `line`: the byte
+    /// offset where the replaced prefix starts, and the candidate list.
     fn complete(&self, line: &str, cursor: usize) -> (usize, Vec<String>);
 }
 
@@ -67,6 +75,9 @@ impl Completer for NoCompleter {
     }
 }
 
+/// The line editor: raw-mode input with cursor movement, history recall,
+/// optional syntax highlighting and tab completion. Falls back to plain
+/// buffered `stdin` when not attached to a tty.
 pub struct Readline {
     history: History,
     tty: bool,
@@ -86,6 +97,7 @@ impl Default for Readline {
 }
 
 impl Readline {
+    /// A `Readline` with empty history, color on, and no completer.
     pub fn new() -> Self {
         Readline {
             history: History::new(),
@@ -97,6 +109,7 @@ impl Readline {
         }
     }
 
+    /// Enables or disables ANSI highlighting of the input line.
     pub fn set_color(&mut self, enabled: bool) {
         self.color = enabled;
     }
@@ -115,18 +128,23 @@ impl Readline {
         self.completer = Box::new(completer);
     }
 
+    /// Loads history from `path` (missing or unreadable files are ignored).
     pub fn load_history(&mut self, path: &Path) {
         self.history.load(path);
     }
 
+    /// Saves history to `path`, creating parent directories as needed.
     pub fn save_history(&self, path: &Path) {
         self.history.save(path);
     }
 
+    /// Appends `line` to the in-memory history (blank and duplicate-of-last
+    /// entries are dropped).
     pub fn add_history_entry(&mut self, line: &str) {
         self.history.add(line);
     }
 
+    /// Prints `prompt` and reads one line, with editing when on a tty.
     pub fn read_line(&mut self, prompt: &str) -> Result<String, ReadlineError> {
         if !self.tty {
             // Piped input: plain line read.
@@ -271,7 +289,7 @@ impl Readline {
                     let (prefix_start, candidates) = self.completer.complete(&line, cursor);
                     let replacement = match candidates.len() {
                         0 => None,
-                        1 => Some(candidates[0].clone()),
+                        1 => candidates.first().cloned(),
                         _ => {
                             let lcp = longest_common_prefix(&candidates);
                             let prefix_len = cursor.saturating_sub(prefix_start);

@@ -9,15 +9,22 @@ use std::fmt::Write as _;
 /// `Table`/`Json` are db-cli's own additions with no `sqlite3` precedent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
+    /// Box-drawn table with a header row (db-cli default).
     Table,
+    /// `sqlite3` default: `|`-separated values, one row per line.
     List,
+    /// `sqlite3 .mode column`: left-aligned, width-padded columns.
     Column,
+    /// `sqlite3 .mode line`: one `name = value` line per column.
     Line,
+    /// RFC 4180 CSV with a header row.
     Csv,
+    /// A JSON array of objects keyed by column name.
     Json,
 }
 
 impl OutputMode {
+    /// Parses a `.mode` argument (case-insensitive); `None` if unknown.
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "table" => Some(OutputMode::Table),
@@ -48,8 +55,8 @@ pub fn render_table(headers: &[String], rows: &[Vec<String>]) -> String {
     let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
-            if i < widths.len() {
-                widths[i] = widths[i].max(cell.len());
+            if let Some(w) = widths.get_mut(i) {
+                *w = (*w).max(cell.len());
             }
         }
     }
@@ -72,7 +79,8 @@ pub fn render_table(headers: &[String], rows: &[Vec<String>]) -> String {
 
     out.push('│');
     for (i, h) in headers.iter().enumerate() {
-        out.push_str(&format!(" {:width$} │", h, width = widths[i]));
+        let width = widths.get(i).copied().unwrap_or(0);
+        out.push_str(&format!(" {h:width$} │"));
     }
     out.push('\n');
 
@@ -208,7 +216,7 @@ pub fn render_column(headers: &[String], rows: &[Vec<String>], show_headers: boo
             if i.saturating_add(1) == num_cols {
                 out.push_str(cell);
             } else {
-                let _ = write!(out, "{cell:<width$}  ");
+                write!(out, "{cell:<width$}  ").ok();
             }
         }
         out.push('\n');
@@ -238,7 +246,7 @@ pub fn render_line(headers: &[String], rows: &[Vec<String>]) -> String {
         }
         for (i, value) in row.iter().enumerate() {
             let name = headers.get(i).map(String::as_str).unwrap_or("");
-            let _ = writeln!(out, "{name:<name_width$} = {value}");
+            writeln!(out, "{name:<name_width$} = {value}").ok();
         }
     }
     out
@@ -265,6 +273,13 @@ pub fn render(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 mod tests {
     use super::*;
 

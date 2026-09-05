@@ -19,6 +19,7 @@ use crate::output::OutputMode;
 /// `EXPLAIN` plan tree) can use its own enum and format each variant however
 /// it likes — `db-cli` never needs to know the engine's types.
 pub trait ReplHandler {
+    /// The engine's native result shape for one statement.
     type Output;
 
     /// Execute one statement (buffered up to a trailing `;`).
@@ -77,6 +78,7 @@ pub struct Repl<H: ReplHandler> {
 }
 
 impl<H: ReplHandler> Repl<H> {
+    /// A REPL around `handler` in `Table` mode, headers off, color on.
     pub fn new(handler: H) -> Self {
         Repl {
             handler,
@@ -87,6 +89,7 @@ impl<H: ReplHandler> Repl<H> {
         }
     }
 
+    /// The current output mode (`.mode`).
     pub fn mode(&self) -> OutputMode {
         self.mode
     }
@@ -208,10 +211,12 @@ impl<H: ReplHandler> Repl<H> {
         }
     }
 
+    /// Consumes the REPL, returning the engine handler.
     pub fn into_handler(self) -> H {
         self.handler
     }
 
+    /// Mutable access to the engine handler.
     pub fn handler_mut(&mut self) -> &mut H {
         &mut self.handler
     }
@@ -219,8 +224,11 @@ impl<H: ReplHandler> Repl<H> {
 
 /// Options for [`run_repl`].
 pub struct ReplOptions<'a> {
+    /// Prompt shown for the first line of a statement.
     pub prompt: &'a str,
+    /// Prompt shown while a statement is still missing its `;`.
     pub continuation_prompt: &'a str,
+    /// History file to load on start and save on exit; `None` disables.
     pub history_file: Option<&'a Path>,
 }
 
@@ -280,6 +288,13 @@ pub fn run_repl<H: ReplHandler>(handler: H, opts: ReplOptions) -> io::Result<()>
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 mod tests {
     use super::*;
 

@@ -6,6 +6,15 @@
 // for raw-mode terminal I/O (no safe stdlib API exists for that), so this
 // crate uses `deny` at the root and a narrow `allow` on that one module.
 #![deny(unsafe_code)]
+#![warn(missing_docs)]
+// Unchecked cursor arithmetic and byte-index slicing in the line editor
+// predate the lint bar (#5); burned down site by site in #8, then this
+// allowance goes.
+#![allow(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    reason = "arithmetic_side_effects / indexing_slicing burn-down tracked in #8"
+)]
 
 pub mod editor;
 pub mod history;

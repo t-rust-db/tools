@@ -5,6 +5,13 @@
 //! Also optionally installs a test [`Completer`]/[`Highlighter`] (#6),
 //! gated behind env vars so the default-behavior tests (issue #1/#2)
 //! keep exercising `Readline::new()`'s untouched defaults.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 
 use db_cli::editor::Readline;
 use db_cli::{Completer, Highlighter};
