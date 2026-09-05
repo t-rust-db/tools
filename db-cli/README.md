@@ -65,6 +65,8 @@ pub trait Highlighter {
 let mut editor = db_cli::Readline::new();
 editor.set_completer(MyEngineCompleter::new(&schemas));
 editor.set_highlighter(MyEngineHighlighter);
+// then hand it to the loop:
+db_cli::run_repl_with_editor(db_cli::Repl::new(my_handler), editor, opts)?;
 ```
 
 Tab with exactly one candidate completes the word outright; with multiple

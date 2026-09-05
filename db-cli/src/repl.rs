@@ -311,9 +311,19 @@ pub fn run_repl<H: ReplHandler>(handler: H, opts: ReplOptions) -> io::Result<()>
 
 /// Like [`run_repl`], but over a caller-built [`Repl`] — the way to start
 /// in a mode other than `Table`, or with `.headers on` (#10).
-pub fn run_repl_with<H: ReplHandler>(mut repl: Repl<H>, opts: ReplOptions) -> io::Result<()> {
-    let mut editor = Readline::new();
+pub fn run_repl_with<H: ReplHandler>(repl: Repl<H>, opts: ReplOptions) -> io::Result<()> {
+    run_repl_with_editor(repl, Readline::new(), opts)
+}
 
+/// Like [`run_repl_with`], but also over a caller-built [`Readline`] — the
+/// way to plug in a [`crate::Completer`]/[`crate::Highlighter`]
+/// (`editor.set_completer(..)`, `editor.set_highlighter(..)`) before the
+/// loop starts owning it (#10).
+pub fn run_repl_with_editor<H: ReplHandler>(
+    mut repl: Repl<H>,
+    mut editor: Readline,
+    opts: ReplOptions,
+) -> io::Result<()> {
     if let Some(hf) = opts.history_file {
         editor.load_history(hf);
     }

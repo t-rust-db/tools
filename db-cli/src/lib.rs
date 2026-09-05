@@ -27,4 +27,6 @@ pub use output::{
     render, render_column, render_csv, render_json, render_line, render_list, render_table,
     OutputMode,
 };
-pub use repl::{run_repl, Repl, ReplHandler, ReplOptions, Step};
+pub use repl::{
+    run_repl, run_repl_with, run_repl_with_editor, Repl, ReplHandler, ReplOptions, Step,
+};
