@@ -265,6 +265,15 @@ impl Harness {
     }
 
     fn start_with_env(env: &[(&str, &str)]) -> Self {
+        // Serialize pty allocation + child spawn across the parallel test
+        // threads: a sibling test forking while this one's dup'd slave fd
+        // is still open leaks that fd into the wrong child, and `grantpt`
+        // has been seen failing under concurrent allocation (flaky ~1 in
+        // 6 runs). The lock is released once the child owns its fds.
+        static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _spawn = SPAWN_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (pty, slave) = Pty::open(ROWS as u16, COLS as u16);
         let bin = env!("CARGO_BIN_EXE_redraw-harness");
         let child = unsafe {

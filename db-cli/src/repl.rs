@@ -31,8 +31,9 @@ pub trait ReplHandler {
     fn format(&self, output: &Self::Output, mode: OutputMode, headers: bool) -> String;
 
     /// Handle a dot-command (`name` without the leading `.`, plus any
-    /// trailing argument text). Return `Some(lines to print)` if handled,
-    /// `None` if the command is unrecognized. The generic commands `.help`,
+    /// trailing argument text). Return `Some(lines to print)` if handled
+    /// (an empty list means "handled, nothing to print" — e.g. the handler
+    /// wrote to stdout itself), `None` if the command is unrecognized. The generic commands `.help`,
     /// `.quit`/`.exit`, `.mode`, and `.color` are handled by [`Repl`] itself
     /// and never reach this method.
     fn command(&mut self, name: &str, arg: &str) -> Option<Vec<String>> {
@@ -264,6 +265,9 @@ impl<H: ReplHandler> Repl<H> {
         }
 
         match self.handler.command(cmd, arg) {
+            // A handler that printed on its own (or had nothing to say)
+            // returns an empty list: handled, nothing more to emit.
+            Some(lines) if lines.is_empty() => Step::Continue,
             Some(lines) => Step::Print(lines.join("\n")),
             None => Step::Error(format!("unknown command: .{cmd}")),
         }
@@ -352,8 +356,12 @@ pub fn run_repl_with<H: ReplHandler>(mut repl: Repl<H>, opts: ReplOptions) -> io
 fn emit(step: Step) -> bool {
     match step {
         Step::Continue => false,
+        // An empty result set renders as "" — print nothing rather than a
+        // stray blank line (`sqlite3` prints nothing for zero rows).
         Step::Print(text) => {
-            println!("{text}");
+            if !text.is_empty() {
+                println!("{text}");
+            }
             false
         }
         Step::Error(text) => {
@@ -516,6 +524,27 @@ mod tests {
             }
             _ => panic!("expected Many"),
         }
+    }
+
+    #[test]
+    fn handler_command_with_no_lines_is_handled_silently() {
+        struct Quiet;
+        impl ReplHandler for Quiet {
+            type Output = ();
+            fn execute(&mut self, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn format(&self, _: &(), _: OutputMode, _: bool) -> String {
+                String::new()
+            }
+            fn command(&mut self, name: &str, _: &str) -> Option<Vec<String>> {
+                (name == "quiet").then(Vec::new)
+            }
+        }
+        assert!(matches!(
+            Repl::new(Quiet).feed_line(".quiet"),
+            Step::Continue
+        ));
     }
 
     #[test]
