@@ -1,6 +1,6 @@
 [package]
 name = "db-cli"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "Generic REPL/readline infrastructure for t-rust-db engine CLIs"
 license = "Apache-2.0"
