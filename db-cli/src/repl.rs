@@ -31,8 +31,9 @@ pub trait ReplHandler {
     fn format(&self, output: &Self::Output, mode: OutputMode, headers: bool) -> String;
 
     /// Handle a dot-command (`name` without the leading `.`, plus any
-    /// trailing argument text). Return `Some(lines to print)` if handled,
-    /// `None` if the command is unrecognized. The generic commands `.help`,
+    /// trailing argument text). Return `Some(lines to print)` if handled
+    /// (an empty list means "handled, nothing to print" — e.g. the handler
+    /// wrote to stdout itself), `None` if the command is unrecognized. The generic commands `.help`,
     /// `.quit`/`.exit`, `.mode`, and `.color` are handled by [`Repl`] itself
     /// and never reach this method.
     fn command(&mut self, name: &str, arg: &str) -> Option<Vec<String>> {
@@ -49,6 +50,34 @@ pub trait ReplHandler {
     fn banner(&self) -> Option<String> {
         None
     }
+
+    /// Whether the buffered input is a complete statement (or several)
+    /// ready to run. The default is `sqlite3`'s rule of thumb — a trailing
+    /// `;` — but an engine with a tokenizer should override it so a `;`
+    /// inside a string literal never ends a statement early (#10).
+    fn is_complete(&self, buffer: &str) -> bool {
+        buffer.trim_end().ends_with(';')
+    }
+
+    /// Splits a complete buffer into the statements to run, in order. The
+    /// default hands over one statement with its trailing `;` stripped;
+    /// an engine can split `BEGIN; INSERT …;` into two (#10). Empty
+    /// results are skipped.
+    fn statements(&self, buffer: &str) -> Vec<String> {
+        let stmt = buffer.trim().trim_end_matches(';').trim();
+        if stmt.is_empty() {
+            Vec::new()
+        } else {
+            vec![stmt.to_string()]
+        }
+    }
+
+    /// How an `execute` error is rendered before going to stderr. The
+    /// default is `error: <message>`; `sqlite3`-style engines override
+    /// with `Error: <message>` (#10).
+    fn error_line(&self, message: &str) -> String {
+        format!("error: {message}")
+    }
 }
 
 /// One step of driving the REPL with a single input line.
@@ -56,8 +85,15 @@ pub enum Step {
     /// Nothing to print yet — still buffering a statement, or a dot-command
     /// with no output.
     Continue,
-    /// Print this text (a result, an error, or a command's output).
+    /// Print this text to stdout (a result or a command's output).
     Print(String),
+    /// Print this text to stderr (an `execute` error, an unknown
+    /// dot-command, a usage message) — `sqlite3` keeps errors off stdout
+    /// so piped output stays clean (#10).
+    Error(String),
+    /// Several steps from one input line (a line holding more than one
+    /// statement), to be applied in order (#10).
+    Many(Vec<Step>),
     /// Exit the REPL loop.
     Quit,
 }
@@ -94,6 +130,18 @@ impl<H: ReplHandler> Repl<H> {
         self.mode
     }
 
+    /// Sets the output mode — for a caller that wants a different start
+    /// state than [`Repl::new`]'s `Table` (e.g. `sqlite3`'s `list`), then
+    /// drives the loop with [`run_repl_with`] (#10).
+    pub fn set_mode(&mut self, mode: OutputMode) {
+        self.mode = mode;
+    }
+
+    /// Sets the `.headers` state (see [`Repl::set_mode`]).
+    pub fn set_headers(&mut self, headers: bool) {
+        self.headers = headers;
+    }
+
     /// Current `.headers` setting.
     pub fn headers(&self) -> bool {
         self.headers
@@ -119,24 +167,35 @@ impl<H: ReplHandler> Repl<H> {
             }
         }
 
+        // Lines are kept verbatim and `\n`-joined: a string literal spanning
+        // lines keeps its newline, and parser error positions stay true (#10).
         if !self.buffer.is_empty() {
-            self.buffer.push(' ');
+            self.buffer.push('\n');
         }
-        self.buffer.push_str(line.trim());
+        self.buffer.push_str(line);
 
-        if self.buffer.trim_end().ends_with(';') {
-            let stmt = self.buffer.trim_end_matches(';').trim().to_string();
-            self.buffer.clear();
-            if stmt.is_empty() {
-                return Step::Continue;
-            }
-            return match self.handler.execute(&stmt) {
-                Ok(output) => Step::Print(self.handler.format(&output, self.mode, self.headers)),
-                Err(e) => Step::Print(format!("error: {e}")),
-            };
+        if !self.handler.is_complete(&self.buffer) {
+            return Step::Continue;
         }
+        let buffer = std::mem::take(&mut self.buffer);
+        let mut steps: Vec<Step> = self
+            .handler
+            .statements(&buffer)
+            .iter()
+            .map(|stmt| self.run_statement(stmt))
+            .collect();
+        match steps.len() {
+            0 => Step::Continue,
+            1 => steps.pop().unwrap_or(Step::Continue),
+            _ => Step::Many(steps),
+        }
+    }
 
-        Step::Continue
+    fn run_statement(&mut self, stmt: &str) -> Step {
+        match self.handler.execute(stmt) {
+            Ok(output) => Step::Print(self.handler.format(&output, self.mode, self.headers)),
+            Err(e) => Step::Error(self.handler.error_line(&e)),
+        }
     }
 
     fn dot_command(&mut self, rest: &str) -> Step {
@@ -173,9 +232,9 @@ impl<H: ReplHandler> Repl<H> {
             return match OutputMode::parse(arg) {
                 Some(m) => {
                     self.mode = m;
-                    Step::Print(format!("mode: {arg}"))
+                    Step::Continue
                 }
-                None => Step::Print(".mode table|list|column|line|csv|json".to_string()),
+                None => Step::Error("usage: .mode table|list|column|line|csv|json".to_string()),
             };
         }
         if !cmd.is_empty() && "headers".starts_with(cmd) {
@@ -188,7 +247,7 @@ impl<H: ReplHandler> Repl<H> {
                     self.headers = false;
                     Step::Continue
                 }
-                _ => Step::Print("usage: .headers on|off".to_string()),
+                _ => Step::Error("usage: .headers on|off".to_string()),
             };
         }
         if !cmd.is_empty() && "color".starts_with(cmd) {
@@ -201,13 +260,16 @@ impl<H: ReplHandler> Repl<H> {
                     self.color = false;
                     Step::Continue
                 }
-                _ => Step::Print("usage: .color on|off".to_string()),
+                _ => Step::Error("usage: .color on|off".to_string()),
             };
         }
 
         match self.handler.command(cmd, arg) {
+            // A handler that printed on its own (or had nothing to say)
+            // returns an empty list: handled, nothing more to emit.
+            Some(lines) if lines.is_empty() => Step::Continue,
             Some(lines) => Step::Print(lines.join("\n")),
-            None => Step::Print(format!("unknown command: .{cmd}")),
+            None => Step::Error(format!("unknown command: .{cmd}")),
         }
     }
 
@@ -244,7 +306,12 @@ impl<'a> Default for ReplOptions<'a> {
 
 /// Run the interactive REPL loop against `handler` until EOF or `.quit`.
 pub fn run_repl<H: ReplHandler>(handler: H, opts: ReplOptions) -> io::Result<()> {
-    let mut repl = Repl::new(handler);
+    run_repl_with(Repl::new(handler), opts)
+}
+
+/// Like [`run_repl`], but over a caller-built [`Repl`] — the way to start
+/// in a mode other than `Table`, or with `.headers on` (#10).
+pub fn run_repl_with<H: ReplHandler>(mut repl: Repl<H>, opts: ReplOptions) -> io::Result<()> {
     let mut editor = Readline::new();
 
     if let Some(hf) = opts.history_file {
@@ -272,10 +339,8 @@ pub fn run_repl<H: ReplHandler>(handler: H, opts: ReplOptions) -> io::Result<()>
             editor.add_history_entry(&line);
         }
 
-        match repl.feed_line(&line) {
-            Step::Continue => {}
-            Step::Print(text) => println!("{text}"),
-            Step::Quit => break,
+        if emit(repl.feed_line(&line)) {
+            break;
         }
 
         editor.set_color(repl.color());
@@ -285,6 +350,27 @@ pub fn run_repl<H: ReplHandler>(handler: H, opts: ReplOptions) -> io::Result<()>
         editor.save_history(hf);
     }
     Ok(())
+}
+
+/// Applies one [`Step`] to stdout/stderr; returns `true` on [`Step::Quit`].
+fn emit(step: Step) -> bool {
+    match step {
+        Step::Continue => false,
+        // An empty result set renders as "" — print nothing rather than a
+        // stray blank line (`sqlite3` prints nothing for zero rows).
+        Step::Print(text) => {
+            if !text.is_empty() {
+                println!("{text}");
+            }
+            false
+        }
+        Step::Error(text) => {
+            eprintln!("{text}");
+            false
+        }
+        Step::Many(steps) => steps.into_iter().any(emit),
+        Step::Quit => true,
+    }
 }
 
 #[cfg(test)]
@@ -339,15 +425,15 @@ mod tests {
         assert!(repl.is_buffering());
         assert!(matches!(repl.feed_line("1;"), Step::Print(_)));
         assert!(!repl.is_buffering());
-        assert_eq!(repl.into_handler().executed, vec!["select 1".to_string()]);
+        assert_eq!(repl.into_handler().executed, vec!["select\n1".to_string()]);
     }
 
     #[test]
     fn execute_error_is_printed_not_fatal() {
         let mut repl = mock();
         match repl.feed_line("fail;") {
-            Step::Print(text) => assert!(text.contains("error: boom")),
-            _ => panic!("expected Print"),
+            Step::Error(text) => assert_eq!(text, "error: boom"),
+            _ => panic!("expected Error"),
         }
     }
 
@@ -358,17 +444,123 @@ mod tests {
     }
 
     #[test]
-    fn mode_command_switches_output_mode() {
+    fn mode_command_switches_output_mode_silently() {
         let mut repl = mock();
-        repl.feed_line(".mode json");
+        assert!(matches!(repl.feed_line(".mode json"), Step::Continue));
         assert_eq!(repl.mode(), OutputMode::Json);
+    }
+
+    /// A `sqlite3`-style handler: tokenizer-ish completion (here: a `;`
+    /// inside single quotes doesn't count), multi-statement split, and
+    /// the `Error:` prefix.
+    struct SplitHandler;
+
+    impl ReplHandler for SplitHandler {
+        type Output = String;
+
+        fn execute(&mut self, input: &str) -> Result<Self::Output, String> {
+            if input == "bad" {
+                return Err("boom".to_string());
+            }
+            Ok(input.to_string())
+        }
+
+        fn format(&self, output: &Self::Output, _mode: OutputMode, _headers: bool) -> String {
+            output.clone()
+        }
+
+        fn is_complete(&self, buffer: &str) -> bool {
+            let outside_quotes: String = buffer.split('\'').step_by(2).collect();
+            outside_quotes.trim_end().ends_with(';')
+        }
+
+        fn statements(&self, buffer: &str) -> Vec<String> {
+            // Split on `;` outside single quotes.
+            let mut out = Vec::new();
+            let mut cur = String::new();
+            let mut quoted = false;
+            for c in buffer.chars() {
+                match c {
+                    '\'' => {
+                        quoted = !quoted;
+                        cur.push(c);
+                    }
+                    ';' if !quoted => out.push(std::mem::take(&mut cur)),
+                    _ => cur.push(c),
+                }
+            }
+            out.push(cur);
+            out.into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        }
+
+        fn error_line(&self, message: &str) -> String {
+            format!("Error: {message}")
+        }
+    }
+
+    #[test]
+    fn is_complete_hook_keeps_buffering_past_a_quoted_semicolon() {
+        let mut repl = Repl::new(SplitHandler);
+        assert!(matches!(repl.feed_line("select 'a;"), Step::Continue));
+        assert!(repl.is_buffering());
+        match repl.feed_line("b';") {
+            Step::Print(text) => assert_eq!(text, "select 'a;\nb'"),
+            _ => panic!("expected Print"),
+        }
+    }
+
+    #[test]
+    fn statements_hook_yields_many_steps_with_errors_routed_to_stderr() {
+        let mut repl = Repl::new(SplitHandler);
+        match repl.feed_line("one; bad; two;") {
+            Step::Many(steps) => {
+                assert_eq!(steps.len(), 3);
+                assert!(matches!(&steps[0], Step::Print(t) if t == "one"));
+                assert!(matches!(&steps[1], Step::Error(t) if t == "Error: boom"));
+                assert!(matches!(&steps[2], Step::Print(t) if t == "two"));
+            }
+            _ => panic!("expected Many"),
+        }
+    }
+
+    #[test]
+    fn handler_command_with_no_lines_is_handled_silently() {
+        struct Quiet;
+        impl ReplHandler for Quiet {
+            type Output = ();
+            fn execute(&mut self, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn format(&self, _: &(), _: OutputMode, _: bool) -> String {
+                String::new()
+            }
+            fn command(&mut self, name: &str, _: &str) -> Option<Vec<String>> {
+                (name == "quiet").then(Vec::new)
+            }
+        }
+        assert!(matches!(
+            Repl::new(Quiet).feed_line(".quiet"),
+            Step::Continue
+        ));
+    }
+
+    #[test]
+    fn set_mode_and_headers_change_the_start_state() {
+        let mut repl = mock();
+        repl.set_mode(OutputMode::List);
+        repl.set_headers(true);
+        assert_eq!(repl.mode(), OutputMode::List);
+        assert!(repl.headers());
     }
 
     #[test]
     fn unknown_dot_command_reports_itself() {
         match mock().feed_line(".bogus") {
-            Step::Print(text) => assert_eq!(text, "unknown command: .bogus"),
-            _ => panic!("expected Print"),
+            Step::Error(text) => assert_eq!(text, "unknown command: .bogus"),
+            _ => panic!("expected Error"),
         }
     }
 
@@ -409,8 +601,8 @@ mod tests {
     #[test]
     fn headers_command_rejects_bad_argument() {
         match mock().feed_line(".headers bogus") {
-            Step::Print(text) => assert_eq!(text, "usage: .headers on|off"),
-            _ => panic!("expected Print"),
+            Step::Error(text) => assert_eq!(text, "usage: .headers on|off"),
+            _ => panic!("expected Error"),
         }
     }
 
@@ -438,8 +630,8 @@ mod tests {
     #[test]
     fn color_command_rejects_bad_argument() {
         match mock().feed_line(".color bogus") {
-            Step::Print(text) => assert_eq!(text, "usage: .color on|off"),
-            _ => panic!("expected Print"),
+            Step::Error(text) => assert_eq!(text, "usage: .color on|off"),
+            _ => panic!("expected Error"),
         }
     }
 }

@@ -84,6 +84,11 @@ pub trait ReplHandler {
     fn command(&mut self, name: &str, arg: &str) -> Option<Vec<String>> { None }
     fn help_extra(&self) -> Vec<String> { Vec::new() }
     fn banner(&self) -> Option<String> { None }
+
+    // sqlite3-parity hooks (#10), all with sensible defaults:
+    fn is_complete(&self, buffer: &str) -> bool { buffer.trim_end().ends_with(';') }
+    fn statements(&self, buffer: &str) -> Vec<String> { /* one, `;` stripped */ }
+    fn error_line(&self, message: &str) -> String { format!("error: {message}") }
 }
 ```
 
@@ -92,13 +97,18 @@ pub trait ReplHandler {
   `output::render`. An engine with richer shapes — e.g. column-rs's
   `EXPLAIN` plan tree — can define its own enum and format each variant
   however it likes; `db-cli` never needs to know that type exists.
-- `execute`'s `input` is the buffered statement text with the trailing `;`
-  stripped and internal newlines collapsed to single spaces — the same
-  string content the user typed, not byte-identical to it. This is enough
-  for an engine to pattern-match its own pragma-style introspection
-  commands (e.g. `PRAGMA table_info(t)`) directly inside `execute`, the
-  same way sqlite-rs's `pragma_query.rs` does against its own buffered
-  statement text — no db-cli change needed for that.
+- Input lines are buffered verbatim, `\n`-joined, until `is_complete`
+  says the buffer is ready; `statements` then splits it into what
+  `execute` receives, one call per statement. The defaults are `sqlite3`'s
+  rule of thumb (a trailing `;`; one statement, `;` stripped). An engine
+  with a tokenizer overrides both so a `;` inside a string literal never
+  ends a statement early and `BEGIN; INSERT …;` on one line runs as two —
+  sqlite-rs does exactly that with its `ends_with_semicolon` /
+  `split_statements`.
+- Errors go to **stderr**, never stdout, so piped output stays clean:
+  `execute` failures rendered by `error_line` (`error: …` by default,
+  `Error: …` for sqlite3-style engines), unknown dot-commands, and usage
+  messages. `.mode`/`.headers`/`.color` succeed silently, like `sqlite3`.
 - `command` handles engine-specific dot-commands (column-rs's `.tables`,
   `.schema`, `.open <path>`). `arg` is the trailing text after the command
   name (empty string, not absent, when nothing follows), so pattern-style
@@ -119,6 +129,15 @@ run_repl(my_handler, ReplOptions {
     continuation_prompt: "   -> ",
     history_file: db_cli::history_path("mydb").as_deref(),
 })?;
+```
+
+To start in a different state than `Table`/headers-off (sqlite-rs starts in
+`list`, like `sqlite3`), build the `Repl` yourself and use `run_repl_with`:
+
+```rust
+let mut repl = db_cli::Repl::new(my_handler);
+repl.set_mode(OutputMode::List);
+db_cli::run_repl_with(repl, opts)?;
 ```
 
 `repl::Repl<H>` is the same dispatch logic decoupled from terminal I/O —
