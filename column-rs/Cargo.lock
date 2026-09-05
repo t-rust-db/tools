@@ -19,8 +19,8 @@ dependencies = [
 
 [[package]]
 name = "db-cli"
-version = "0.2.0"
-source = "git+https://github.com/t-rust-db/db-cli?tag=v0.2.0#632dd46426125fd68a1a81bb4ce8f521318ff2f5"
+version = "0.3.0"
+source = "git+https://github.com/t-rust-db/db-cli?tag=v0.3.0#245b9a69cbfeb919deaec393d328c1de9bdb569f"
 dependencies = [
  "dirs",
  "libc",
