@@ -10,6 +10,7 @@ All notable changes to column-rs. Format follows [Keep a Changelog](https://keep
   - `db_core::expr` is gone (db-core#153/#155, ADR 0002): the AST is `parser::ast::Select`. `column_rs::sql` now re-exports the whole `parser::ast` module plus `Span`, `Explain`, `WindowFunc`/`WindowSpec` (from `codegen::batch`) and `AggFunc` (from `vm::batch`) -- the emitter's generated binaries import all of these. `query.rs` reads the table and joins through `Select.from: Option<FromClause>` and matches `ExprKind::InSubquery`/`FunctionCall { over }` instead of `Expr::InSubquery`/`SelectItem::Window`. `QueryError::UnsupportedJoinKind` carries a `JoinOp`; new `QueryError::UnsupportedSelectItem` mirrors `PlanError::UnsupportedSelectItem`.
   - dyn-free batch API (db-core#156, v0.52.1): segments are passed as `&[RowGroupSegment]`/`&[InMemorySegment]`, no `Box<dyn Segment>`; `SemiJoinProgram.subquery`/`key_column` are owned.
   - `Opcode::Finalize` split into `Combine`/`Sort`/`Limit` (db-core#48, v0.60.0): `OpcodeRow.is_finalize` marks the `Combine` row; the EXPLAIN renderer's divider follows it. Results are unchanged: the 41 DuckDB oracle tests and 7 `codegen_e2e` tests pass as before.
+- **`db-storage` bumped `v0.4.1` → `v0.5.5`** (`default-features = false, features = ["column"]` -- the Parquet reader only) and **`db-cli` `v0.3.0` → `v0.4.1`**, so the sibling-path patches in `.cargo/config.toml` apply again instead of warning `patch ... was not used in the crate graph`. No source changes needed.
 
 ## [0.17.0] - 2026-09-04
 
