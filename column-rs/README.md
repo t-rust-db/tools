@@ -27,7 +27,7 @@ What stays in this repo:
   `Segment`, materialize whole tables for join/semi-join/window queries,
   and `QueryEngine` (table registry + dispatch). The planner
   (`db_core::codegen::batch`), the VM (`db_core::vm::batch`) and the
-  cross-segment engine that applies the terminal `Finalize` opcode
+  cross-segment engine that applies the terminal `Combine`/`Sort`/`Limit` opcodes
   (`db_core::vm::engine`) all live in db-core (its ADR 0007).
 - `src/bin/column-rs/` — the CLI binary: REPL (via `db_cli::run_repl`),
   one-shot `-c` mode, `codegen` subcommand (wraps db-core's AOT emitter,

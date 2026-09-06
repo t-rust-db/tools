@@ -22,11 +22,14 @@ pub use db_storage::column::parquet::reader;
 
 /// Re-exports preserving column-rs's pre-extraction `column_rs::sql::*`
 /// surface — the actual implementation now lives in `db-core`'s
-/// `types`/`expr`/`parser` modules.
+/// `types`/`parser::ast`/`parser` modules (the AST is `parser::ast::Select`
+/// since db-core#153 retired `expr::Query`).
 pub mod sql {
-    pub use db_core::expr::{
-        AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
-    };
-    pub use db_core::parser::{parse, parse_explain, ParseError, Result};
-    pub use db_core::types::Literal;
+    // The whole AST is re-exported: `db_core::emit::batch`'s generated
+    // binaries reconstruct a parsed `Select` literally (`use
+    // column_rs::sql::{BinaryOp, Distinctness, Expr, ..., WindowDef}`).
+    pub use db_core::codegen::batch::{WindowFunc, WindowSpec};
+    pub use db_core::parser::ast::*;
+    pub use db_core::parser::{parse, parse_explain, Explain, ParseError, Result, Span};
+    pub use db_core::vm::batch::AggFunc;
 }

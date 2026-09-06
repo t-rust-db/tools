@@ -1,6 +1,6 @@
 [package]
 name = "column-rs"
-version = "0.17.0"
+version = "0.18.0"
 edition = "2021"
 
 [lib]
@@ -13,5 +13,5 @@ path = "src/bin/column-rs/main.rs"
 
 [dependencies]
 db-storage = { git = "https://github.com/t-rust-db/db-storage", tag = "v0.4.1" }
-db-core = { git = "https://github.com/t-rust-db/db-core", tag = "v0.30.0", default-features = false, features = ["parser-column", "vm-batch", "codegen-batch", "emit-batch"] }
+db-core = { git = "https://github.com/t-rust-db/db-core", tag = "v0.60.0", default-features = false, features = ["parser-column", "vm-batch", "codegen-batch", "emit-batch"] }
 db-cli = { git = "https://github.com/t-rust-db/db-cli", tag = "v0.3.0" }

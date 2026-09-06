@@ -6,14 +6,14 @@
 //! paths, and dispatch a parsed query to the right shape.
 //!
 //! Nothing here plans or post-processes anything -- `compile()`,
-//! `AggPart`, `post_process` (now `Opcode::Finalize` applied by
+//! `AggPart`, `post_process` (now the `Opcode::Combine`/`Sort`/`Limit` tail applied by
 //! `db_core::vm::engine::run`) and the `EXPLAIN` tree all moved to db-core
 //! (ADR 0007 there), because none of them ever touched `ParquetFile`.
 //! What stays is exactly what does.
 
 use crate::vm::{Batch, Opcode, Program, Segment, Value};
 use db_core::codegen::batch::{self as planner, PlanError, TableStats};
-use db_core::expr::{Expr, JoinKind, Query, SelectItem};
+use db_core::parser::ast::{Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
 use db_core::vm::engine::{self, InMemorySegment};
 use db_storage::column::parquet::footer::PhysicalType;
 use db_storage::{ParquetFile, Vfs, VfsFile};
@@ -28,9 +28,11 @@ pub enum QueryError {
     UnknownTable(String),
     DuplicateTable(String),
     UnsupportedSemiJoin(String),
-    /// `Right`/`Full`/`Cross` are parseable (`db_core::expr::JoinKind`) but
+    /// A `SELECT`-list item the batch planner cannot compile.
+    UnsupportedSelectItem(String),
+    /// `Right`/`Full`/`Cross` are parseable (`db_core::parser::ast::JoinOp`) but
     /// only `Inner`/`Left` hash-join execution exists so far.
-    UnsupportedJoinKind(JoinKind),
+    UnsupportedJoinKind(JoinOp),
     /// `SELECT *` (or a mixed `SELECT col, *`) combined with `GROUP BY`, an
     /// aggregate, or a window function.
     StarWithAggregation,
@@ -43,6 +45,7 @@ impl fmt::Display for QueryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             QueryError::UnsupportedSemiJoin(msg) => write!(f, "unsupported semi-join: {msg}"),
+            QueryError::UnsupportedSelectItem(msg) => write!(f, "unsupported SELECT item: {msg}"),
             QueryError::UnsupportedJoinKind(kind) => {
                 write!(
                     f,
@@ -84,6 +87,7 @@ impl From<PlanError> for QueryError {
             PlanError::UnsupportedSemiJoin(msg) => QueryError::UnsupportedSemiJoin(msg),
             PlanError::UnsupportedJoinKind(kind) => QueryError::UnsupportedJoinKind(kind),
             PlanError::StarWithAggregation => QueryError::StarWithAggregation,
+            PlanError::UnsupportedSelectItem(msg) => QueryError::UnsupportedSelectItem(msg),
         }
     }
 }
@@ -183,14 +187,12 @@ fn resolve_columns(
 fn row_group_segments<'f>(
     file: &'f ParquetFile<'f>,
     columns: &[(String, usize, PhysicalType)],
-) -> Vec<Box<dyn Segment + 'f>> {
+) -> Vec<RowGroupSegment<'f, 'f>> {
     (0..file.num_row_groups())
-        .map(|i| {
-            Box::new(RowGroupSegment {
-                file,
-                row_group_index: i,
-                columns: columns.to_vec(),
-            }) as Box<dyn Segment + 'f>
+        .map(|i| RowGroupSegment {
+            file,
+            row_group_index: i,
+            columns: columns.to_vec(),
         })
         .collect()
 }
@@ -229,9 +231,58 @@ fn read_whole_table(file: &ParquetFile, columns: &[(String, usize, PhysicalType)
 /// Run a planned `program` over every row group of `file`: resolve its
 /// `LoadColumn` columns against the file, hand one [`Segment`] per row
 /// group to [`db_core::vm::engine::run`], which runs the body in parallel
-/// and applies the trailing `Finalize` (merge/`ORDER BY`/`LIMIT`) once.
+/// and applies the trailing `Combine`/`Sort`/`Limit` phase (merge/`ORDER BY`/`LIMIT`) once.
 /// The `codegen` subcommand's emitted binaries call this directly with
 /// their `const PROGRAM`.
+/// The plain table name a `SELECT` reads from. column-rs has no FROM-less
+/// or subquery-in-FROM execution path, so anything else is reported as an
+/// unknown table rather than silently mis-resolved.
+fn from_table(select: &Select) -> Result<&str> {
+    select
+        .from
+        .as_ref()
+        .and_then(|f| f.first.name())
+        .ok_or_else(|| QueryError::UnknownTable("<no table>".to_string()))
+}
+
+/// The first (and, for the batch planner, only) `JOIN` of a `SELECT`.
+fn first_join(select: &Select) -> Option<&Join> {
+    select.from.as_ref().and_then(|f| f.joins.first())
+}
+
+/// A join's right-hand table name (see [`from_table`] for the same rule).
+fn join_table(join: &Join) -> Result<&str> {
+    join.table
+        .name()
+        .ok_or_else(|| QueryError::UnknownTable("<no table>".to_string()))
+}
+
+/// The `IN (SELECT ...)` subquery when the `WHERE` clause is exactly that
+/// -- the shape `execute_semi_join` handles.
+fn in_subquery(select: &Select) -> Option<&Select> {
+    match &select.where_clause {
+        Some(Expr {
+            kind: ExprKind::InSubquery { subquery, .. },
+            ..
+        }) => Some(subquery),
+        _ => None,
+    }
+}
+
+/// A result column that is a window function (`f(...) OVER (...)`).
+fn is_window_column(column: &ResultColumn) -> bool {
+    matches!(
+        column,
+        ResultColumn::Expr {
+            expr: Expr {
+                kind: ExprKind::FunctionCall { over: Some(_), .. },
+                ..
+            },
+            ..
+        }
+    )
+}
+
 pub fn run_program(file: &ParquetFile, program: &[Opcode]) -> Result<Vec<Vec<Value>>> {
     run(file, &Program::from_opcodes(program.iter().cloned()))
 }
@@ -243,7 +294,7 @@ fn run(file: &ParquetFile, program: &Program) -> Result<Vec<Vec<Value>>> {
 }
 
 /// Execute a single-table `query` against `file`.
-pub fn execute(file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Value>>> {
+pub fn execute(file: &ParquetFile, query: &Select) -> Result<Vec<Vec<Value>>> {
     run(file, &planner::compile(query))
 }
 
@@ -253,7 +304,7 @@ pub fn execute(file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Value>>> {
 pub fn execute_joined(
     left_file: &ParquetFile,
     right_file: &ParquetFile,
-    query: &Query,
+    query: &Select,
 ) -> Result<Vec<Vec<Value>>> {
     let plan = planner::compile_join(query)?;
     let left_columns = resolve_columns(&leaf_columns(left_file), &plan.left_columns)?;
@@ -270,11 +321,11 @@ pub fn execute_joined(
 pub fn execute_semi_join(
     main_file: &ParquetFile,
     sub_file: &ParquetFile,
-    query: &Query,
+    query: &Select,
 ) -> Result<Vec<Vec<Value>>> {
     let plan = planner::compile_semi_join(query)?;
 
-    let sub_rows = execute(sub_file, plan.subquery)?;
+    let sub_rows = execute(sub_file, &plan.subquery)?;
     if sub_rows.first().is_some_and(|row| row.len() != 1) {
         return Err(QueryError::UnsupportedSemiJoin(
             "IN subquery must select exactly one column".to_string(),
@@ -284,25 +335,25 @@ pub fn execute_semi_join(
         sub_rows.into_iter().map(|row| row[0].to_string()).collect();
 
     let mut needed = plan.body.columns_to_load();
-    if !needed.iter().any(|n| n == plan.key_column) {
-        needed.push(plan.key_column.to_string());
+    if !needed.contains(&plan.key_column) {
+        needed.push(plan.key_column.clone());
     }
     let columns = resolve_columns(&leaf_columns(main_file), &needed)?;
     let batch = read_whole_table(main_file, &columns);
-    let filtered = engine::semi_filter(&batch, plan.key_column, &allowed)?;
+    let filtered = engine::semi_filter(&batch, &plan.key_column, &allowed)?;
 
-    let segments: Vec<Box<dyn Segment>> = vec![Box::new(InMemorySegment(filtered))];
+    let segments = [InMemorySegment(filtered)];
     Ok(engine::run(&segments, &plan.body)?)
 }
 
 /// Execute a query whose `SELECT` list contains window functions: the
 /// whole table is materialized (partitioning/sorting need every row) and
 /// the planned window program runs over it as a single segment.
-pub fn execute_windowed(file: &ParquetFile, query: &Query) -> Result<Vec<Vec<Value>>> {
+pub fn execute_windowed(file: &ParquetFile, query: &Select) -> Result<Vec<Vec<Value>>> {
     let program = planner::compile_window(query);
     let columns = resolve_columns(&leaf_columns(file), &program.columns_to_load())?;
     let batch = read_whole_table(file, &columns);
-    let segments: Vec<Box<dyn Segment>> = vec![Box::new(InMemorySegment(batch))];
+    let segments = [InMemorySegment(batch)];
     Ok(engine::run(&segments, &program)?)
 }
 
@@ -413,32 +464,31 @@ impl QueryEngine {
         // else touches `query.columns` -- a `JOIN` expands against both
         // sides, qualified `table.column` per the naming convention
         // `compile_join` already uses for its `left_columns`/`right_columns`.
-        let schema: Vec<String> = if let Some(join) = query.joins.first() {
-            let left_schema = self.table_schema(&query.from)?;
-            let right_schema = self.table_schema(&join.table)?;
+        let from = from_table(&query)?;
+        let schema: Vec<String> = if let Some(join) = first_join(&query) {
+            let right = join_table(join)?;
+            let left_schema = self.table_schema(from)?;
+            let right_schema = self.table_schema(right)?;
             left_schema
                 .iter()
-                .map(|c| format!("{}.{c}", query.from))
-                .chain(right_schema.iter().map(|c| format!("{}.{c}", join.table)))
+                .map(|c| format!("{from}.{c}"))
+                .chain(right_schema.iter().map(|c| format!("{right}.{c}")))
                 .collect()
         } else {
-            self.table_schema(&query.from)?.to_vec()
+            self.table_schema(from)?.to_vec()
         };
         let query = planner::expand_star(&query, &schema)?;
 
-        let main_data = self.table_data(&query.from)?;
+        let main_data = self.table_data(from)?;
         let main_file = ParquetFile::open(main_data)?;
 
-        let has_window = query
-            .columns
-            .iter()
-            .any(|c| matches!(c, SelectItem::Window(_)));
-        let rows = if let Some(Expr::InSubquery { subquery, .. }) = &query.where_clause {
-            let sub_data = self.table_data(&subquery.from)?;
+        let has_window = query.columns.iter().any(is_window_column);
+        let rows = if let Some(subquery) = in_subquery(&query) {
+            let sub_data = self.table_data(from_table(subquery)?)?;
             let sub_file = ParquetFile::open(sub_data)?;
             execute_semi_join(&main_file, &sub_file, &query)?
-        } else if let Some(join) = query.joins.first() {
-            let right_data = self.table_data(&join.table)?;
+        } else if let Some(join) = first_join(&query) {
+            let right_data = self.table_data(join_table(join)?)?;
             let right_file = ParquetFile::open(right_data)?;
             execute_joined(&main_file, &right_file, &query)?
         } else if has_window {
@@ -469,13 +519,13 @@ impl QueryEngine {
     /// Build a human-readable execution plan for `query` without running it
     /// (#99): the planner's [`db_core::codegen::batch::explain`], fed each
     /// referenced table's row-group/row counts from its Parquet footer.
-    pub fn explain(&self, query: &Query) -> Result<Vec<PlanNode>> {
-        let mut tables = vec![query.from.as_str()];
-        if let Some(Expr::InSubquery { subquery, .. }) = &query.where_clause {
-            tables.push(subquery.from.as_str());
+    pub fn explain(&self, query: &Select) -> Result<Vec<PlanNode>> {
+        let mut tables = vec![from_table(query)?];
+        if let Some(subquery) = in_subquery(query) {
+            tables.push(from_table(subquery)?);
         }
-        if let Some(join) = query.joins.first() {
-            tables.push(join.table.as_str());
+        if let Some(join) = first_join(query) {
+            tables.push(join_table(join)?);
         }
         let mut stats: HashMap<&str, TableStats> = HashMap::new();
         for table in tables {
@@ -488,7 +538,7 @@ impl QueryEngine {
                 },
             );
         }
-        Ok(planner::explain(query, &|table| {
+        Ok(planner::explain(query, |table| {
             stats
                 .get(table)
                 .copied()
@@ -499,7 +549,7 @@ impl QueryEngine {
     /// Build a bare `EXPLAIN`'s opcode listing for `query` (#55): the
     /// planner's [`db_core::codegen::batch::explain_opcodes`], one section
     /// per phase the executor actually runs.
-    pub fn explain_opcodes(&self, query: &Query) -> Result<Vec<OpcodeSection>> {
+    pub fn explain_opcodes(&self, query: &Select) -> Result<Vec<OpcodeSection>> {
         Ok(planner::explain_opcodes(query)?)
     }
 }
@@ -645,7 +695,7 @@ mod tests {
 
         let (explain, query) = sql::parse_explain("EXPLAIN SELECT id FROM orders").unwrap();
         assert_eq!(explain, Explain::Opcodes);
-        assert_eq!(query.from, "orders");
+        assert_eq!(from_table(&query).unwrap(), "orders");
 
         let (explain, _) = sql::parse_explain("EXPLAIN QUERY PLAN SELECT id FROM orders").unwrap();
         assert_eq!(explain, Explain::QueryPlan);

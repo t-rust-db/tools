@@ -145,7 +145,7 @@ fn format_plan(nodes: &[PlanNode]) -> String {
 /// Render a bare `EXPLAIN`'s opcode listing (#55): `addr | opcode |
 /// operands | comment`, one table per [`OpcodeSection`]. Multiple sections
 /// (a join's `build`/`probe`/`body`) get a header line each; the
-/// `Finalize` row -- the barrier between the parallel per-segment phase
+/// `Combine` row (db-core#48 split the old `Finalize` into `Combine`/`Sort`/`Limit`) -- the barrier between the parallel per-segment phase
 /// and the sequential merge phase (ADR 0007) -- gets a separator above it
 /// so the boundary is visible.
 fn format_opcodes(sections: &[OpcodeSection]) -> String {
@@ -201,7 +201,7 @@ fn format_opcodes(sections: &[OpcodeSection]) -> String {
         push_row(&mut out, &headers);
         push_border(&mut out, "├", "┼", "┤");
         for (row, opcode_row) in rows.iter().zip(&section.rows) {
-            // The Finalize barrier (ADR 0007): everything above ran per
+            // The Combine barrier (ADR 0007): everything above ran per
             // segment in parallel, everything here runs once over the
             // merged output -- draw a divider so the boundary is visible.
             if opcode_row.is_finalize {
@@ -278,16 +278,17 @@ mod tests {
             rows: vec![
                 opcode_row(0, "LoadColumn", "reg=0 column=id", false),
                 opcode_row(1, "Emit", "registers=[0]", false),
-                opcode_row(2, "Finalize", "limit=None", true),
+                opcode_row(2, "Combine", "agg_parts=[] num_group_keys=0", true),
+                opcode_row(3, "Limit", "n=5", false),
             ],
         }];
         let out = format_opcodes(&sections);
-        // Two data borders before Finalize's row (top + the inserted
+        // Two data borders before Combine's row (top + the inserted
         // divider) plus the closing border: four "├" dividers total is
         // wrong to assert exactly, so just check the divider exists
-        // between Emit and Finalize.
+        // between Emit and Combine; none between Combine and Limit.
         let emit_pos = out.find("Emit").unwrap();
-        let finalize_pos = out.find("Finalize").unwrap();
+        let finalize_pos = out.find("Combine").unwrap();
         let between = &out[emit_pos..finalize_pos];
         assert!(between.contains('├'));
     }
