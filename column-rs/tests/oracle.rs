@@ -1336,3 +1336,58 @@ fn oracle_select_star_join_matches_duckdb() {
     assert_eq!(result.columns.len(), expected[0].len());
     assert_eq!(result.rows.len(), expected.len());
 }
+
+/// #4: `||` string concatenation (`BinOp::Concat -> MapOp::Concat`) and
+/// unary minus (`Expr::Neg -> MapOp::Neg`) match DuckDB end to end. The
+/// mapping itself lives in db-core's batch planner since the planner moved
+/// there (0.16.0); this pins the column-rs-visible behavior. Both operators
+/// are exercised in `WHERE` position: db-core's column grammar still
+/// rejects any computed expression in the SELECT list (see the last
+/// assertion), tracked upstream as db-core#198.
+#[test]
+fn oracle_concat_and_unary_minus_match_duckdb() {
+    use column_rs::query::QueryEngine;
+
+    let path = fixture_path("funky.parquet");
+    let cases: &[(&str, &str)] = &[
+        (
+            "SELECT performer_id FROM '{path}' WHERE -audience_size < -300 ORDER BY performer_id",
+            "SELECT performer_id FROM funky WHERE -audience_size < -300 ORDER BY performer_id",
+        ),
+        (
+            "SELECT performer_id FROM '{path}' WHERE -(audience_size * 2) + 1 < -700 ORDER BY performer_id",
+            "SELECT performer_id FROM funky WHERE -(audience_size * 2) + 1 < -700 ORDER BY performer_id",
+        ),
+        (
+            "SELECT performer_id FROM '{path}' WHERE stage_name || '/' || act > 'M' ORDER BY performer_id",
+            "SELECT performer_id FROM funky WHERE stage_name || '/' || act > 'M' ORDER BY performer_id",
+        ),
+    ];
+    let engine = QueryEngine::open(Path::new(&path)).unwrap();
+    for (duck_sql, ours_sql) in cases {
+        let csv = require_duckdb_or_skip!(&duck_sql.replace("{path}", &path));
+        let expected: Vec<i64> = parse_csv_rows(&csv)
+            .iter()
+            .map(|row| cell_as_i64(&row[0]).unwrap())
+            .collect();
+        assert!(
+            !expected.is_empty(),
+            "oracle returned no rows for {duck_sql}"
+        );
+        let result = engine.execute(ours_sql).unwrap();
+        let ours: Vec<i64> = result
+            .rows
+            .iter()
+            .map(|row| row[0].as_f64().unwrap() as i64)
+            .collect();
+        assert_eq!(ours, expected, "{ours_sql}");
+    }
+
+    // Computed SELECT-list items are a db-core column-grammar gap, not an
+    // operator-wiring one: the rejection is explicit, never a wrong answer.
+    let err = match engine.execute("SELECT stage_name || act FROM funky") {
+        Ok(_) => panic!("computed SELECT-list item unexpectedly accepted"),
+        Err(e) => e.to_string(),
+    };
+    assert!(err.contains("unsupported SELECT expression"), "{err}");
+}
