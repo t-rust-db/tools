@@ -1341,9 +1341,8 @@ fn oracle_select_star_join_matches_duckdb() {
 /// unary minus (`Expr::Neg -> MapOp::Neg`) match DuckDB end to end. The
 /// mapping itself lives in db-core's batch planner since the planner moved
 /// there (0.16.0); this pins the column-rs-visible behavior. Both operators
-/// are exercised in `WHERE` position: db-core's column grammar still
-/// rejects any computed expression in the SELECT list (see the last
-/// assertion), tracked upstream as db-core#198.
+/// are exercised in `WHERE` position and, since db-core#198 (v0.63.0),
+/// projected in the SELECT list.
 #[test]
 fn oracle_concat_and_unary_minus_match_duckdb() {
     use column_rs::query::QueryEngine;
@@ -1383,11 +1382,32 @@ fn oracle_concat_and_unary_minus_match_duckdb() {
         assert_eq!(ours, expected, "{ours_sql}");
     }
 
-    // Computed SELECT-list items are a db-core column-grammar gap, not an
-    // operator-wiring one: the rejection is explicit, never a wrong answer.
-    let err = match engine.execute("SELECT stage_name || act FROM funky") {
-        Ok(_) => panic!("computed SELECT-list item unexpectedly accepted"),
-        Err(e) => e.to_string(),
-    };
-    assert!(err.contains("unsupported SELECT expression"), "{err}");
+    // Computed SELECT-list items (db-core#198, v0.63.0): the same
+    // operators projected instead of filtered.
+    let csv = require_duckdb_or_skip!(&format!(
+        "SELECT stage_name || '/' || act, -audience_size, -(audience_size * 2) + 1 \
+         FROM '{path}' ORDER BY performer_id"
+    ));
+    let expected: Vec<(String, i64, i64)> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| {
+            (
+                cell_as_string(&row[0]).unwrap(),
+                cell_as_i64(&row[1]).unwrap(),
+                cell_as_i64(&row[2]).unwrap(),
+            )
+        })
+        .collect();
+    let result = engine
+        .execute(
+            "SELECT stage_name || '/' || act, -audience_size, -(audience_size * 2) + 1 \
+             FROM funky ORDER BY performer_id",
+        )
+        .unwrap();
+    assert_eq!(result.rows.len(), expected.len());
+    for ((name, neg, expr), row) in expected.iter().zip(&result.rows) {
+        assert_eq!(row[0].to_string(), *name);
+        assert_eq!(row[1].as_f64().unwrap() as i64, *neg);
+        assert_eq!(row[2].as_f64().unwrap() as i64, *expr);
+    }
 }

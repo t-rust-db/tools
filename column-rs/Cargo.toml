@@ -12,6 +12,6 @@ name = "column-rs"
 path = "src/bin/column-rs/main.rs"
 
 [dependencies]
-db-storage = { git = "https://github.com/t-rust-db/db-storage", tag = "v0.5.8", default-features = false, features = ["column"] }
-db-core = { git = "https://github.com/t-rust-db/db-core", tag = "v0.62.1", default-features = false, features = ["parser-column", "vm-batch", "codegen-batch", "emit-batch"] }
+db-storage = { git = "https://github.com/t-rust-db/db-storage", tag = "v0.5.9", default-features = false, features = ["column"] }
+db-core = { git = "https://github.com/t-rust-db/db-core", tag = "v0.68.1", default-features = false, features = ["parser-column", "vm-batch", "codegen-batch", "emit-batch"] }
 db-cli = { git = "https://github.com/t-rust-db/db-cli", tag = "v0.4.1" }

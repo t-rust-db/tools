@@ -271,16 +271,17 @@ fn in_subquery(select: &Select) -> Option<&Select> {
 
 /// A result column that is a window function (`f(...) OVER (...)`).
 fn is_window_column(column: &ResultColumn) -> bool {
-    matches!(
-        column,
+    match column {
         ResultColumn::Expr {
-            expr: Expr {
-                kind: ExprKind::FunctionCall { over: Some(_), .. },
-                ..
-            },
+            expr:
+                Expr {
+                    kind: ExprKind::FunctionCall { tail, .. },
+                    ..
+                },
             ..
-        }
-    )
+        } => matches!(tail.as_deref(), Some(t) if t.over.is_some()),
+        _ => false,
+    }
 }
 
 pub fn run_program(file: &ParquetFile, program: &[Opcode]) -> Result<Vec<Vec<Value>>> {
