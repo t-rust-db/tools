@@ -4,6 +4,10 @@ All notable changes to column-rs. Format follows [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+### Added
+
+- DuckDB oracle test for `||` concatenation and unary minus (#4): both operators were already wired through db-core's batch planner; the test pins them in `WHERE` position and asserts that a computed SELECT-list item is still rejected explicitly (db-core#198).
+
 ### Changed
 
 - db-core pinned to v0.62.1 (was v0.61.1) and db-storage to v0.5.8. db-core#192 moved the AOT emitter: `db_core::emit::batch::generate` is now `db_core::codegen::batch::emit::generate` (call sites in `main.rs`, `codegen_e2e.rs`, docs).
