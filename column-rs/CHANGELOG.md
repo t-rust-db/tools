@@ -10,6 +10,7 @@ All notable changes to column-rs. Format follows [Keep a Changelog](https://keep
 
 ### Changed
 
+- db-core pinned to v0.68.1 and db-storage to v0.5.9: `ExprKind::FunctionCall.over` became `tail: Option<FunctionTail { filter, over }>` (db-core#67), so window detection reads `tail.over`; the oracle test for `||`/unary minus now also projects them in the SELECT list (db-core#198 landed in v0.63.0).
 - db-core pinned to v0.62.1 (was v0.61.1) and db-storage to v0.5.8. db-core#192 moved the AOT emitter: `db_core::emit::batch::generate` is now `db_core::codegen::batch::emit::generate` (call sites in `main.rs`, `codegen_e2e.rs`, docs).
 
 ## [0.18.0] - 2026-09-06
