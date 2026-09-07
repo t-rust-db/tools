@@ -4,7 +4,7 @@ pub mod query;
 /// surface — the actual implementation now lives in `db-core`'s
 /// `BatchExecutor` (`db_core::vm::batch`), alongside `vm::row`/`vm::stream`
 /// stubs for the other two executors that column-rs doesn't use. Emitted
-/// binaries (`column-rs codegen`, via `db_core::emit::batch`) import
+/// binaries (`column-rs codegen`, via `db_core::codegen::batch::emit`) import
 /// `column_rs::vm::{AggPart, MapOp, Opcode, Value}` from here.
 pub mod vm {
     pub use db_core::vm::batch::*;
@@ -25,7 +25,7 @@ pub use db_storage::column::parquet::reader;
 /// `types`/`parser::ast`/`parser` modules (the AST is `parser::ast::Select`
 /// since db-core#153 retired `expr::Query`).
 pub mod sql {
-    // The whole AST is re-exported: `db_core::emit::batch`'s generated
+    // The whole AST is re-exported: `db_core::codegen::batch::emit`'s generated
     // binaries reconstruct a parsed `Select` literally (`use
     // column_rs::sql::{BinaryOp, Distinctness, Expr, ..., WindowDef}`).
     pub use db_core::codegen::batch::{WindowFunc, WindowSpec};

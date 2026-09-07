@@ -128,10 +128,10 @@ fn run_column_repl(paths: &[PathBuf]) -> ExitCode {
 /// of time into a standalone `.rs` source file embedding the VM program as
 /// a `const`, instead of running it. The subcommand keeps its historical
 /// name; the implementation is db-core's AOT *emitter*
-/// (`db_core::emit::batch`, ADR 0007 there), pointed at this crate's
+/// (`db_core::codegen::batch::emit`, ADR 0007 there), pointed at this crate's
 /// runtime glue (`column_rs::query::run_program` etc.).
 fn codegen_command(sql: &str, out_path: &std::path::Path) -> ExitCode {
-    match db_core::emit::batch::generate("column_rs", sql) {
+    match db_core::codegen::batch::emit::generate("column_rs", sql) {
         Ok(src) => match std::fs::write(out_path, src) {
             Ok(()) => {
                 println!("wrote {}", out_path.display());
