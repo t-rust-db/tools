@@ -27,11 +27,11 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.70.1"
+version = "0.71.1"
 
 [[package]]
 name = "db-storage"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "db-core",
  "memmap2",
