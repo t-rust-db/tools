@@ -30,6 +30,8 @@ pub enum QueryError {
     UnsupportedSemiJoin(String),
     /// A `SELECT`-list item the batch planner cannot compile.
     UnsupportedSelectItem(String),
+    /// The join planner was handed a `SELECT` without a `JOIN` (db-core#231).
+    NoJoinClause,
     /// `Right`/`Full`/`Cross` are parseable (`db_core::parser::ast::JoinOp`) but
     /// only `Inner`/`Left` hash-join execution exists so far.
     UnsupportedJoinKind(JoinOp),
@@ -46,6 +48,7 @@ impl fmt::Display for QueryError {
         match self {
             QueryError::UnsupportedSemiJoin(msg) => write!(f, "unsupported semi-join: {msg}"),
             QueryError::UnsupportedSelectItem(msg) => write!(f, "unsupported SELECT item: {msg}"),
+            QueryError::NoJoinClause => write!(f, "join planner called on a SELECT without a JOIN"),
             QueryError::UnsupportedJoinKind(kind) => {
                 write!(
                     f,
@@ -88,6 +91,7 @@ impl From<PlanError> for QueryError {
             PlanError::UnsupportedJoinKind(kind) => QueryError::UnsupportedJoinKind(kind),
             PlanError::StarWithAggregation => QueryError::StarWithAggregation,
             PlanError::UnsupportedSelectItem(msg) => QueryError::UnsupportedSelectItem(msg),
+            PlanError::NoJoinClause => QueryError::NoJoinClause,
         }
     }
 }
@@ -351,7 +355,7 @@ pub fn execute_semi_join(
 /// whole table is materialized (partitioning/sorting need every row) and
 /// the planned window program runs over it as a single segment.
 pub fn execute_windowed(file: &ParquetFile, query: &Select) -> Result<Vec<Vec<Value>>> {
-    let program = planner::compile_window(query);
+    let program = planner::compile_window(query)?;
     let columns = resolve_columns(&leaf_columns(file), &program.columns_to_load())?;
     let batch = read_whole_table(file, &columns);
     let segments = [InMemorySegment(batch)];
