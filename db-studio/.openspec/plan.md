@@ -136,6 +136,41 @@ exist) — nothing to build in `db-core` to get here, purely a rendering and
 input-loop exercise in db-studio itself. Exit criteria: type a query, see
 results or an error, quit cleanly.
 
+### M1.5 — usability & layout pass
+
+Inserted after M1 shipped (#7/#8) because the bare `Paragraph`-based query
+box and flat white/red styling turned out too rough to keep building on --
+not new engine surface, a quality pass over what M1 already has, informed
+by looking at how Harlequin (a terminal SQL IDE, closest comparable) and
+ratatui's own showcase apps (Longbridge Terminal, gitui) handle the same
+problems:
+
+- **Query pane**: replace the hand-rolled `QueryPane` with [`tui-textarea`]
+  (multi-line editing, cursor/selection, undo/redo already built) instead
+  of maintaining our own cursor math.
+- **Syntax highlighting**: classify tokens via `db-core`'s own row
+  tokenizer (`parser::row::tokenizer`), not a second SQL grammar
+  (`syntect`/`tree-sitter-sql`) that can drift from what the engine
+  actually accepts -- db-cli's existing `highlight` module is a
+  keyword-list ANSI-escape highlighter for a line-editor, the right idea
+  but the wrong shape (raw escapes, not `ratatui::text::Span`s) and not
+  tokenizer-driven, so it's a spec to crib from, not code to lift.
+- **Schema tree inspector**: a [`tui-tree-widget`] pane (table -> columns)
+  fed by `RowEngine::run_query` against `sqlite_master`/`PRAGMA
+  table_info` -- no `db-core` changes needed, M1's `Engine::run_query` is
+  already sufficient. Doubles as M2's open-files pane once multiple files
+  exist, so it doesn't need throwing away later.
+- **Completion**: a schema-aware popup using [`nucleo`] (fuzzy ranking,
+  what Helix uses) over the same catalog query as the tree inspector.
+- **Visual polish**: `BorderType::Rounded`, a [`catppuccin`] palette
+  instead of hand-picked `Color::White`/`Color::Red`, the active pane's
+  border distinctly highlighted (Longbridge's focus convention -- nothing
+  today distinguishes which pane has keyboard focus), and a `ratatui::
+  widgets::Scrollbar` on the grid pane instead of relying on the
+  highlighted-row cue alone.
+
+Tracked as epic t-rust-db/db-studio#13 (sub-issues #9-#12).
+
 ### M2 — file switcher, multiple `.sqlite` files
 
 Add the left file pane and the status bar; CLI can take multiple files,
