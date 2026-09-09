@@ -10,7 +10,7 @@ authors = ["Ilja Heitlager <iheitlager@schubergphilis.com>"]
 [dependencies]
 # M1 is row-mode only (see .openspec/plan.md) -- batch/stream features
 # come with M3/M5.
-db-core = { path = "../db-core", default-features = false, features = ["storage-row", "codegen-row"] }
+db-core = { path = "../db-core", default-features = false, features = ["engine-row"] }
 ratatui = "0.30.2"
 crossterm = "0.29.0"
 
