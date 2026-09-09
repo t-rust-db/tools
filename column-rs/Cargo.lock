@@ -10,10 +10,10 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "column-rs"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "db-cli",
- "db-core",
+ "db-core 0.76.4",
  "db-storage",
 ]
 
@@ -28,12 +28,17 @@ dependencies = [
 [[package]]
 name = "db-core"
 version = "0.71.1"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.71.1#f45e8a2839f9cfbdaaeed1dcb78658764610f47b"
+
+[[package]]
+name = "db-core"
+version = "0.76.4"
 
 [[package]]
 name = "db-storage"
-version = "0.6.2"
+version = "0.6.4"
 dependencies = [
- "db-core",
+ "db-core 0.71.1",
  "memmap2",
  "ruzstd",
 ]
