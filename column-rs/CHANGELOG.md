@@ -4,6 +4,8 @@ All notable changes to column-rs. Format follows [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-09
+
 ### Changed
 
 - **Joins probe per row group, in parallel** (#27). `execute_joined` reads only the build (right) side whole; the probe (left) side stays one `RowGroupSegment` per row group and goes to db-core 0.76's `run_join_segments`, which builds the hash table once, shares it across worker threads, and never materializes the joined table. Before, both sides were read whole and the join ran single-threaded: the `t-rust-db/benchmark` parity `join` at 10M rows took 4.84 s (108x DuckDB) at 4.4 GB peak RSS.
