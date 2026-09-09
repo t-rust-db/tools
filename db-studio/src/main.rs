@@ -2,6 +2,8 @@
 //! `.openspec/plan.md` for scope and phasing.
 
 mod app;
+mod error_pane;
+mod grid_pane;
 mod query_pane;
 mod terminal;
 

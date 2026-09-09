@@ -1,21 +1,26 @@
-//! The app loop wiring the query pane in (db-studio#3). Grid/error panes
-//! (#4/#5) replace `last_submitted`'s placeholder rendering once they land.
+//! The app loop wiring query -> grid/error together (db-studio#4/#5).
+//! `fake_run_query` is scaffolding standing in for #2's real engine
+//! hookup (blocked on t-rust-db/db-core#295) -- #6 replaces it with a
+//! real `Engine` call, at which point this function is deleted, not kept
+//! around as a fallback.
 
 use std::io;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
-use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
+use crate::error_pane::ErrorPane;
+use crate::grid_pane::{Grid, GridPane};
 use crate::query_pane::QueryPane;
 use crate::terminal::Tui;
 
 pub struct App {
     running: bool,
     query_pane: QueryPane,
-    last_submitted: Option<String>,
+    grid_pane: GridPane,
+    error_pane: ErrorPane,
 }
 
 impl App {
@@ -23,7 +28,8 @@ impl App {
         Self {
             running: true,
             query_pane: QueryPane::new(),
-            last_submitted: None,
+            grid_pane: GridPane::new(),
+            error_pane: ErrorPane::new(),
         }
     }
 
@@ -35,16 +41,16 @@ impl App {
         Ok(())
     }
 
-    fn draw(&self, frame: &mut Frame) {
-        let [query_area, output_area] =
-            Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(frame.area());
+    fn draw(&mut self, frame: &mut Frame) {
+        let [query_area, grid_area, error_area] = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(3),
+        ])
+        .areas(frame.area());
         self.query_pane.render(frame, query_area);
-        let placeholder = self
-            .last_submitted
-            .as_deref()
-            .map(|q| format!("submitted: {q}"))
-            .unwrap_or_default();
-        frame.render_widget(Paragraph::new(placeholder), output_area);
+        self.grid_pane.render(frame, grid_area);
+        self.error_pane.render(frame, error_area);
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
@@ -66,11 +72,29 @@ impl App {
                 self.running = false;
                 return Ok(());
             }
+            match key.code {
+                KeyCode::Down => self.grid_pane.scroll_down(),
+                KeyCode::Up => self.grid_pane.scroll_up(),
+                _ => {}
+            }
             if let Some(query) = self.query_pane.handle_key(key) {
-                self.last_submitted = Some(query);
+                self.submit(&query);
             }
         }
         Ok(())
+    }
+
+    fn submit(&mut self, query: &str) {
+        match fake_run_query(query) {
+            Ok(grid) => {
+                self.grid_pane.set_grid(grid);
+                self.error_pane.clear();
+            }
+            Err(message) => {
+                self.grid_pane.clear();
+                self.error_pane.set_error(message);
+            }
+        }
     }
 }
 
@@ -78,4 +102,18 @@ impl Default for App {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Scaffolding, not real query execution -- see this module's doc comment.
+fn fake_run_query(query: &str) -> Result<Grid, String> {
+    if query.to_ascii_lowercase().contains("error") {
+        return Err(format!("no such table (fake engine, #2 pending): {query}"));
+    }
+    Ok(Grid::new(
+        vec!["query".to_string(), "note".to_string()],
+        vec![vec![
+            query.to_string(),
+            "fake result -- db-core#295/#2 pending".to_string(),
+        ]],
+    ))
 }
