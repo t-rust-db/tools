@@ -2,6 +2,7 @@
 //! `.openspec/plan.md` for scope and phasing.
 
 mod app;
+mod query_pane;
 mod terminal;
 
 use std::io;
