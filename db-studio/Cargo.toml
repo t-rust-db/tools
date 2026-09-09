@@ -1,0 +1,24 @@
+[package]
+name = "db-studio"
+version = "0.1.0"
+edition = "2021"
+description = "A TUI database studio for the t-rust-db family -- open a .sqlite/.parquet/.log file, get a query pane and grid output over the matching db-core engine"
+license = "Apache-2.0"
+repository = "https://github.com/t-rust-db/db-studio"
+authors = ["Ilja Heitlager <iheitlager@schubergphilis.com>"]
+
+[dependencies]
+# M1 is row-mode only (see .openspec/plan.md) -- batch/stream features
+# come with M3/M5.
+db-core = { path = "../db-core", default-features = false, features = ["storage-row", "codegen-row"] }
+ratatui = "0.30.2"
+crossterm = "0.29.0"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
