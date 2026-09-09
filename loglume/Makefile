@@ -1,6 +1,6 @@
 # loglume Makefile
 
-.PHONY: help build test check lint fmt clean run start version
+.PHONY: help build test check lint fmt clean run start version smoke
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -36,3 +36,8 @@ gen-logs: ## Generate test logs: make gen-logs N=1000
 
 version: ## Show version
 	@cargo run -- --version
+
+smoke: ## Build and run --help/--version (cheapest CLI survival check)
+	cargo build --bin loglume
+	@./target/debug/loglume --help >/dev/null
+	@./target/debug/loglume --version
