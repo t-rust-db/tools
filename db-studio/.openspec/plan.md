@@ -70,6 +70,17 @@ stream if the stream VM doesn't support them yet).
 - **Status bar.** Active file, active engine/mode, connection/transaction
   state, cursor position.
 
+**No dot-commands in the query pane.** `sqlite-rs` and `column-rs`'s REPLs
+have `.dot`-syntax meta-commands (`.tables`, `.schema`, ...); `loglume` has
+no equivalent — it's a `clap` CLI (`--tail`/`--follow`), not a REPL, so
+there's no existing third dot-command set to match. Typing dot-syntax into
+a pane whose grammar is otherwise "SQL, mode determines what's accepted"
+(see Shared core) would special-case two of three modes and leave the third
+with nothing. Instead: a command palette (keybinding-triggered, e.g. Zed's
+`Cmd-K`) surfaces the row/batch dot-command equivalents (`.tables`,
+`.schema`, ...) and stream's tail/follow-style actions as palette entries,
+uniformly across all three modes. The query pane stays pure SQL always.
+
 ## Shared core, not reimplemented
 
 - **Parser**: one `db-core` SQL grammar for all three modes; db-studio never
@@ -168,6 +179,11 @@ multi-buffer query editing, fuzzy file switching, schema-aware hover, and
 these are quality-of-life and scope-expansion features, not blockers for a
 usable tool.
 
+The command palette (see Layout — no dot-commands in the query pane) is
+placed here provisionally; `.tables`/`.schema` discoverability might be
+rough enough without it in M1 (row mode) that it's worth pulling earlier —
+flagged in Open questions rather than decided here.
+
 ## Decisions
 
 - **TUI framework: `ratatui` + `crossterm`.** `ratatui`'s `Table`/`Paragraph`/
@@ -193,6 +209,9 @@ usable tool.
 
 ## Open questions
 
+- Does the command palette need to ship in M1 (row mode's `.tables`/
+  `.schema` discoverability) rather than waiting for M6, given the query
+  pane deliberately has no dot-command fallback?
 - What does "live" mean for a `.log` query — polling, `inotify`/`kqueue`
   file-watch, or an explicit re-run keystroke? Affects whether the streaming
   VM needs an incremental/resumable execution model or can stay
