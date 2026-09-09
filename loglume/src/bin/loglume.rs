@@ -5,7 +5,7 @@
 //!     cat app.log | loglume "severity = ERROR"
 
 use clap::Parser;
-use loglume::{LogBatch, Severity, Source, SourceKind, SyslogParser};
+use loglume::{Facility, LogBatch, Severity, Source, SourceKind, SyslogParser};
 use memmap2::Mmap;
 use std::fs::File;
 use std::io::{self, Read};
@@ -296,7 +296,47 @@ fn parse_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool> {
         }
     }
 
+    // Try parsing "facility = <name>"
+    if let Some(rest) = filter.strip_prefix("facility") {
+        let rest = rest.trim();
+        if let Some(name) = rest.strip_prefix("=") {
+            let name = name.trim();
+            if let Some(fac) = parse_facility_name(name) {
+                return Box::new(move |batch, i| {
+                    batch.facility.get(i).and_then(|f| *f).map_or(false, |f| f == fac)
+                });
+            }
+        }
+    }
+
     // Fallback: match all (TODO: proper error handling)
     eprintln!("warning: unrecognized filter '{filter}', matching all lines");
     Box::new(|_, _| true)
+}
+
+/// Parse facility name to enum.
+fn parse_facility_name(name: &str) -> Option<Facility> {
+    match name.to_ascii_lowercase().as_str() {
+        "kern" | "kernel" => Some(Facility::Kern),
+        "user" => Some(Facility::User),
+        "mail" => Some(Facility::Mail),
+        "daemon" => Some(Facility::Daemon),
+        "auth" | "security" => Some(Facility::Auth),
+        "syslog" => Some(Facility::Syslog),
+        "lpr" => Some(Facility::Lpr),
+        "news" => Some(Facility::News),
+        "uucp" => Some(Facility::Uucp),
+        "cron" => Some(Facility::Cron),
+        "authpriv" => Some(Facility::AuthPriv),
+        "ftp" => Some(Facility::Ftp),
+        "local0" => Some(Facility::Local0),
+        "local1" => Some(Facility::Local1),
+        "local2" => Some(Facility::Local2),
+        "local3" => Some(Facility::Local3),
+        "local4" => Some(Facility::Local4),
+        "local5" => Some(Facility::Local5),
+        "local6" => Some(Facility::Local6),
+        "local7" => Some(Facility::Local7),
+        _ => None,
+    }
 }
