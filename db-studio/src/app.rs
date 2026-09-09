@@ -1,13 +1,15 @@
-//! The app loop wiring query -> grid/error together (db-studio#4/#5).
-//! `fake_run_query` is scaffolding standing in for #2's real engine
-//! hookup (blocked on t-rust-db/db-core#295) -- #6 replaces it with a
-//! real `Engine` call, at which point this function is deleted, not kept
-//! around as a fallback.
+//! The app loop, wired end-to-end (db-studio#6): submit a query -> run it
+//! against the open file's `Engine` -> grid or error pane -> quit cleanly.
+//! `Box<dyn Engine>` rather than a concrete `RowEngine`, even though M1
+//! only ever opens one -- that's the seam M3 needs to switch engines per
+//! open file (t-rust-db/db-core#295), and there is no cost to holding it
+//! from the start.
 
 use std::io;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use db_core::engine::Engine;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::Frame;
 
@@ -18,15 +20,17 @@ use crate::terminal::Tui;
 
 pub struct App {
     running: bool,
+    engine: Box<dyn Engine>,
     query_pane: QueryPane,
     grid_pane: GridPane,
     error_pane: ErrorPane,
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(engine: Box<dyn Engine>) -> Self {
         Self {
             running: true,
+            engine,
             query_pane: QueryPane::new(),
             grid_pane: GridPane::new(),
             error_pane: ErrorPane::new(),
@@ -85,35 +89,21 @@ impl App {
     }
 
     fn submit(&mut self, query: &str) {
-        match fake_run_query(query) {
-            Ok(grid) => {
-                self.grid_pane.set_grid(grid);
+        match self.engine.run_query(query) {
+            Ok(result) => {
+                let headers = result.columns;
+                let rows = result
+                    .rows
+                    .into_iter()
+                    .map(|row| row.iter().map(ToString::to_string).collect())
+                    .collect();
+                self.grid_pane.set_grid(Grid::new(headers, rows));
                 self.error_pane.clear();
             }
-            Err(message) => {
+            Err(err) => {
                 self.grid_pane.clear();
-                self.error_pane.set_error(message);
+                self.error_pane.set_error(err.to_string());
             }
         }
     }
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Scaffolding, not real query execution -- see this module's doc comment.
-fn fake_run_query(query: &str) -> Result<Grid, String> {
-    if query.to_ascii_lowercase().contains("error") {
-        return Err(format!("no such table (fake engine, #2 pending): {query}"));
-    }
-    Ok(Grid::new(
-        vec!["query".to_string(), "note".to_string()],
-        vec![vec![
-            query.to_string(),
-            "fake result -- db-core#295/#2 pending".to_string(),
-        ]],
-    ))
 }
