@@ -1,4 +1,4 @@
-//! Parquet glue between `db_storage`'s `column::parquet` module and
+//! Parquet glue between `db_core::storage`'s `column::parquet` module and
 //! db-core's planner ([`db_core::codegen::batch`]) and cross-segment
 //! engine ([`db_core::vm::engine`]): resolve a program's column names
 //! against a file's leaf schema, expose each row group as a
@@ -14,10 +14,10 @@
 use crate::vm::{Batch, Opcode, Program, Segment, Value};
 use db_core::codegen::batch::{self as planner, PlanError, TableStats};
 use db_core::parser::ast::{Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
+use db_core::storage::column::parquet::footer::PhysicalType;
+use db_core::storage::{ParquetFile, Vfs, VfsFile};
 use db_core::vm::batch::VmError;
 use db_core::vm::engine::{self, InMemorySegment};
-use db_storage::column::parquet::footer::PhysicalType;
-use db_storage::{ParquetFile, Vfs, VfsFile};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -44,7 +44,7 @@ pub enum QueryError {
     /// `PlanError::Internal`): a planner bug, not a user error.
     PlannerInvariant(String),
     Vm(crate::vm::VmError),
-    File(db_storage::FileError),
+    File(db_core::storage::FileError),
     Io(String),
 }
 
@@ -83,8 +83,8 @@ impl From<crate::vm::VmError> for QueryError {
     }
 }
 
-impl From<db_storage::FileError> for QueryError {
-    fn from(e: db_storage::FileError) -> Self {
+impl From<db_core::storage::FileError> for QueryError {
+    fn from(e: db_core::storage::FileError) -> Self {
         QueryError::File(e)
     }
 }
@@ -408,7 +408,7 @@ pub struct QueryResult {
 /// to re-parse the footer.
 struct Table {
     name: String,
-    data: db_storage::MmapRegion,
+    data: db_core::storage::MmapRegion,
     column_names: Vec<String>,
 }
 
@@ -443,7 +443,7 @@ impl QueryEngine {
     /// Load an additional Parquet file into this session, under `name` (or
     /// its file stem if `None`). Errors if that table name is already loaded.
     pub fn add_table(&mut self, path: &std::path::Path, name: Option<String>) -> Result<()> {
-        let data = db_storage::PosixVfs
+        let data = db_core::storage::PosixVfs
             .open(path)
             .and_then(|f| f.mmap())
             .map_err(|e| QueryError::Io(format!("{}: {e}", path.display())))?;

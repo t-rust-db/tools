@@ -15,10 +15,10 @@ pub mod vm {
 /// `column::parquet` module (folded in from the standalone `db-parquet`
 /// repo, `db-storage#4`).
 pub mod file {
-    pub use db_storage::{DictionaryIndices, FileError, ParquetFile, RowGroupReader};
+    pub use db_core::storage::{DictionaryIndices, FileError, ParquetFile, RowGroupReader};
 }
-pub use db_storage::column::parquet::nested;
-pub use db_storage::column::parquet::reader;
+pub use db_core::storage::column::parquet::nested;
+pub use db_core::storage::column::parquet::reader;
 
 /// Re-exports preserving column-rs's pre-extraction `column_rs::sql::*`
 /// surface — the actual implementation now lives in `db-core`'s
