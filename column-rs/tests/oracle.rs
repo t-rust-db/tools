@@ -560,6 +560,67 @@ fn oracle_inner_join_matches_duckdb() {
     }
 }
 
+/// column-rs#27: the probe side of a join is one segment per row group
+/// (`production.parquet` has three), the hash table is built once and
+/// shared, and the body's `GROUP BY` partials are merged across row
+/// groups -- so a fact table spanning several row groups joined to a
+/// dimension with heavy fan-out must still match DuckDB exactly. `COUNT`
+/// stays an integer across the merge (db-core 0.76.0).
+#[test]
+fn oracle_join_across_multiple_row_groups_matches_duckdb() {
+    let production_path = fixture_path("production.parquet");
+    let region_path = fixture_path("region.parquet");
+    let csv = require_duckdb_or_skip!(&format!(
+        "SELECT region.region, COUNT(production.id), SUM(production.amount) \
+         FROM '{production_path}' production \
+         JOIN '{region_path}' region ON production.region = region.region \
+         GROUP BY region.region ORDER BY region.region"
+    ));
+    let expected: Vec<(String, i64, f64)> = parse_csv_rows(&csv)
+        .iter()
+        .map(|row| {
+            (
+                row[0].clone(),
+                row[1].parse().unwrap(),
+                row[2].parse().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(expected.len(), 4, "fixture has four regions");
+
+    let production_data = std::fs::read(&production_path).unwrap();
+    let region_data = std::fs::read(&region_path).unwrap();
+    let production = ParquetFile::open(&production_data).unwrap();
+    assert!(
+        production.num_row_groups() > 1,
+        "fixture must span several row groups"
+    );
+    let region = ParquetFile::open(&region_data).unwrap();
+
+    let parsed = sql::parse(
+        "SELECT region.region, COUNT(production.id), SUM(production.amount) \
+         FROM production JOIN region ON production.region = region.region \
+         GROUP BY region.region ORDER BY region.region",
+    )
+    .unwrap();
+    let rows = query::execute_joined(&production, &region, &parsed).unwrap();
+
+    assert_eq!(rows.len(), expected.len());
+    for ((name, count, sum), row) in expected.iter().zip(&rows) {
+        assert_eq!(row[0].to_string(), *name);
+        assert_eq!(
+            row[1],
+            Value::Int(*count),
+            "COUNT for {name} must be an integer"
+        );
+        assert!(
+            (row[2].as_f64().unwrap() - sum).abs() < 1e-3,
+            "SUM mismatch for {name}: {:?} vs {sum}",
+            row[2]
+        );
+    }
+}
+
 /// #94: `QueryEngine` (the CLI's multi-table session) can load more than
 /// one Parquet file and run a `JOIN` across them, using each file's stem
 /// as its table name -- the same query the free-function `execute_joined`

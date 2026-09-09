@@ -14,6 +14,7 @@
 use crate::vm::{Batch, Opcode, Program, Segment, Value};
 use db_core::codegen::batch::{self as planner, PlanError, TableStats};
 use db_core::parser::ast::{Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
+use db_core::vm::batch::VmError;
 use db_core::vm::engine::{self, InMemorySegment};
 use db_storage::column::parquet::footer::PhysicalType;
 use db_storage::{ParquetFile, Vfs, VfsFile};
@@ -38,6 +39,9 @@ pub enum QueryError {
     /// `SELECT *` (or a mixed `SELECT col, *`) combined with `GROUP BY`, an
     /// aggregate, or a window function.
     StarWithAggregation,
+    /// The batch planner hit one of its own invariants (db-core#232's
+    /// `PlanError::Internal`): a planner bug, not a user error.
+    PlannerInvariant(String),
     Vm(crate::vm::VmError),
     File(db_storage::FileError),
     Io(String),
@@ -59,6 +63,7 @@ impl fmt::Display for QueryError {
                 f,
                 "SELECT * cannot be combined with GROUP BY, an aggregate, or a window function"
             ),
+            QueryError::PlannerInvariant(msg) => write!(f, "planner invariant violated: {msg}"),
             QueryError::UnknownColumn(name) => write!(f, "unknown column: {name}"),
             QueryError::UnknownTable(name) => write!(f, "unknown table: {name}"),
             QueryError::DuplicateTable(name) => write!(f, "table already loaded: {name}"),
@@ -92,6 +97,7 @@ impl From<PlanError> for QueryError {
             PlanError::StarWithAggregation => QueryError::StarWithAggregation,
             PlanError::UnsupportedSelectItem(msg) => QueryError::UnsupportedSelectItem(msg),
             PlanError::NoJoinClause => QueryError::NoJoinClause,
+            PlanError::Internal(msg) => QueryError::PlannerInvariant(msg),
         }
     }
 }
@@ -107,11 +113,20 @@ struct RowGroupSegment<'a, 'm> {
 }
 
 impl<'a, 'm> Segment for RowGroupSegment<'a, 'm> {
-    fn load(&self) -> Batch {
+    /// Decode failures are errors, not data (column-rs#27): a column whose
+    /// page cannot be read used to come back as `num_rows` NULLs, which
+    /// made a corrupt or unsupported file look like a file full of NULLs.
+    fn load(&self) -> std::result::Result<Batch, VmError> {
         let rg = self
             .file
             .row_group(self.row_group_index)
-            .expect("row group index within range");
+            .ok_or_else(|| VmError::SegmentLoad {
+                reason: format!(
+                    "row group {} does not exist (file has {})",
+                    self.row_group_index,
+                    self.file.num_row_groups()
+                ),
+            })?;
         let num_rows = rg.num_rows() as usize;
         let mut batch = Batch::new(num_rows);
         for (name, index, physical_type) in &self.columns {
@@ -147,10 +162,12 @@ impl<'a, 'm> Segment for RowGroupSegment<'a, 'm> {
                         .collect()
                 }),
             }
-            .unwrap_or_else(|_| vec![Value::Null; num_rows]);
+            .map_err(|e| VmError::SegmentLoad {
+                reason: format!("row group {}: column `{name}`: {e}", self.row_group_index),
+            })?;
             batch = batch.with_column(name.clone(), values);
         }
-        batch
+        Ok(batch)
     }
 }
 
@@ -206,7 +223,10 @@ fn row_group_segments<'f>(
 /// (see [`resolve_columns`]) -- used for join build/probe sides and window
 /// queries, which need the whole table materialized rather than streamed
 /// per row group.
-fn read_whole_table(file: &ParquetFile, columns: &[(String, usize, PhysicalType)]) -> Batch {
+fn read_whole_table(
+    file: &ParquetFile,
+    columns: &[(String, usize, PhysicalType)],
+) -> Result<Batch> {
     let mut merged = Batch::new(0);
     for (name, _, _) in columns {
         merged.columns.insert(name.clone(), Vec::new());
@@ -217,7 +237,7 @@ fn read_whole_table(file: &ParquetFile, columns: &[(String, usize, PhysicalType)
             row_group_index,
             columns: columns.to_vec(),
         };
-        let batch = segment.load();
+        let batch = segment.load()?;
         merged.num_rows += batch.num_rows;
         for (name, _, _) in columns {
             if let Some(values) = batch.columns.get(name) {
@@ -229,7 +249,7 @@ fn read_whole_table(file: &ParquetFile, columns: &[(String, usize, PhysicalType)
             }
         }
     }
-    merged
+    Ok(merged)
 }
 
 /// Run a planned `program` over every row group of `file`: resolve its
@@ -300,12 +320,18 @@ fn run(file: &ParquetFile, program: &Program) -> Result<Vec<Vec<Value>>> {
 
 /// Execute a single-table `query` against `file`.
 pub fn execute(file: &ParquetFile, query: &Select) -> Result<Vec<Vec<Value>>> {
-    run(file, &planner::compile(query))
+    run(file, &planner::compile(query)?)
 }
 
-/// Execute a query with exactly one `JOIN` (INNER or LEFT): materialize
-/// both tables fully (joins need the whole build side in memory
-/// regardless), then hand them to [`db_core::vm::engine::run_join`].
+/// Execute a query with exactly one `JOIN` (INNER or LEFT): the right
+/// (build) side is materialized whole -- a hash join needs the entire
+/// build table in memory regardless -- and the left (probe) side stays one
+/// [`Segment`] per row group, so
+/// [`db_core::vm::engine::run_join_segments`] builds the hash table once
+/// and probes + runs the body per row group in parallel, never
+/// materializing the joined table (column-rs#27; the parity `join` at 10M
+/// rows ran single-threaded at 108x DuckDB and 4.4 GB when both sides
+/// were read whole).
 pub fn execute_joined(
     left_file: &ParquetFile,
     right_file: &ParquetFile,
@@ -314,9 +340,9 @@ pub fn execute_joined(
     let plan = planner::compile_join(query)?;
     let left_columns = resolve_columns(&leaf_columns(left_file), &plan.left_columns)?;
     let right_columns = resolve_columns(&leaf_columns(right_file), &plan.right_columns)?;
-    let left = read_whole_table(left_file, &left_columns);
-    let right = read_whole_table(right_file, &right_columns);
-    Ok(engine::run_join(&left, &right, &plan)?)
+    let left = row_group_segments(left_file, &left_columns);
+    let right = read_whole_table(right_file, &right_columns)?;
+    Ok(engine::run_join_segments(left, &right, &plan)?)
 }
 
 /// Execute a query whose entire `WHERE` clause is `col IN (SELECT ...)`
@@ -344,7 +370,7 @@ pub fn execute_semi_join(
         needed.push(plan.key_column.clone());
     }
     let columns = resolve_columns(&leaf_columns(main_file), &needed)?;
-    let batch = read_whole_table(main_file, &columns);
+    let batch = read_whole_table(main_file, &columns)?;
     let filtered = engine::semi_filter(&batch, &plan.key_column, &allowed)?;
 
     let segments = [InMemorySegment(filtered)];
@@ -357,7 +383,7 @@ pub fn execute_semi_join(
 pub fn execute_windowed(file: &ParquetFile, query: &Select) -> Result<Vec<Vec<Value>>> {
     let program = planner::compile_window(query)?;
     let columns = resolve_columns(&leaf_columns(file), &program.columns_to_load())?;
-    let batch = read_whole_table(file, &columns);
+    let batch = read_whole_table(file, &columns)?;
     let segments = [InMemorySegment(batch)];
     Ok(engine::run(&segments, &program)?)
 }
@@ -548,7 +574,7 @@ impl QueryEngine {
                 .get(table)
                 .copied()
                 .expect("every table the query references was opened above")
-        }))
+        })?)
     }
 
     /// Build a bare `EXPLAIN`'s opcode listing for `query` (#55): the
