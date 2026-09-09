@@ -20,6 +20,7 @@ use db_storage::column::parquet::footer::PhysicalType;
 use db_storage::{ParquetFile, Vfs, VfsFile};
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
 pub use db_core::codegen::batch::{OpcodeRow, OpcodeSection, PlanNode};
 
@@ -116,7 +117,7 @@ impl<'a, 'm> Segment for RowGroupSegment<'a, 'm> {
     /// Decode failures are errors, not data (column-rs#27): a column whose
     /// page cannot be read used to come back as `num_rows` NULLs, which
     /// made a corrupt or unsupported file look like a file full of NULLs.
-    fn load(&self) -> std::result::Result<Batch, VmError> {
+    fn load(&self) -> std::result::Result<Arc<Batch>, VmError> {
         let rg = self
             .file
             .row_group(self.row_group_index)
@@ -167,7 +168,7 @@ impl<'a, 'm> Segment for RowGroupSegment<'a, 'm> {
             })?;
             batch = batch.with_column(name.clone(), values);
         }
-        Ok(batch)
+        Ok(Arc::new(batch))
     }
 }
 
@@ -227,10 +228,14 @@ fn read_whole_table(
     file: &ParquetFile,
     columns: &[(String, usize, PhysicalType)],
 ) -> Result<Batch> {
-    let mut merged = Batch::new(0);
-    for (name, _, _) in columns {
-        merged.columns.insert(name.clone(), Vec::new());
-    }
+    // Accumulate per column, then hand each finished `Vec` to the batch
+    // (db-core 0.76.2 shares columns as `Arc<Vec<Value>>`, so they are
+    // built here and wrapped once, not extended in place).
+    let mut merged_columns: Vec<(String, Vec<Value>)> = columns
+        .iter()
+        .map(|(name, _, _)| (name.clone(), Vec::new()))
+        .collect();
+    let mut num_rows = 0;
     for row_group_index in 0..file.num_row_groups() {
         let segment = RowGroupSegment {
             file,
@@ -238,16 +243,16 @@ fn read_whole_table(
             columns: columns.to_vec(),
         };
         let batch = segment.load()?;
-        merged.num_rows += batch.num_rows;
-        for (name, _, _) in columns {
-            if let Some(values) = batch.columns.get(name) {
-                merged
-                    .columns
-                    .get_mut(name)
-                    .unwrap()
-                    .extend(values.iter().cloned());
+        num_rows += batch.num_rows;
+        for (name, values) in &mut merged_columns {
+            if let Some(column) = batch.columns.get(name) {
+                values.extend(column.iter().cloned());
             }
         }
+    }
+    let mut merged = Batch::new(num_rows);
+    for (name, values) in merged_columns {
+        merged = merged.with_column(name, values);
     }
     Ok(merged)
 }

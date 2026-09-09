@@ -9,7 +9,7 @@ All notable changes to column-rs. Format follows [Keep a Changelog](https://keep
 ### Changed
 
 - **Joins probe per row group, in parallel** (#27). `execute_joined` reads only the build (right) side whole; the probe (left) side stays one `RowGroupSegment` per row group and goes to db-core 0.76's `run_join_segments`, which builds the hash table once, shares it across worker threads, and never materializes the joined table. Before, both sides were read whole and the join ran single-threaded: the `t-rust-db/benchmark` parity `join` at 10M rows took 4.84 s (108x DuckDB) at 4.4 GB peak RSS.
-- **db-core pinned to v0.76.1** (was v0.71.1). Absorbed: `codegen::batch::compile`/`explain` return `Result` (db-core 0.75.0; new `QueryError::PlannerInvariant` mirrors `PlanError::Internal`), and `Segment::load` returns `Result<Batch>` (db-core 0.76.0).
+- **db-core pinned to v0.76.4** (was v0.71.1). Absorbed: `codegen::batch::compile`/`explain` return `Result` (db-core 0.75.0; new `QueryError::PlannerInvariant` mirrors `PlanError::Internal`), `Segment::load` returns `Result<Arc<Batch>>` and `Batch.columns` holds `Arc<Vec<Value>>` (db-core 0.76.0/0.76.2, zero-copy loads).
 
 ### Fixed
 
