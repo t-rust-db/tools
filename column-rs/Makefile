@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help test test-lib test-oracle lint fixtures fixtures-funky bench bench-data version
+.PHONY: help smoke test test-lib test-oracle lint fixtures fixtures-funky bench bench-data version
 
 help: ## Show this help
 	@echo ""
@@ -13,6 +13,12 @@ help: ## Show this help
 	@echo ""
 
 # === Test ===
+
+smoke: ## Build the binary and run --help / --version (must exit 0)
+	cargo build --bin column-rs
+	@./target/debug/column-rs --help >/dev/null
+	@./target/debug/column-rs --version
+	@echo "smoke: ok"
 
 test: ## Run the full test suite (unit tests + DuckDB oracle integration tests, tests/oracle.rs)
 	cargo test
