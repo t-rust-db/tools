@@ -1,15 +1,18 @@
 //! The big-right pane (db-studio#4): renders a query result set as a
-//! scrollable grid. `Grid`'s cells are already-formatted strings rather
+//! scrollable grid, with a scrollbar alongside the existing row highlight
+//! (db-studio#12). `Grid`'s cells are already-formatted strings rather
 //! than `db-core`'s `Value` -- mode-agnostic rendering per
 //! `.openspec/plan.md`'s Layout section, so this pane doesn't need to
 //! know which engine (row/batch/stream) produced the data. Converting a
 //! real `Value` into `Grid` cells is #2/#6's job, once
 //! t-rust-db/db-core#295 lands.
 
-use ratatui::layout::{Constraint, Rect};
+use ratatui::layout::{Constraint, Margin, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, Borders, Row, Table, TableState};
+use ratatui::widgets::{Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState};
 use ratatui::Frame;
+
+use crate::theme;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Grid {
@@ -66,8 +69,11 @@ impl GridPane {
     }
 
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let header = Row::new(self.grid.headers.clone())
-            .style(Style::default().add_modifier(Modifier::BOLD));
+        let header = Row::new(self.grid.headers.clone()).style(
+            Style::default()
+                .fg(theme::text())
+                .add_modifier(Modifier::BOLD),
+        );
         let rows = self.grid.rows.iter().map(|r| Row::new(r.clone()));
         let widths: Vec<Constraint> = if self.grid.headers.is_empty() {
             vec![Constraint::Percentage(100)]
@@ -76,9 +82,27 @@ impl GridPane {
         };
         let table = Table::new(rows, widths)
             .header(header)
-            .block(Block::default().title("results").borders(Borders::ALL))
-            .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            .block(theme::pane_block("results", false))
+            .row_highlight_style(
+                Style::default()
+                    .bg(theme::selection_bg())
+                    .add_modifier(Modifier::BOLD),
+            );
         frame.render_stateful_widget(table, area, &mut self.state);
+
+        if self.grid.rows.len() > 1 {
+            let mut scrollbar_state = ScrollbarState::new(self.grid.rows.len())
+                .position(self.state.selected().unwrap_or(0));
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+            frame.render_stateful_widget(
+                scrollbar,
+                area.inner(Margin {
+                    vertical: 1,
+                    horizontal: 0,
+                }),
+                &mut scrollbar_state,
+            );
+        }
     }
 }
 

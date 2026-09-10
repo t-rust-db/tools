@@ -1,9 +1,10 @@
-//! The app loop, wired end-to-end (db-studio#6): submit a query -> run it
-//! against the open file's `Engine` -> grid or error pane -> quit cleanly.
-//! `Box<dyn Engine>` rather than a concrete `RowEngine`, even though M1
-//! only ever opens one -- that's the seam M3 needs to switch engines per
-//! open file (t-rust-db/db-core#295), and there is no cost to holding it
-//! from the start.
+//! The app loop, wired end-to-end (db-studio#6), with visual polish and
+//! a real editor for the query pane (db-studio#9/#12): submit a query ->
+//! run it against the open file's `Engine` -> grid or error pane -> quit
+//! cleanly. `Box<dyn Engine>` rather than a concrete `RowEngine`, even
+//! though M1 only ever opens one -- that's the seam M3 needs to switch
+//! engines per open file (t-rust-db/db-core#295), and there is no cost
+//! to holding it from the start.
 
 use std::io;
 use std::time::Duration;
@@ -52,7 +53,10 @@ impl App {
             Constraint::Length(3),
         ])
         .areas(frame.area());
-        self.query_pane.render(frame, query_area);
+        // The query pane is the only focusable pane until #10's schema
+        // tree inspector adds a second one -- hardcoded `true` rather
+        // than unused focus-cycling machinery for a single pane.
+        self.query_pane.render(frame, query_area, true);
         self.grid_pane.render(frame, grid_area);
         self.error_pane.render(frame, error_area);
     }
@@ -76,9 +80,21 @@ impl App {
                 self.running = false;
                 return Ok(());
             }
+            // PageUp/PageDown scroll the grid -- plain Up/Down now move
+            // the query pane's cursor within its (possibly multi-line,
+            // #9) buffer instead, so they can no longer double as the
+            // grid's scroll keys the way M1's single-line pane allowed.
+            // Handled here and not forwarded to the query pane, which
+            // would otherwise also treat them as its own scroll keys.
             match key.code {
-                KeyCode::Down => self.grid_pane.scroll_down(),
-                KeyCode::Up => self.grid_pane.scroll_up(),
+                KeyCode::PageDown => {
+                    self.grid_pane.scroll_down();
+                    return Ok(());
+                }
+                KeyCode::PageUp => {
+                    self.grid_pane.scroll_up();
+                    return Ok(());
+                }
                 _ => {}
             }
             if let Some(query) = self.query_pane.handle_key(key) {

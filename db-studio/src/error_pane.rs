@@ -3,9 +3,11 @@
 //! error-handling code path, per the issue's acceptance criteria.
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::style::Style;
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
+
+use crate::theme;
 
 #[derive(Default)]
 pub struct ErrorPane {
@@ -28,10 +30,10 @@ impl ErrorPane {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::default().title("error").borders(Borders::ALL);
+        let block = theme::pane_block("error", false);
         let text = self.message.as_deref().unwrap_or("");
         let paragraph = Paragraph::new(text)
-            .style(Style::default().fg(Color::Red))
+            .style(Style::default().fg(theme::error()))
             .block(block);
         frame.render_widget(paragraph, area);
     }
