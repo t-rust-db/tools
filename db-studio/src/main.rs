@@ -5,8 +5,11 @@
 mod app;
 mod error_pane;
 mod grid_pane;
+mod highlight;
 mod query_pane;
+mod schema_tree;
 mod terminal;
+mod theme;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -45,5 +48,3 @@ fn main() -> ExitCode {
         }
     }
 }
-mod highlight;
-mod theme;
