@@ -2,6 +2,13 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.3.0] - 2026-09-10
+
+### Added
+
+- **M2: file switcher, multiple `.sqlite` files** (epic #21). `db-studio a.sqlite b.sqlite ...` opens one `Engine` per file (#16); the "Data Catalog" tree gained a file root level (`file -> table -> columns`, replacing the bare `table -> columns` M1.5 shipped) so multiple files render as sibling roots (#17). Selecting a file root (`Enter`/`Space`) makes it the active query/completion target -- confirmed via real `tmux capture-pane` sessions, not just unit tests, that switching genuinely retargets execution and back again (#18). A new status bar shows the active file, execution mode, and the query pane's live cursor position (#19).
+- A pty-based raw-byte-diff testing artifact was found and worked around during this milestone: ratatui only retransmits changed terminal cells, so naively concatenating pty output across frames can make a working feature (the status bar's live cursor position) look broken. `tmux capture-pane`, which tracks real screen state, is the more reliable check going forward.
+
 ## [0.2.0] - 2026-09-10
 
 ### Added
