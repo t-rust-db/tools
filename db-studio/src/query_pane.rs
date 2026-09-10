@@ -47,6 +47,16 @@ impl QueryPane {
         }
     }
 
+    /// Replaces the completion candidate list -- db-studio#18 calls this
+    /// when the active file changes, so completion offers the newly
+    /// active file's names, not whichever file was active at startup.
+    /// Closes any open popup: its matches were ranked against the old
+    /// candidate set and no longer mean anything.
+    pub fn set_candidates(&mut self, candidates: Vec<String>) {
+        self.candidates = candidates;
+        self.popup = None;
+    }
+
     /// Whether a completion popup is open -- the app checks this before
     /// treating `Esc` as quit (closes the popup instead) or `Tab` as a
     /// focus-cycle key (accepts the completion instead).

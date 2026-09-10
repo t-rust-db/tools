@@ -100,10 +100,6 @@ impl SchemaTreePane {
     /// table or column nested under one. `db-studio#18` uses this to
     /// tell "switch the active file" apart from "just expanding a
     /// table."
-    #[allow(
-        dead_code,
-        reason = "consumed by #18's active-file switching, not yet wired"
-    )]
     pub fn selected_file_key(&self) -> Option<&str> {
         match self.state.selected() {
             [key] => Some(key.as_str()),

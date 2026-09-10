@@ -81,8 +81,9 @@ impl App {
                 tables: f.engine.tables().unwrap_or_default(),
             })
             .collect();
-        // Completion still only offers the active file's names -- #18
-        // makes this actually change when the active file does.
+        // Completion offers the first (initially active) file's names;
+        // switch_active_file (db-studio#18) recomputes this when the
+        // active file changes.
         let candidates = files
             .first()
             .map(|f| completion::candidates(&f.engine.tables().unwrap_or_default()))
@@ -178,10 +179,42 @@ impl App {
                         self.submit(&query);
                     }
                 }
-                Focus::Tree => self.schema_tree.handle_key(key),
+                Focus::Tree => {
+                    self.schema_tree.handle_key(key);
+                    // Enter/Space is schema_tree's own toggle-expand key
+                    // (handled above) -- if it landed on a file root
+                    // rather than a table/column, it also switches which
+                    // file queries run against (db-studio#18).
+                    let is_accept = matches!(key.code, KeyCode::Enter | KeyCode::Char(' '));
+                    if is_accept {
+                        if let Some(file_key) = self.schema_tree.selected_file_key() {
+                            self.switch_active_file(file_key.to_string());
+                        }
+                    }
+                }
             }
         }
         Ok(())
+    }
+
+    /// Makes the open file at `path` (matched against `OpenFile::path`'s
+    /// display form, the same string the tree uses as its file-root
+    /// key) the active query/completion target.
+    fn switch_active_file(&mut self, path: String) {
+        let Some(index) = self
+            .files
+            .iter()
+            .position(|f| f.path.display().to_string() == path)
+        else {
+            return;
+        };
+        self.active = index;
+        let candidates = self
+            .files
+            .get(index)
+            .map(|f| completion::candidates(&f.engine.tables().unwrap_or_default()))
+            .unwrap_or_default();
+        self.query_pane.set_candidates(candidates);
     }
 
     fn submit(&mut self, query: &str) {
