@@ -70,6 +70,13 @@ impl QueryPane {
         self.textarea.cursor()
     }
 
+    /// The current buffer text -- db-studio#30/#31's Plan/Opcodes views
+    /// read this (not the last-submitted query) so they can preview a
+    /// query before running it with `F5`.
+    pub fn text(&self) -> String {
+        self.textarea.lines().join("\n")
+    }
+
     /// Handles one key event. Returns the submitted query text on `F5`
     /// (and clears the buffer), otherwise `None`. A popup consumes
     /// Up/Down/Tab/Enter/Esc itself before any of them reach the

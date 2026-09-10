@@ -1,12 +1,12 @@
 //! The app loop, wired end-to-end (db-studio#6), with visual polish, a
 //! real editor with completion for the query pane (db-studio#9/#12/#11),
-//! a schema tree (db-studio#10), and multiple open files (db-studio#16):
+//! a schema tree (db-studio#10), multiple open files (db-studio#16), two
+//! engine modes (db-studio#23), and introspection views (db-studio#29):
 //! submit a query -> run it against the active file's `Engine` -> grid
 //! or error pane -> quit cleanly. Each file's `Box<dyn Engine>` rather
-//! than a concrete `RowEngine`, even though M2 only ever opens row-mode
-//! files -- that's the seam M3 needs to switch engines per open file
-//! (t-rust-db/db-core#295), and there is no cost to holding it from the
-//! start.
+//! than a concrete `RowEngine`/`BatchEngine` -- the seam that lets M3
+//! switch engines per open file (t-rust-db/db-core#295), with no cost to
+//! holding it from the start.
 
 use std::io;
 use std::path::PathBuf;
@@ -22,8 +22,9 @@ use crate::error_pane::ErrorPane;
 use crate::grid_pane::{Grid, GridPane};
 use crate::query_pane::QueryPane;
 use crate::schema_tree::{FileSchema, SchemaTreePane};
-use crate::status_bar;
 use crate::terminal::Tui;
+use crate::{opcode_pane, plan_pane, stats_pane, status_bar};
+use db_core::engine::{OpcodeSection, PlanRow};
 
 /// One file opened on the command line, per db-studio#16 -- `main.rs`
 /// builds these before the terminal is touched (a bad path is a plain
@@ -51,6 +52,18 @@ enum Focus {
     Tree,
 }
 
+/// Which view the big-right area shows (db-studio#29). `Plan`/`Opcodes`
+/// hold their last-computed data -- refreshed each time their key is
+/// pressed (even if already showing that view, so editing the query and
+/// pressing the key again updates it), not on every frame, since
+/// computing them re-parses/re-compiles the query pane's current text.
+enum OutputView {
+    Results,
+    Plan(Vec<PlanRow>),
+    Opcodes(Vec<OpcodeSection>),
+    Stats,
+}
+
 pub struct App {
     running: bool,
     files: Vec<OpenFile>,
@@ -60,6 +73,7 @@ pub struct App {
     /// closed, in M2's scope).
     active: usize,
     focus: Focus,
+    view: OutputView,
     query_pane: QueryPane,
     schema_tree: SchemaTreePane,
     grid_pane: GridPane,
@@ -94,6 +108,7 @@ impl App {
             files,
             active: 0,
             focus: Focus::Query,
+            view: OutputView::Results,
             query_pane: QueryPane::new(candidates),
             schema_tree: SchemaTreePane::new(file_schemas),
             grid_pane: GridPane::new(),
@@ -123,7 +138,17 @@ impl App {
             .render(frame, query_area, self.focus == Focus::Query);
         self.schema_tree
             .render(frame, tree_area, self.focus == Focus::Tree);
-        self.grid_pane.render(frame, grid_area);
+        match &self.view {
+            OutputView::Results => self.grid_pane.render(frame, grid_area),
+            OutputView::Plan(rows) => plan_pane::render(frame, grid_area, rows),
+            OutputView::Opcodes(sections) => opcode_pane::render(frame, grid_area, sections),
+            OutputView::Stats => {
+                let stats = self.files.get(self.active).map(|f| f.engine.stats());
+                if let Some(stats) = stats {
+                    stats_pane::render(frame, grid_area, stats);
+                }
+            }
+        }
         self.error_pane.render(frame, error_area);
         let active_file = self.files.get(self.active);
         let active_label = active_file.map(|f| file_label(&f.path)).unwrap_or_default();
@@ -172,6 +197,28 @@ impl App {
                     Focus::Tree => Focus::Query,
                 };
                 return Ok(());
+            }
+            // F1-F4 switch the output view regardless of focus -- like
+            // PageUp/PageDown, they're not text input the query pane
+            // could otherwise claim.
+            match key.code {
+                KeyCode::F(1) => {
+                    self.view = OutputView::Results;
+                    return Ok(());
+                }
+                KeyCode::F(2) => {
+                    self.refresh_plan();
+                    return Ok(());
+                }
+                KeyCode::F(3) => {
+                    self.refresh_opcodes();
+                    return Ok(());
+                }
+                KeyCode::F(4) => {
+                    self.view = OutputView::Stats;
+                    return Ok(());
+                }
+                _ => {}
             }
             // PageUp/PageDown scroll the grid regardless of focus -- the
             // grid itself isn't focusable, and nothing else claims these
@@ -250,6 +297,39 @@ impl App {
                 self.grid_pane.clear();
                 self.error_pane.set_error(err.to_string());
             }
+        }
+    }
+
+    /// Recomputes the plan view from the query pane's *current* text
+    /// (not the last-submitted query -- lets you preview a plan before
+    /// running), routing a compile/parse failure to the same error pane
+    /// `submit` uses rather than a separate error path.
+    fn refresh_plan(&mut self) {
+        let text = self.query_pane.text();
+        let Some(file) = self.files.get(self.active) else {
+            return;
+        };
+        match file.engine.explain_plan(&text) {
+            Ok(rows) => {
+                self.view = OutputView::Plan(rows);
+                self.error_pane.clear();
+            }
+            Err(err) => self.error_pane.set_error(err.to_string()),
+        }
+    }
+
+    /// Same as [`Self::refresh_plan`], for the opcode view.
+    fn refresh_opcodes(&mut self) {
+        let text = self.query_pane.text();
+        let Some(file) = self.files.get(self.active) else {
+            return;
+        };
+        match file.engine.explain_opcodes(&text) {
+            Ok(sections) => {
+                self.view = OutputView::Opcodes(sections);
+                self.error_pane.clear();
+            }
+            Err(err) => self.error_pane.set_error(err.to_string()),
         }
     }
 }
