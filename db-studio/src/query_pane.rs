@@ -47,11 +47,27 @@ impl QueryPane {
         }
     }
 
+    /// Replaces the completion candidate list -- db-studio#18 calls this
+    /// when the active file changes, so completion offers the newly
+    /// active file's names, not whichever file was active at startup.
+    /// Closes any open popup: its matches were ranked against the old
+    /// candidate set and no longer mean anything.
+    pub fn set_candidates(&mut self, candidates: Vec<String>) {
+        self.candidates = candidates;
+        self.popup = None;
+    }
+
     /// Whether a completion popup is open -- the app checks this before
     /// treating `Esc` as quit (closes the popup instead) or `Tab` as a
     /// focus-cycle key (accepts the completion instead).
     pub fn has_open_popup(&self) -> bool {
         self.popup.is_some()
+    }
+
+    /// The cursor's (row, col), 0-based -- db-studio#19's status bar
+    /// renders this 1-based, the way editors conventionally do.
+    pub fn cursor(&self) -> (usize, usize) {
+        self.textarea.cursor()
     }
 
     /// Handles one key event. Returns the submitted query text on `F5`

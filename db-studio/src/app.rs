@@ -1,13 +1,15 @@
 //! The app loop, wired end-to-end (db-studio#6), with visual polish, a
 //! real editor with completion for the query pane (db-studio#9/#12/#11),
-//! and a schema tree (db-studio#10): submit a query -> run it against
-//! the open file's `Engine` -> grid or error pane -> quit cleanly.
-//! `Box<dyn Engine>` rather than a concrete `RowEngine`, even though M1
-//! only ever opens one -- that's the seam M3 needs to switch engines per
-//! open file (t-rust-db/db-core#295), and there is no cost to holding it
-//! from the start.
+//! a schema tree (db-studio#10), and multiple open files (db-studio#16):
+//! submit a query -> run it against the active file's `Engine` -> grid
+//! or error pane -> quit cleanly. Each file's `Box<dyn Engine>` rather
+//! than a concrete `RowEngine`, even though M2 only ever opens row-mode
+//! files -- that's the seam M3 needs to switch engines per open file
+//! (t-rust-db/db-core#295), and there is no cost to holding it from the
+//! start.
 
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -19,8 +21,26 @@ use crate::completion;
 use crate::error_pane::ErrorPane;
 use crate::grid_pane::{Grid, GridPane};
 use crate::query_pane::QueryPane;
-use crate::schema_tree::SchemaTreePane;
+use crate::schema_tree::{FileSchema, SchemaTreePane};
+use crate::status_bar;
 use crate::terminal::Tui;
+
+/// One file opened on the command line, per db-studio#16 -- `main.rs`
+/// builds these before the terminal is touched (a bad path is a plain
+/// stderr message, same as M1's single-file convention).
+pub struct OpenFile {
+    pub path: PathBuf,
+    pub engine: Box<dyn Engine>,
+}
+
+/// The tree's display label for a file -- its filename, not the full
+/// path (the path is still the tree's unique root *key*, just not what
+/// the user reads).
+fn file_label(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
 
 /// Which pane has keyboard focus. Grid/error aren't in this enum -- they
 /// take no directional/edit input of their own, only the global
@@ -33,7 +53,12 @@ enum Focus {
 
 pub struct App {
     running: bool,
-    engine: Box<dyn Engine>,
+    files: Vec<OpenFile>,
+    /// Index into `files` of the file queries currently run against.
+    /// Always valid: `App::new` requires a non-empty `files`, and
+    /// nothing removes entries from it (files are only ever added, not
+    /// closed, in M2's scope).
+    active: usize,
     focus: Focus,
     query_pane: QueryPane,
     schema_tree: SchemaTreePane,
@@ -42,19 +67,35 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(engine: Box<dyn Engine>) -> Self {
-        // A file that fails `tables()` still opens -- an empty tree (and
-        // an empty completion candidate list) rather than refusing to
-        // start, same spirit as an empty query result rendering as an
-        // empty grid rather than an error.
-        let tables = engine.tables().unwrap_or_default();
-        let candidates = completion::candidates(&tables);
+    /// `files` must be non-empty -- `main.rs`'s own usage-message path
+    /// handles the zero-files case before ever constructing an `App`.
+    pub fn new(files: Vec<OpenFile>) -> Self {
+        // A file that fails `tables()` still opens -- an empty branch of
+        // the tree for it rather than refusing to start, same spirit as
+        // an empty query result rendering as an empty grid rather than
+        // an error.
+        let file_schemas: Vec<FileSchema> = files
+            .iter()
+            .map(|f| FileSchema {
+                key: f.path.display().to_string(),
+                label: file_label(&f.path),
+                tables: f.engine.tables().unwrap_or_default(),
+            })
+            .collect();
+        // Completion offers the first (initially active) file's names;
+        // switch_active_file (db-studio#18) recomputes this when the
+        // active file changes.
+        let candidates = files
+            .first()
+            .map(|f| completion::candidates(&f.engine.tables().unwrap_or_default()))
+            .unwrap_or_default();
         Self {
             running: true,
-            engine,
+            files,
+            active: 0,
             focus: Focus::Query,
             query_pane: QueryPane::new(candidates),
-            schema_tree: SchemaTreePane::new(tables),
+            schema_tree: SchemaTreePane::new(file_schemas),
             grid_pane: GridPane::new(),
             error_pane: ErrorPane::new(),
         }
@@ -69,10 +110,11 @@ impl App {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
-        let [query_area, middle_area, error_area] = Layout::vertical([
+        let [query_area, middle_area, error_area, status_area] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Min(0),
             Constraint::Length(3),
+            Constraint::Length(1),
         ])
         .areas(frame.area());
         let [tree_area, grid_area] =
@@ -83,6 +125,18 @@ impl App {
             .render(frame, tree_area, self.focus == Focus::Tree);
         self.grid_pane.render(frame, grid_area);
         self.error_pane.render(frame, error_area);
+        let active_label = self
+            .files
+            .get(self.active)
+            .map(|f| file_label(&f.path))
+            .unwrap_or_default();
+        status_bar::render(
+            frame,
+            status_area,
+            &active_label,
+            "row",
+            self.query_pane.cursor(),
+        );
         // Last: ratatui has no z-ordering, so the completion popup must
         // paint after every pane it might overlap, not before.
         self.query_pane.render_popup(frame, query_area);
@@ -139,14 +193,49 @@ impl App {
                         self.submit(&query);
                     }
                 }
-                Focus::Tree => self.schema_tree.handle_key(key),
+                Focus::Tree => {
+                    self.schema_tree.handle_key(key);
+                    // Enter/Space is schema_tree's own toggle-expand key
+                    // (handled above) -- if it landed on a file root
+                    // rather than a table/column, it also switches which
+                    // file queries run against (db-studio#18).
+                    let is_accept = matches!(key.code, KeyCode::Enter | KeyCode::Char(' '));
+                    if is_accept {
+                        if let Some(file_key) = self.schema_tree.selected_file_key() {
+                            self.switch_active_file(file_key.to_string());
+                        }
+                    }
+                }
             }
         }
         Ok(())
     }
 
+    /// Makes the open file at `path` (matched against `OpenFile::path`'s
+    /// display form, the same string the tree uses as its file-root
+    /// key) the active query/completion target.
+    fn switch_active_file(&mut self, path: String) {
+        let Some(index) = self
+            .files
+            .iter()
+            .position(|f| f.path.display().to_string() == path)
+        else {
+            return;
+        };
+        self.active = index;
+        let candidates = self
+            .files
+            .get(index)
+            .map(|f| completion::candidates(&f.engine.tables().unwrap_or_default()))
+            .unwrap_or_default();
+        self.query_pane.set_candidates(candidates);
+    }
+
     fn submit(&mut self, query: &str) {
-        match self.engine.run_query(query) {
+        let Some(file) = self.files.get_mut(self.active) else {
+            return;
+        };
+        match file.engine.run_query(query) {
             Ok(result) => {
                 let headers = result.columns;
                 let rows = result
