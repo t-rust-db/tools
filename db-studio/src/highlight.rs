@@ -36,6 +36,53 @@ fn token_highlight(token: &Token) -> Option<Highlight> {
     Some(((row, col), (row, end_col), style))
 }
 
+/// Whether `(row, col)` (0-based, same coordinates as [`highlights`]) falls
+/// inside a string/blob literal, or a still-unterminated one -- db-studio#11's
+/// "no completion popup mid-string" rule, decided from the same
+/// tokenizer rather than a second, separate notion of what a string
+/// literal looks like. An in-progress string is *always* unterminated
+/// until its closing quote is typed, which the tokenizer reports as
+/// `TokenKind::Error("unterminated string/blob literal...")`, not
+/// `String`/`Blob` -- both count here, or completion would never
+/// suppress itself while the user is still typing the literal.
+pub fn is_inside_string_or_blob(text: &str, row: usize, col: usize) -> bool {
+    Tokenizer::tokenize(text)
+        .iter()
+        .any(|token| match &token.kind {
+            // A properly closed literal: the position right after the
+            // closing quote is genuinely outside it, so the end is exclusive
+            // -- same convention `token_highlight` paints with.
+            TokenKind::String(_) | TokenKind::Blob(_) => span_touches(token, row, col, false),
+            // Still unterminated: the cursor sits right after the last
+            // character typed so far, at the token's own end column -- the
+            // realistic case while the user is mid-literal, so the end is
+            // inclusive here, or completion would never suppress itself
+            // while typing the string.
+            TokenKind::Error(msg)
+                if msg.contains("unterminated string") || msg.contains("blob") =>
+            {
+                span_touches(token, row, col, true)
+            }
+            _ => false,
+        })
+}
+
+fn span_touches(token: &Token, row: usize, col: usize, inclusive_end: bool) -> bool {
+    if token.span.is_unknown() {
+        return false;
+    }
+    let start_row = (token.span.line.max(1) - 1) as usize;
+    let start_col = (token.span.column.max(1) - 1) as usize;
+    let end_col = start_col + token.span.len as usize;
+    row == start_row
+        && col >= start_col
+        && if inclusive_end {
+            col <= end_col
+        } else {
+            col < end_col
+        }
+}
+
 fn style_for(kind: &TokenKind) -> Option<Style> {
     let color = match kind {
         TokenKind::Keyword(_) | TokenKind::Null | TokenKind::True | TokenKind::False => {
@@ -90,5 +137,23 @@ mod tests {
         // unwrapping something the tokenizer left as an `Error` token.
         let ranges = highlights("`unterminated");
         assert!(!ranges.is_empty());
+    }
+
+    #[test]
+    fn cursor_inside_a_finished_string_literal_is_blocked() {
+        assert!(is_inside_string_or_blob("'hi'", 0, 2));
+        assert!(!is_inside_string_or_blob("'hi' ", 0, 4));
+    }
+
+    #[test]
+    fn cursor_inside_a_still_unterminated_string_is_blocked() {
+        // The realistic case: while typing a literal it's unterminated
+        // at every keystroke until the closing quote lands.
+        assert!(is_inside_string_or_blob("'pri", 0, 4));
+    }
+
+    #[test]
+    fn cursor_outside_any_string_is_not_blocked() {
+        assert!(!is_inside_string_or_blob("SELECT pri", 0, 10));
     }
 }
