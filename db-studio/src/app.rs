@@ -125,16 +125,16 @@ impl App {
             .render(frame, tree_area, self.focus == Focus::Tree);
         self.grid_pane.render(frame, grid_area);
         self.error_pane.render(frame, error_area);
-        let active_label = self
-            .files
-            .get(self.active)
-            .map(|f| file_label(&f.path))
+        let active_file = self.files.get(self.active);
+        let active_label = active_file.map(|f| file_label(&f.path)).unwrap_or_default();
+        let active_mode = active_file
+            .map(|f| f.engine.mode().to_string())
             .unwrap_or_default();
         status_bar::render(
             frame,
             status_area,
             &active_label,
-            "row",
+            &active_mode,
             self.query_pane.cursor(),
         );
         // Last: ratatui has no z-ordering, so the completion popup must
