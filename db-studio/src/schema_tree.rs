@@ -1,7 +1,10 @@
-//! The left pane (db-studio#10): a schema tree (table -> columns),
-//! titled "Data Catalog" after Harlequin's terminal SQL IDE -- the
-//! closest comparable tool, and the direct source of that naming and of
-//! the table/column tree shape (see `.openspec/plan.md` M1.5).
+//! The left pane (db-studio#10): a schema tree, titled "Data Catalog"
+//! after Harlequin's terminal SQL IDE -- the closest comparable tool,
+//! and the direct source of that naming and of the table/column tree
+//! shape (see `.openspec/plan.md` M1.5). Since db-studio#17 (M2), one
+//! root per open file (`file -> table -> columns`) rather than a bare
+//! `table -> columns` -- M1/M1.5's single-file tree is just the
+//! one-root special case of this shape, not a separate code path.
 //!
 //! Fed by `Engine::tables()` (t-rust-db/db-core#310), not `run_query`
 //! against `sqlite_master`/`PRAGMA table_info` as #10 originally
@@ -15,39 +18,60 @@ use ratatui::style::Style;
 use ratatui::Frame;
 use tui_tree_widget::{Tree, TreeItem, TreeState};
 
+/// One open file's schema, as the tree needs it -- `key` is the file's
+/// root identifier (its full path, guaranteed unique across open files,
+/// unlike `label`, a bare filename that two files in different
+/// directories could share), `label` what's displayed.
+pub struct FileSchema {
+    pub key: String,
+    pub label: String,
+    pub tables: Vec<TableInfo>,
+}
+
 pub struct SchemaTreePane {
     items: Vec<TreeItem<'static, String>>,
     state: TreeState<String>,
 }
 
 impl SchemaTreePane {
-    pub fn new(tables: Vec<TableInfo>) -> Self {
-        let items = tables
+    pub fn new(files: Vec<FileSchema>) -> Self {
+        let items = files
             .into_iter()
-            .filter_map(|table| {
-                let children = table
-                    .columns
+            .filter_map(|file| {
+                let table_items = file
+                    .tables
                     .into_iter()
-                    .map(|col| {
-                        let label = if col.type_name.is_empty() {
-                            col.name.clone()
-                        } else {
-                            format!("{} ({})", col.name, col.type_name)
-                        };
-                        TreeItem::new_leaf(col.name, label)
-                    })
+                    .filter_map(|table| Self::table_item(table))
                     .collect();
-                // SQLite guarantees unique column names within one
-                // table, so this never actually fails -- a malformed
-                // schema drops the table from the tree rather than
-                // crashing the whole pane over it.
-                TreeItem::new(table.name.clone(), table.name, children).ok()
+                // Unreachable in practice -- `key` is a file path, and
+                // two open files never share one.
+                TreeItem::new(file.key, file.label, table_items).ok()
             })
             .collect();
         Self {
             items,
             state: TreeState::default(),
         }
+    }
+
+    fn table_item(table: TableInfo) -> Option<TreeItem<'static, String>> {
+        let children = table
+            .columns
+            .into_iter()
+            .map(|col| {
+                let label = if col.type_name.is_empty() {
+                    col.name.clone()
+                } else {
+                    format!("{} ({})", col.name, col.type_name)
+                };
+                TreeItem::new_leaf(col.name, label)
+            })
+            .collect();
+        // SQLite guarantees unique column names within one table, so
+        // this never actually fails -- a malformed schema drops the
+        // table from the tree rather than crashing the whole pane over
+        // it.
+        TreeItem::new(table.name.clone(), table.name, children).ok()
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
@@ -71,10 +95,26 @@ impl SchemaTreePane {
         }
     }
 
+    /// The selected node's file-root key, when the current selection
+    /// *is* a file root (a one-element selection path) rather than a
+    /// table or column nested under one. `db-studio#18` uses this to
+    /// tell "switch the active file" apart from "just expanding a
+    /// table."
+    #[allow(
+        dead_code,
+        reason = "consumed by #18's active-file switching, not yet wired"
+    )]
+    pub fn selected_file_key(&self) -> Option<&str> {
+        match self.state.selected() {
+            [key] => Some(key.as_str()),
+            _ => None,
+        }
+    }
+
     pub fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
         let Ok(tree) = Tree::new(&self.items) else {
-            // Unreachable in practice -- table names come straight from
-            // the schema, which SQLite itself guarantees are unique.
+            // Unreachable in practice -- file paths come from argv,
+            // which never has one repeated to two different OpenFiles.
             return;
         };
         let tree = tree
@@ -102,8 +142,8 @@ mod tests {
     use super::*;
     use db_core::engine::ColumnInfo;
 
-    fn sample() -> Vec<TableInfo> {
-        vec![TableInfo {
+    fn sample_table() -> TableInfo {
+        TableInfo {
             name: "items".to_string(),
             columns: vec![
                 ColumnInfo {
@@ -115,37 +155,45 @@ mod tests {
                     type_name: "TEXT".to_string(),
                 },
             ],
-        }]
+        }
+    }
+
+    fn one_file(key: &str) -> FileSchema {
+        FileSchema {
+            key: key.to_string(),
+            label: key.to_string(),
+            tables: vec![sample_table()],
+        }
     }
 
     #[test]
-    fn builds_one_root_per_table_with_its_columns_as_children() {
-        let pane = SchemaTreePane::new(sample());
+    fn one_file_builds_a_single_root_with_its_tables_as_children() {
+        let pane = SchemaTreePane::new(vec![one_file("a.sqlite")]);
         assert_eq!(pane.items.len(), 1);
-        assert_eq!(pane.items[0].children().len(), 2);
+        assert_eq!(pane.items[0].children().len(), 1);
         let debug = format!("{:?}", pane.items[0]);
         assert!(debug.contains("items"), "{debug}");
     }
 
     #[test]
-    fn duplicate_column_names_across_different_tables_do_not_collide() {
-        let tables = vec![
-            TableInfo {
-                name: "a".to_string(),
-                columns: vec![ColumnInfo {
-                    name: "id".to_string(),
-                    type_name: "INTEGER".to_string(),
-                }],
-            },
-            TableInfo {
-                name: "b".to_string(),
-                columns: vec![ColumnInfo {
-                    name: "id".to_string(),
-                    type_name: "INTEGER".to_string(),
-                }],
-            },
-        ];
-        let pane = SchemaTreePane::new(tables);
+    fn multiple_files_are_sibling_roots() {
+        let pane = SchemaTreePane::new(vec![one_file("a.sqlite"), one_file("b.sqlite")]);
         assert_eq!(pane.items.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_table_names_across_different_files_do_not_collide() {
+        // Table identifiers only need to be unique among siblings --
+        // two files can each have their own "items" table.
+        let pane = SchemaTreePane::new(vec![one_file("a.sqlite"), one_file("b.sqlite")]);
+        assert_eq!(pane.items.len(), 2);
+        assert_eq!(pane.items[0].children().len(), 1);
+        assert_eq!(pane.items[1].children().len(), 1);
+    }
+
+    #[test]
+    fn selected_file_key_is_none_before_any_selection() {
+        let pane = SchemaTreePane::new(vec![one_file("a.sqlite")]);
+        assert_eq!(pane.selected_file_key(), None);
     }
 }

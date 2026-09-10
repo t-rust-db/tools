@@ -21,19 +21,24 @@ use crate::completion;
 use crate::error_pane::ErrorPane;
 use crate::grid_pane::{Grid, GridPane};
 use crate::query_pane::QueryPane;
-use crate::schema_tree::SchemaTreePane;
+use crate::schema_tree::{FileSchema, SchemaTreePane};
 use crate::terminal::Tui;
 
 /// One file opened on the command line, per db-studio#16 -- `main.rs`
 /// builds these before the terminal is touched (a bad path is a plain
 /// stderr message, same as M1's single-file convention).
 pub struct OpenFile {
-    #[allow(
-        dead_code,
-        reason = "read by #17's file-rooted tree labels, not yet wired"
-    )]
     pub path: PathBuf,
     pub engine: Box<dyn Engine>,
+}
+
+/// The tree's display label for a file -- its filename, not the full
+/// path (the path is still the tree's unique root *key*, just not what
+/// the user reads).
+fn file_label(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Which pane has keyboard focus. Grid/error aren't in this enum -- they
@@ -64,22 +69,31 @@ impl App {
     /// `files` must be non-empty -- `main.rs`'s own usage-message path
     /// handles the zero-files case before ever constructing an `App`.
     pub fn new(files: Vec<OpenFile>) -> Self {
-        // A file that fails `tables()` still opens -- an empty tree (and
-        // an empty completion candidate list) rather than refusing to
-        // start, same spirit as an empty query result rendering as an
-        // empty grid rather than an error.
-        let tables = files
+        // A file that fails `tables()` still opens -- an empty branch of
+        // the tree for it rather than refusing to start, same spirit as
+        // an empty query result rendering as an empty grid rather than
+        // an error.
+        let file_schemas: Vec<FileSchema> = files
+            .iter()
+            .map(|f| FileSchema {
+                key: f.path.display().to_string(),
+                label: file_label(&f.path),
+                tables: f.engine.tables().unwrap_or_default(),
+            })
+            .collect();
+        // Completion still only offers the active file's names -- #18
+        // makes this actually change when the active file does.
+        let candidates = files
             .first()
-            .map(|f| f.engine.tables().unwrap_or_default())
+            .map(|f| completion::candidates(&f.engine.tables().unwrap_or_default()))
             .unwrap_or_default();
-        let candidates = completion::candidates(&tables);
         Self {
             running: true,
             files,
             active: 0,
             focus: Focus::Query,
             query_pane: QueryPane::new(candidates),
-            schema_tree: SchemaTreePane::new(tables),
+            schema_tree: SchemaTreePane::new(file_schemas),
             grid_pane: GridPane::new(),
             error_pane: ErrorPane::new(),
         }
