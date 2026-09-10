@@ -235,15 +235,35 @@ fn find_tail_offset(data: &[u8], n: usize) -> usize {
     }
 }
 
-/// Parse a simple filter expression.
+/// Parse a filter expression.
 ///
 /// Supports:
 /// - `severity >= WARN`
 /// - `severity = ERROR`
-/// - `severity > INFO`
+/// - `facility = kern`
+/// - `severity >= WARN AND facility = auth`
 ///
 /// TODO: integrate with db-core parser for full SQL WHERE support.
 fn parse_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool> {
+    let filter = filter.trim();
+
+    // Handle AND combinator
+    if let Some((left, right)) = filter.split_once(" AND ") {
+        let left_fn = parse_single_filter(left.trim());
+        let right_fn = parse_single_filter(right.trim());
+        return Box::new(move |batch, i| left_fn(batch, i) && right_fn(batch, i));
+    }
+    if let Some((left, right)) = filter.split_once(" and ") {
+        let left_fn = parse_single_filter(left.trim());
+        let right_fn = parse_single_filter(right.trim());
+        return Box::new(move |batch, i| left_fn(batch, i) && right_fn(batch, i));
+    }
+
+    parse_single_filter(filter)
+}
+
+/// Parse a single filter clause.
+fn parse_single_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool> {
     let filter = filter.trim();
 
     // Try parsing "severity <op> <level>"
