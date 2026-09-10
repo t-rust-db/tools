@@ -2,6 +2,13 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.4.0] - 2026-09-10
+
+### Added
+
+- **M3: second mode, `.parquet`** (epic #23). `db-studio a.sqlite b.parquet` dispatches each file to the right `Engine` by extension -- `.sqlite`/`.db` to `RowEngine`, `.parquet` to the new `db_core::engine::column::BatchEngine` (t-rust-db/db-core#325-#328, a port of column-rs's `QueryEngine` single-file case) (#24). The schema tree/completion needed no code changes to render batch-mode tables correctly -- `TableInfo`/`ColumnInfo` were already mode-agnostic by construction (#25). The status bar now reads `Engine::mode()` instead of a hardcoded `"row"`, showing "row" or "batch" per the active file (#26).
+- Verified interactively (real `tmux` sessions, not unit tests alone): a `GROUP BY`/`COUNT(*)` aggregate query runs correctly against a real Parquet file through `vm::batch`, switching between a `.sqlite` and a `.parquet` file mid-session correctly retargets both query execution and the status bar's reported mode.
+
 ## [0.3.0] - 2026-09-10
 
 ### Added
