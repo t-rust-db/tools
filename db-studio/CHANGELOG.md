@@ -2,6 +2,15 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.2.0] - 2026-09-10
+
+### Added
+
+- **M1.5: usability & layout pass** (epic #13). Query pane rewritten around `tui-textarea-2` (multi-line editing, cursor/selection/undo/redo) with SQL syntax highlighting classified through `db-core`'s real row tokenizer, not a hand-maintained keyword list (#9). `F5` now submits -- not `Ctrl+Enter`, which a plain terminal without the Kitty keyboard protocol can't distinguish from plain `Enter` -- with the binding surfaced right in the pane's title so it's discoverable without reading the changelog.
+- A "Data Catalog" schema tree pane (`tui-tree-widget`), table -> columns, fed by a new `db-core#310` addition (`Engine::tables()`) rather than `sqlite_master`/`PRAGMA table_info`, neither of which works through `vm::row`'s compiled `SELECT` path (#10). Real focus-cycling (`Tab`) between the query pane and the tree, since the tree is genuinely a second focusable pane.
+- A schema-aware completion popup (`nucleo-matcher`), ranking table/column names fuzzily against the same catalog fetch the schema tree uses; suppressed inside string/blob literals, including one still being typed (#11).
+- Visual polish: a catppuccin mocha palette and rounded borders on every pane, the focused pane's border rendered distinctly, and a scrollbar on the grid pane alongside its existing row highlight (#12).
+
 ## [0.1.0] - 2026-09-10
 
 ### Added
