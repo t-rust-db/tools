@@ -1,11 +1,11 @@
 //! The app loop, wired end-to-end (db-studio#6), with visual polish, a
-//! real editor for the query pane (db-studio#9/#12), and a schema tree
-//! (db-studio#10): submit a query -> run it against the open file's
-//! `Engine` -> grid or error pane -> quit cleanly. `Box<dyn Engine>`
-//! rather than a concrete `RowEngine`, even though M1 only ever opens
-//! one -- that's the seam M3 needs to switch engines per open file
-//! (t-rust-db/db-core#295), and there is no cost to holding it from the
-//! start.
+//! real editor with completion for the query pane (db-studio#9/#12/#11),
+//! and a schema tree (db-studio#10): submit a query -> run it against
+//! the open file's `Engine` -> grid or error pane -> quit cleanly.
+//! `Box<dyn Engine>` rather than a concrete `RowEngine`, even though M1
+//! only ever opens one -- that's the seam M3 needs to switch engines per
+//! open file (t-rust-db/db-core#295), and there is no cost to holding it
+//! from the start.
 
 use std::io;
 use std::time::Duration;
@@ -15,6 +15,7 @@ use db_core::engine::Engine;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::Frame;
 
+use crate::completion;
 use crate::error_pane::ErrorPane;
 use crate::grid_pane::{Grid, GridPane};
 use crate::query_pane::QueryPane;
@@ -42,15 +43,17 @@ pub struct App {
 
 impl App {
     pub fn new(engine: Box<dyn Engine>) -> Self {
-        // A file that fails `tables()` still opens -- an empty tree
-        // rather than refusing to start, same spirit as an empty query
-        // result rendering as an empty grid rather than an error.
+        // A file that fails `tables()` still opens -- an empty tree (and
+        // an empty completion candidate list) rather than refusing to
+        // start, same spirit as an empty query result rendering as an
+        // empty grid rather than an error.
         let tables = engine.tables().unwrap_or_default();
+        let candidates = completion::candidates(&tables);
         Self {
             running: true,
             engine,
             focus: Focus::Query,
-            query_pane: QueryPane::new(),
+            query_pane: QueryPane::new(candidates),
             schema_tree: SchemaTreePane::new(tables),
             grid_pane: GridPane::new(),
             error_pane: ErrorPane::new(),
@@ -80,6 +83,9 @@ impl App {
             .render(frame, tree_area, self.focus == Focus::Tree);
         self.grid_pane.render(frame, grid_area);
         self.error_pane.render(frame, error_area);
+        // Last: ratatui has no z-ordering, so the completion popup must
+        // paint after every pane it might overlap, not before.
+        self.query_pane.render_popup(frame, query_area);
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
@@ -92,16 +98,21 @@ impl App {
             if key.kind != KeyEventKind::Press {
                 return Ok(());
             }
+            // A query-pane completion popup claims Esc (close it) and Tab
+            // (accept the selection) for itself before either reaches
+            // this function's own quit/focus-cycle handling below.
+            let query_has_popup = self.focus == Focus::Query && self.query_pane.has_open_popup();
+
             // `q` is a valid SQL character, so it can no longer double as
             // quit now that the query pane accepts arbitrary text (#1's
             // scaffold had no text input yet, so it was safe there).
             let is_ctrl_c =
                 key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
-            if is_ctrl_c || key.code == KeyCode::Esc {
+            if is_ctrl_c || (key.code == KeyCode::Esc && !query_has_popup) {
                 self.running = false;
                 return Ok(());
             }
-            if key.code == KeyCode::Tab {
+            if key.code == KeyCode::Tab && !query_has_popup {
                 self.focus = match self.focus {
                     Focus::Query => Focus::Tree,
                     Focus::Tree => Focus::Query,

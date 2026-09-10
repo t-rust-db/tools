@@ -3,6 +3,7 @@
 //! file per invocation -- `db-studio path/to.sqlite`.
 
 mod app;
+mod completion;
 mod error_pane;
 mod grid_pane;
 mod highlight;
