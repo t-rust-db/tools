@@ -11,9 +11,18 @@ use db_cli::{history_path, run_repl, OutputMode, ReplOptions};
 use handler::{ColumnHandler, Output};
 use stream_output::print_rows_streaming;
 
+const USAGE: &str = "[--version] [--help] [-c \"<SQL>\"] <file.parquet> [more.parquet ...]";
+
 fn usage_error(expected: &str) -> ExitCode {
     eprintln!("usage: column-rs {expected}");
     ExitCode::FAILURE
+}
+
+/// `--help`/`-h`: the top-level usage line, requested rather than
+/// provoked -- stdout, exit 0 (what `make smoke` checks).
+fn usage() -> ExitCode {
+    println!("usage: column-rs {USAGE}");
+    ExitCode::SUCCESS
 }
 
 fn open_engine(paths: &[PathBuf]) -> Result<QueryEngine, ExitCode> {
@@ -30,6 +39,7 @@ fn main() -> ExitCode {
             println!("column-rs {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        Some("--help" | "-h") => usage(),
         Some("-c") => {
             let Some(sql) = args.next() else {
                 return usage_error("-c \"<SQL>\" <file.parquet> [more.parquet ...]");
@@ -60,7 +70,7 @@ fn main() -> ExitCode {
             paths.extend(args.map(PathBuf::from));
             run_column_repl(&paths)
         }
-        None => usage_error("[--version] [-c \"<SQL>\"] <file.parquet> [more.parquet ...]"),
+        None => usage_error(USAGE),
     }
 }
 

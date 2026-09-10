@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.20.1] - 2026-09-09
+
+### Added
+
+- `--help`/`-h`: usage on stdout, exit 0 (was opened as a Parquet path, exit 1). `make smoke` builds the binary and runs `--help`/`--version`; `tests/cli_smoke.rs` pins the contract.
+
 ## [Unreleased]
 
 ## [0.19.0] - 2026-09-09
