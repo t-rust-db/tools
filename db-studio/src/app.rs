@@ -1,13 +1,15 @@
 //! The app loop, wired end-to-end (db-studio#6), with visual polish, a
 //! real editor with completion for the query pane (db-studio#9/#12/#11),
-//! and a schema tree (db-studio#10): submit a query -> run it against
-//! the open file's `Engine` -> grid or error pane -> quit cleanly.
-//! `Box<dyn Engine>` rather than a concrete `RowEngine`, even though M1
-//! only ever opens one -- that's the seam M3 needs to switch engines per
-//! open file (t-rust-db/db-core#295), and there is no cost to holding it
-//! from the start.
+//! a schema tree (db-studio#10), and multiple open files (db-studio#16):
+//! submit a query -> run it against the active file's `Engine` -> grid
+//! or error pane -> quit cleanly. Each file's `Box<dyn Engine>` rather
+//! than a concrete `RowEngine`, even though M2 only ever opens row-mode
+//! files -- that's the seam M3 needs to switch engines per open file
+//! (t-rust-db/db-core#295), and there is no cost to holding it from the
+//! start.
 
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -22,6 +24,18 @@ use crate::query_pane::QueryPane;
 use crate::schema_tree::SchemaTreePane;
 use crate::terminal::Tui;
 
+/// One file opened on the command line, per db-studio#16 -- `main.rs`
+/// builds these before the terminal is touched (a bad path is a plain
+/// stderr message, same as M1's single-file convention).
+pub struct OpenFile {
+    #[allow(
+        dead_code,
+        reason = "read by #17's file-rooted tree labels, not yet wired"
+    )]
+    pub path: PathBuf,
+    pub engine: Box<dyn Engine>,
+}
+
 /// Which pane has keyboard focus. Grid/error aren't in this enum -- they
 /// take no directional/edit input of their own, only the global
 /// PageUp/PageDown scroll keys, which work regardless of focus.
@@ -33,7 +47,12 @@ enum Focus {
 
 pub struct App {
     running: bool,
-    engine: Box<dyn Engine>,
+    files: Vec<OpenFile>,
+    /// Index into `files` of the file queries currently run against.
+    /// Always valid: `App::new` requires a non-empty `files`, and
+    /// nothing removes entries from it (files are only ever added, not
+    /// closed, in M2's scope).
+    active: usize,
     focus: Focus,
     query_pane: QueryPane,
     schema_tree: SchemaTreePane,
@@ -42,16 +61,22 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(engine: Box<dyn Engine>) -> Self {
+    /// `files` must be non-empty -- `main.rs`'s own usage-message path
+    /// handles the zero-files case before ever constructing an `App`.
+    pub fn new(files: Vec<OpenFile>) -> Self {
         // A file that fails `tables()` still opens -- an empty tree (and
         // an empty completion candidate list) rather than refusing to
         // start, same spirit as an empty query result rendering as an
         // empty grid rather than an error.
-        let tables = engine.tables().unwrap_or_default();
+        let tables = files
+            .first()
+            .map(|f| f.engine.tables().unwrap_or_default())
+            .unwrap_or_default();
         let candidates = completion::candidates(&tables);
         Self {
             running: true,
-            engine,
+            files,
+            active: 0,
             focus: Focus::Query,
             query_pane: QueryPane::new(candidates),
             schema_tree: SchemaTreePane::new(tables),
@@ -146,7 +171,10 @@ impl App {
     }
 
     fn submit(&mut self, query: &str) {
-        match self.engine.run_query(query) {
+        let Some(file) = self.files.get_mut(self.active) else {
+            return;
+        };
+        match file.engine.run_query(query) {
             Ok(result) => {
                 let headers = result.columns;
                 let rows = result
