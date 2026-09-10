@@ -53,7 +53,11 @@ impl QueryPane {
         for (start, end, style) in highlight::highlights(&text) {
             self.textarea.custom_highlight((start, end), style, 10);
         }
-        self.textarea.set_block(theme::pane_block("query", focused));
+        // The submit key isn't discoverable otherwise -- Enter inserting
+        // a newline instead of running the query (needed for multi-line
+        // editing) reads as "the engine stopped working" without this.
+        self.textarea
+            .set_block(theme::pane_block("query -- F5 to run", focused));
         frame.render_widget(&self.textarea, area);
     }
 }
