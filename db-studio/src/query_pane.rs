@@ -64,6 +64,12 @@ impl QueryPane {
         self.popup.is_some()
     }
 
+    /// The cursor's (row, col), 0-based -- db-studio#19's status bar
+    /// renders this 1-based, the way editors conventionally do.
+    pub fn cursor(&self) -> (usize, usize) {
+        self.textarea.cursor()
+    }
+
     /// Handles one key event. Returns the submitted query text on `F5`
     /// (and clears the buffer), otherwise `None`. A popup consumes
     /// Up/Down/Tab/Enter/Esc itself before any of them reach the

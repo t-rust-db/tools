@@ -22,6 +22,7 @@ use crate::error_pane::ErrorPane;
 use crate::grid_pane::{Grid, GridPane};
 use crate::query_pane::QueryPane;
 use crate::schema_tree::{FileSchema, SchemaTreePane};
+use crate::status_bar;
 use crate::terminal::Tui;
 
 /// One file opened on the command line, per db-studio#16 -- `main.rs`
@@ -109,10 +110,11 @@ impl App {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
-        let [query_area, middle_area, error_area] = Layout::vertical([
+        let [query_area, middle_area, error_area, status_area] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Min(0),
             Constraint::Length(3),
+            Constraint::Length(1),
         ])
         .areas(frame.area());
         let [tree_area, grid_area] =
@@ -123,6 +125,18 @@ impl App {
             .render(frame, tree_area, self.focus == Focus::Tree);
         self.grid_pane.render(frame, grid_area);
         self.error_pane.render(frame, error_area);
+        let active_label = self
+            .files
+            .get(self.active)
+            .map(|f| file_label(&f.path))
+            .unwrap_or_default();
+        status_bar::render(
+            frame,
+            status_area,
+            &active_label,
+            "row",
+            self.query_pane.cursor(),
+        );
         // Last: ratatui has no z-ordering, so the completion popup must
         // paint after every pane it might overlap, not before.
         self.query_pane.render_popup(frame, query_area);

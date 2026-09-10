@@ -9,6 +9,7 @@ mod grid_pane;
 mod highlight;
 mod query_pane;
 mod schema_tree;
+mod status_bar;
 mod terminal;
 mod theme;
 
