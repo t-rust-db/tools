@@ -155,13 +155,18 @@ problems:
   keyword-list ANSI-escape highlighter for a line-editor, the right idea
   but the wrong shape (raw escapes, not `ratatui::text::Span`s) and not
   tokenizer-driven, so it's a spec to crib from, not code to lift.
-- **Schema tree inspector**: a [`tui-tree-widget`] pane (table -> columns)
-  fed by `RowEngine::run_query` against `sqlite_master`/`PRAGMA
-  table_info` -- no `db-core` changes needed, M1's `Engine::run_query` is
-  already sufficient. Doubles as M2's open-files pane once multiple files
-  exist, so it doesn't need throwing away later.
-- **Completion**: a schema-aware popup using [`nucleo`] (fuzzy ranking,
-  what Helix uses) over the same catalog query as the tree inspector.
+- **Schema tree inspector** (shipped as #10): a [`tui-tree-widget`] pane
+  ("Data Catalog", table -> columns) fed by `Engine::tables()`
+  (`db-core#310`) -- the original plan here assumed `RowEngine::
+  run_query` against `sqlite_master`/`PRAGMA table_info` would be
+  enough; verified during implementation that neither works through
+  `vm::row`'s compiled `SELECT` path, so a small `db-core` addition
+  landed first. Doubles as M2's open-files pane once multiple files
+  exist (see M2), so it doesn't need throwing away later.
+- **Completion** (shipped as #11): a schema-aware popup using
+  [`nucleo-matcher`] (the standalone synchronous matcher, not the full
+  threaded `nucleo` engine -- overkill for one file's small candidate
+  list) over the same `TableInfo` fetch the tree inspector uses.
 - **Visual polish**: `BorderType::Rounded`, a [`catppuccin`] palette
   instead of hand-picked `Color::White`/`Color::Red`, the active pane's
   border distinctly highlighted (Longbridge's focus convention -- nothing
@@ -173,10 +178,13 @@ Tracked as epic t-rust-db/db-studio#13 (sub-issues #9-#12).
 
 ### M2 — file switcher, multiple `.sqlite` files
 
-Add the left file pane and the status bar; CLI can take multiple files,
-switching between them re-targets the query pane at a different open
-connection. Still one mode — this phase is about the pane-switching
-mechanic, not new engine surface.
+Add a status bar, and extend the existing "Data Catalog" tree (#10)
+with a new root level -- `file -> table -> columns`, rather than
+today's bare `table -> columns` -- instead of building a separate file
+list pane from scratch. CLI can take multiple files; selecting a file
+root in the tree re-targets the query pane at that file's connection.
+Still one mode — this phase is about the pane-switching mechanic, not
+new engine surface.
 
 ### M3 — second mode: `.parquet`
 
