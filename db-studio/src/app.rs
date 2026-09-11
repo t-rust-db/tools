@@ -279,6 +279,12 @@ impl App {
     }
 
     fn submit(&mut self, query: &str) {
+        // F5 means "run this and show me what happened" -- switching
+        // back to Results here is what makes that visible. Without it,
+        // running a query while viewing Plan/Opcodes/Stats updated the
+        // grid invisibly behind whichever of those stayed on screen,
+        // making F5 look like it had stopped working.
+        self.view = OutputView::Results;
         let Some(file) = self.files.get_mut(self.active) else {
             return;
         };
