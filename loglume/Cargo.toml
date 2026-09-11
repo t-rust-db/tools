@@ -17,7 +17,7 @@ name = "loglume"
 path = "src/lib.rs"
 
 [dependencies]
-db-core = { path = "../db-core", default-features = false, features = ["storage-stream", "vm-stream"] }
+db-core = { version = "0.88.1", git = "https://github.com/t-rust-db/db-core", tag = "v0.88.1", default-features = false, features = ["storage-stream", "vm-stream"] }
 clap = { version = "4", features = ["derive"] }
 memmap2 = "0.9"
 
