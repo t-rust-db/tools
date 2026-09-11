@@ -161,6 +161,7 @@ impl App {
             &active_label,
             &active_mode,
             self.query_pane.cursor(),
+            env!("CARGO_PKG_VERSION"),
         );
         // Last: ratatui has no z-ordering, so the completion popup must
         // paint after every pane it might overlap, not before.
