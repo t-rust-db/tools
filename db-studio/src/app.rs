@@ -491,4 +491,32 @@ mod tests {
             "expected stream file stats to render:\n{text}"
         );
     }
+
+    /// db-studio#39: a `JOIN` against a `.log` file's one table reports
+    /// a specific, readable message in the error pane -- `submit`
+    /// already routes any `EngineError` through `err.to_string()` with
+    /// no per-`ErrorKind` branching, so this is a real-message check,
+    /// not new error-handling code.
+    #[test]
+    fn a_join_against_a_stream_file_shows_a_specific_error() {
+        let mut app = stream_app();
+        app.submit("SELECT log.message FROM log JOIN log AS l2 ON log.message = l2.message");
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("JOIN") && text.contains("one table"),
+            "expected a specific unsupported-JOIN message, not a generic one:\n{text}"
+        );
+    }
+
+    /// db-studio#39: same as above, for a window function.
+    #[test]
+    fn a_window_function_against_a_stream_file_shows_a_specific_error() {
+        let mut app = stream_app();
+        app.submit("SELECT message, ROW_NUMBER() OVER () FROM log");
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("window function"),
+            "expected a specific unsupported-window-function message:\n{text}"
+        );
+    }
 }
