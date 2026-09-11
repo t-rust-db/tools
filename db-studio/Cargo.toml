@@ -9,8 +9,12 @@ authors = ["Ilja Heitlager <iheitlager@schubergphilis.com>"]
 
 [dependencies]
 # M1 was row-mode only (see .openspec/plan.md); M3 added batch,
-# M5 (db-studio#35) adds stream.
-db-core = { path = "../db-core", default-features = false, features = ["engine-row", "engine-column", "engine-stream"] }
+# M5 (db-studio#35) adds stream. Pinned to a tagged db-core release
+# (same convention as sqlite-rs/column-rs/trigrep) rather than a local
+# path -- a path dependency always builds against whatever commit
+# happens to be checked out on disk, which is a real hazard in a
+# multi-checkout/worktree environment.
+db-core = { version = "0.86.1", git = "https://github.com/t-rust-db/db-core", tag = "v0.86.1", default-features = false, features = ["engine-row", "engine-column", "engine-stream"] }
 ratatui = "0.30.2"
 crossterm = "0.29.0"
 tui-textarea-2 = { version = "0.13.2", default-features = false, features = ["ratatui", "crossterm"] }
