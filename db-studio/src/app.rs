@@ -411,4 +411,84 @@ mod tests {
     fn down() -> crossterm::event::KeyEvent {
         crossterm::event::KeyEvent::from(KeyCode::Down)
     }
+
+    fn type_text(app: &mut App, text: &str) {
+        for ch in text.chars() {
+            app.query_pane
+                .handle_key(crossterm::event::KeyEvent::from(KeyCode::Char(ch)));
+        }
+    }
+
+    fn stream_app() -> App {
+        let path = stream_fixture();
+        let engine = StreamEngine::open(&path).unwrap();
+        App::new(vec![OpenFile {
+            path,
+            engine: Box::new(engine),
+        }])
+    }
+
+    fn rendered(app: &mut App) -> String {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// db-studio#38: the query-plan pane (F2) shows a real plan for a
+    /// query against an open `.log` file -- `StreamEngine::explain_plan`
+    /// already implements this; `refresh_plan` and `plan_pane::render`
+    /// are mode-agnostic already, so this is a real-engine check, not
+    /// new rendering code.
+    #[test]
+    fn f2_shows_a_real_plan_for_a_stream_query() {
+        let mut app = stream_app();
+        type_text(
+            &mut app,
+            "SELECT message FROM log WHERE severity_text = 'ERROR'",
+        );
+        app.refresh_plan();
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("log"),
+            "expected the plan to mention the `log` table:\n{text}"
+        );
+    }
+
+    /// db-studio#38: same as above, for the opcode-overview pane (F3).
+    #[test]
+    fn f3_shows_real_opcodes_for_a_stream_query() {
+        let mut app = stream_app();
+        type_text(
+            &mut app,
+            "SELECT message FROM log WHERE severity_text = 'ERROR'",
+        );
+        app.refresh_opcodes();
+        let text = rendered(&mut app);
+        assert!(
+            !text.trim().is_empty(),
+            "expected a non-empty opcode listing:\n{text}"
+        );
+    }
+
+    /// db-studio#38: the file-statistics pane (F4) shows real
+    /// `FileStats::Stream` data (bytes parsed / line count) -- the
+    /// `stats_pane::render` match arm for it was written speculatively
+    /// in M4 (db-studio#32) with no engine to produce it until now.
+    #[test]
+    fn f4_shows_real_stream_file_stats() {
+        let mut app = stream_app();
+        app.view = OutputView::Stats;
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("bytes parsed") && text.contains("lines"),
+            "expected stream file stats to render:\n{text}"
+        );
+    }
 }
