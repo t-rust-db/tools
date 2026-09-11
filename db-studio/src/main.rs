@@ -1,8 +1,9 @@
 //! `db-studio`: a TUI database studio for the t-rust-db family. See
 //! `.openspec/plan.md` for scope and phasing. M3 opens `.sqlite` (row
-//! mode) and `.parquet` (batch mode) files, one or more per invocation --
-//! `db-studio a.sqlite b.parquet [more...]`, dispatching each by
-//! extension to the matching `Engine`.
+//! mode) and `.parquet` (batch mode) files; M5 (db-studio#35) adds
+//! `.log` (stream mode) -- one or more per invocation, `db-studio
+//! a.sqlite b.parquet c.log [more...]`, dispatching each by extension
+//! to the matching `Engine`.
 
 mod app;
 mod completion;
@@ -24,11 +25,12 @@ use std::process::ExitCode;
 use app::OpenFile;
 use db_core::engine::column::BatchEngine;
 use db_core::engine::row::RowEngine;
+use db_core::engine::stream::StreamEngine;
 use db_core::engine::{Engine, EngineError, ErrorKind};
 
 /// Opens `path` through whichever `Engine` its extension implies.
-/// Case-insensitive (`.SQLITE`, `.Parquet`, ... all match) -- file
-/// extensions aren't a place users expect case to matter.
+/// Case-insensitive (`.SQLITE`, `.Parquet`, `.LOG`, ... all match) --
+/// file extensions aren't a place users expect case to matter.
 fn open_by_extension(path: &Path) -> Result<Box<dyn Engine>, EngineError> {
     let ext = path
         .extension()
@@ -37,10 +39,11 @@ fn open_by_extension(path: &Path) -> Result<Box<dyn Engine>, EngineError> {
     match ext.as_deref() {
         Some("sqlite" | "db") => RowEngine::open(path).map(|e| Box::new(e) as Box<dyn Engine>),
         Some("parquet") => BatchEngine::open(path).map(|e| Box::new(e) as Box<dyn Engine>),
+        Some("log") => StreamEngine::open(path).map(|e| Box::new(e) as Box<dyn Engine>),
         other => Err(EngineError::new(
             ErrorKind::Open,
             format!(
-                "unrecognized file extension {:?} -- expected .sqlite/.db (row mode) or .parquet (batch mode)",
+                "unrecognized file extension {:?} -- expected .sqlite/.db (row mode), .parquet (batch mode), or .log (stream mode)",
                 other.unwrap_or("<none>")
             ),
         )),
@@ -50,7 +53,7 @@ fn open_by_extension(path: &Path) -> Result<Box<dyn Engine>, EngineError> {
 fn main() -> ExitCode {
     let paths: Vec<String> = std::env::args().skip(1).collect();
     if paths.is_empty() {
-        eprintln!("usage: db-studio <path.sqlite|path.parquet> [more ...]");
+        eprintln!("usage: db-studio <path.sqlite|path.parquet|path.log> [more ...]");
         return ExitCode::FAILURE;
     }
 

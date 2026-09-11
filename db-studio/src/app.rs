@@ -340,3 +340,250 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    reason = "test code fails fast -- see db-core's own test files for the same convention"
+)]
+mod tests {
+    use super::*;
+    use db_core::engine::stream::StreamEngine;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn stream_fixture() -> PathBuf {
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.log"
+        ))
+    }
+
+    /// db-studio#37: a `.log` file opened through `StreamEngine` builds a
+    /// real schema tree entry (not just an empty branch) and reports
+    /// `Mode::Stream` in the status bar -- the same end-to-end wiring
+    /// `App::new` already does for row/batch, verified here against a
+    /// real engine rather than a fabricated `TableInfo`.
+    #[test]
+    fn a_log_file_gets_a_real_schema_tree_entry_and_stream_mode() {
+        let path = stream_fixture();
+        let engine = StreamEngine::open(&path).unwrap();
+        let mut app = App::new(vec![OpenFile {
+            path,
+            engine: Box::new(engine),
+        }]);
+
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+
+        // Expand the file root, then the `log` table under it, so the
+        // rendered tree shows the actual column list, not just the
+        // collapsed file-root label -- `select_first`/`toggle_selected`
+        // only take effect after a render has populated the tree's
+        // flattened-item cache (see schema_tree.rs's own note).
+        app.schema_tree.handle_key(enter());
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        app.schema_tree.handle_key(down());
+        app.schema_tree.handle_key(enter());
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+
+        let content = terminal.backend().buffer().content();
+        let rendered: String = content.iter().map(|cell| cell.symbol()).collect();
+        assert!(
+            rendered.contains("sample.log"),
+            "expected the file root in the tree:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("message"),
+            "expected the `log` table's predefined columns in the tree:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("mode: stream"),
+            "expected the status bar to report stream mode:\n{rendered}"
+        );
+    }
+
+    fn enter() -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::from(KeyCode::Enter)
+    }
+
+    fn down() -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::from(KeyCode::Down)
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for ch in text.chars() {
+            app.query_pane
+                .handle_key(crossterm::event::KeyEvent::from(KeyCode::Char(ch)));
+        }
+    }
+
+    fn stream_app() -> App {
+        let path = stream_fixture();
+        let engine = StreamEngine::open(&path).unwrap();
+        App::new(vec![OpenFile {
+            path,
+            engine: Box::new(engine),
+        }])
+    }
+
+    fn rendered(app: &mut App) -> String {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// db-studio#38: the query-plan pane (F2) shows a real plan for a
+    /// query against an open `.log` file -- `StreamEngine::explain_plan`
+    /// already implements this; `refresh_plan` and `plan_pane::render`
+    /// are mode-agnostic already, so this is a real-engine check, not
+    /// new rendering code.
+    #[test]
+    fn f2_shows_a_real_plan_for_a_stream_query() {
+        let mut app = stream_app();
+        type_text(
+            &mut app,
+            "SELECT message FROM log WHERE severity_text = 'ERROR'",
+        );
+        app.refresh_plan();
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("log"),
+            "expected the plan to mention the `log` table:\n{text}"
+        );
+    }
+
+    /// db-studio#38: same as above, for the opcode-overview pane (F3).
+    #[test]
+    fn f3_shows_real_opcodes_for_a_stream_query() {
+        let mut app = stream_app();
+        type_text(
+            &mut app,
+            "SELECT message FROM log WHERE severity_text = 'ERROR'",
+        );
+        app.refresh_opcodes();
+        let text = rendered(&mut app);
+        assert!(
+            !text.trim().is_empty(),
+            "expected a non-empty opcode listing:\n{text}"
+        );
+    }
+
+    /// db-studio#38: the file-statistics pane (F4) shows real
+    /// `FileStats::Stream` data (bytes parsed / line count) -- the
+    /// `stats_pane::render` match arm for it was written speculatively
+    /// in M4 (db-studio#32) with no engine to produce it until now.
+    #[test]
+    fn f4_shows_real_stream_file_stats() {
+        let mut app = stream_app();
+        app.view = OutputView::Stats;
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("bytes parsed") && text.contains("lines"),
+            "expected stream file stats to render:\n{text}"
+        );
+    }
+
+    /// db-studio#39: a `JOIN` against a `.log` file's one table reports
+    /// a specific, readable message in the error pane -- `submit`
+    /// already routes any `EngineError` through `err.to_string()` with
+    /// no per-`ErrorKind` branching, so this is a real-message check,
+    /// not new error-handling code.
+    #[test]
+    fn a_join_against_a_stream_file_shows_a_specific_error() {
+        let mut app = stream_app();
+        app.submit("SELECT log.message FROM log JOIN log AS l2 ON log.message = l2.message");
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("JOIN") && text.contains("one table"),
+            "expected a specific unsupported-JOIN message, not a generic one:\n{text}"
+        );
+    }
+
+    /// db-studio#39: same as above, for a window function.
+    #[test]
+    fn a_window_function_against_a_stream_file_shows_a_specific_error() {
+        let mut app = stream_app();
+        app.submit("SELECT message, ROW_NUMBER() OVER () FROM log");
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("window function"),
+            "expected a specific unsupported-window-function message:\n{text}"
+        );
+    }
+
+    /// db-studio#40 (M5's "wire together" ticket, mirroring #27's
+    /// equivalent for M3): all three modes open in one session,
+    /// switching between them via the schema tree (db-studio#18) runs
+    /// each query against the right engine and reports the right mode
+    /// in the status bar -- exactly what already works for row<->batch,
+    /// now proven for row<->batch<->stream together.
+    #[test]
+    fn all_three_modes_open_together_and_switch_correctly() {
+        use db_core::engine::column::BatchEngine;
+        use db_core::engine::row::RowEngine;
+
+        let sqlite_path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.sqlite"
+        ));
+        let parquet_path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.parquet"
+        ));
+        let log_path = stream_fixture();
+
+        let mut app = App::new(vec![
+            OpenFile {
+                engine: Box::new(RowEngine::open(&sqlite_path).unwrap()),
+                path: sqlite_path.clone(),
+            },
+            OpenFile {
+                engine: Box::new(BatchEngine::open(&parquet_path).unwrap()),
+                path: parquet_path.clone(),
+            },
+            OpenFile {
+                engine: Box::new(StreamEngine::open(&log_path).unwrap()),
+                path: log_path.clone(),
+            },
+        ]);
+
+        // sqlite is active by default (App::new's initial `active: 0`).
+        app.submit("SELECT name, price FROM items ORDER BY id");
+        let text = rendered(&mut app);
+        assert!(text.contains("mode: row"), "expected row mode:\n{text}");
+        assert!(
+            text.contains("widget"),
+            "expected real row-mode results:\n{text}"
+        );
+
+        app.switch_active_file(parquet_path.display().to_string());
+        app.submit("SELECT region FROM sample");
+        let text = rendered(&mut app);
+        assert!(text.contains("mode: batch"), "expected batch mode:\n{text}");
+        assert!(
+            text.contains("south"),
+            "expected real batch-mode results:\n{text}"
+        );
+
+        app.switch_active_file(log_path.display().to_string());
+        app.submit("SELECT message FROM log WHERE severity_text = 'ERROR'");
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("mode: stream"),
+            "expected stream mode:\n{text}"
+        );
+        assert!(
+            text.contains("GET /api/orders 500"),
+            "expected real stream-mode results:\n{text}"
+        );
+    }
+}
