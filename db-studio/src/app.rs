@@ -519,4 +519,71 @@ mod tests {
             "expected a specific unsupported-window-function message:\n{text}"
         );
     }
+
+    /// db-studio#40 (M5's "wire together" ticket, mirroring #27's
+    /// equivalent for M3): all three modes open in one session,
+    /// switching between them via the schema tree (db-studio#18) runs
+    /// each query against the right engine and reports the right mode
+    /// in the status bar -- exactly what already works for row<->batch,
+    /// now proven for row<->batch<->stream together.
+    #[test]
+    fn all_three_modes_open_together_and_switch_correctly() {
+        use db_core::engine::column::BatchEngine;
+        use db_core::engine::row::RowEngine;
+
+        let sqlite_path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.sqlite"
+        ));
+        let parquet_path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.parquet"
+        ));
+        let log_path = stream_fixture();
+
+        let mut app = App::new(vec![
+            OpenFile {
+                engine: Box::new(RowEngine::open(&sqlite_path).unwrap()),
+                path: sqlite_path.clone(),
+            },
+            OpenFile {
+                engine: Box::new(BatchEngine::open(&parquet_path).unwrap()),
+                path: parquet_path.clone(),
+            },
+            OpenFile {
+                engine: Box::new(StreamEngine::open(&log_path).unwrap()),
+                path: log_path.clone(),
+            },
+        ]);
+
+        // sqlite is active by default (App::new's initial `active: 0`).
+        app.submit("SELECT name, price FROM items ORDER BY id");
+        let text = rendered(&mut app);
+        assert!(text.contains("mode: row"), "expected row mode:\n{text}");
+        assert!(
+            text.contains("widget"),
+            "expected real row-mode results:\n{text}"
+        );
+
+        app.switch_active_file(parquet_path.display().to_string());
+        app.submit("SELECT region FROM sample");
+        let text = rendered(&mut app);
+        assert!(text.contains("mode: batch"), "expected batch mode:\n{text}");
+        assert!(
+            text.contains("south"),
+            "expected real batch-mode results:\n{text}"
+        );
+
+        app.switch_active_file(log_path.display().to_string());
+        app.submit("SELECT message FROM log WHERE severity_text = 'ERROR'");
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("mode: stream"),
+            "expected stream mode:\n{text}"
+        );
+        assert!(
+            text.contains("GET /api/orders 500"),
+            "expected real stream-mode results:\n{text}"
+        );
+    }
 }
