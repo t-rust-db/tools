@@ -235,6 +235,24 @@ impl App {
                 }
                 _ => {}
             }
+            // Shift+Left/Right scroll the grid horizontally (db-studio#42),
+            // also regardless of focus -- plain Left/Right are already
+            // claimed by the query pane's cursor and the tree's
+            // collapse/expand, so a wide result set (e.g. `SELECT *` over
+            // a log's Tier-3 columns) needs a key nothing else uses.
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                match key.code {
+                    KeyCode::Right => {
+                        self.grid_pane.scroll_right();
+                        return Ok(());
+                    }
+                    KeyCode::Left => {
+                        self.grid_pane.scroll_left();
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
             match self.focus {
                 Focus::Query => {
                     if let Some(query) = self.query_pane.handle_key(key) {

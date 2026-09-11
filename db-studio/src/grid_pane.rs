@@ -30,6 +30,12 @@ impl Grid {
 pub struct GridPane {
     grid: Grid,
     state: TableState,
+    /// Index of the leftmost visible column (db-studio#42) -- a wide
+    /// result set (e.g. `SELECT *` over a log's Tier-3 columns) squeezed
+    /// every column to unreadable widths with no way to see a truncated
+    /// one. Scrolling right hides that many leading columns rather than
+    /// shrinking them further, so the remaining ones stay readable.
+    col_offset: usize,
 }
 
 impl GridPane {
@@ -37,10 +43,11 @@ impl GridPane {
         Self::default()
     }
 
-    /// Replaces the displayed result set, resetting scroll to the top.
+    /// Replaces the displayed result set, resetting both scroll axes.
     pub fn set_grid(&mut self, grid: Grid) {
         self.grid = grid;
         self.state = TableState::default();
+        self.col_offset = 0;
         if !self.grid.rows.is_empty() {
             self.state.select(Some(0));
         }
@@ -68,21 +75,46 @@ impl GridPane {
         self.state.select(Some(prev));
     }
 
+    /// Hides one more leading column, stopping once a single column
+    /// (the last one) would remain -- there's always something to show.
+    pub fn scroll_right(&mut self) {
+        let last = self.grid.headers.len().saturating_sub(1);
+        self.col_offset = usize::min(self.col_offset.saturating_add(1), last);
+    }
+
+    pub fn scroll_left(&mut self) {
+        self.col_offset = self.col_offset.saturating_sub(1);
+    }
+
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let header = Row::new(self.grid.headers.clone()).style(
+        let offset = self.col_offset.min(self.grid.headers.len());
+        let visible_headers = self.grid.headers.get(offset..).unwrap_or_default();
+        let header = Row::new(visible_headers.to_vec()).style(
             Style::default()
                 .fg(theme::header())
                 .add_modifier(Modifier::BOLD),
         );
-        let rows = self.grid.rows.iter().map(|r| Row::new(r.clone()));
-        let widths: Vec<Constraint> = if self.grid.headers.is_empty() {
+        let rows = self.grid.rows.iter().map(|r| {
+            let cells = r.get(offset..).unwrap_or_default();
+            Row::new(cells.to_vec())
+        });
+        let widths: Vec<Constraint> = if visible_headers.is_empty() {
             vec![Constraint::Percentage(100)]
         } else {
-            vec![Constraint::Ratio(1, self.grid.headers.len() as u32); self.grid.headers.len()]
+            vec![Constraint::Ratio(1, visible_headers.len() as u32); visible_headers.len()]
+        };
+        // Scrolled-right state is otherwise invisible (no horizontal
+        // scrollbar) -- the title is the only cue that columns to the
+        // left are hidden, same spirit as the vertical scrollbar cueing
+        // there's more above/below.
+        let title = if offset > 0 {
+            format!("results -- {offset} column(s) hidden to the left")
+        } else {
+            "results".to_string()
         };
         let table = Table::new(rows, widths)
             .header(header)
-            .block(theme::pane_block("results", false))
+            .block(theme::pane_block(title, false))
             .row_highlight_style(
                 Style::default()
                     .bg(theme::selection_bg())
@@ -162,5 +194,80 @@ mod tests {
         pane.clear();
         assert_eq!(pane.grid, Grid::default());
         assert_eq!(pane.state.selected(), None);
+    }
+
+    fn wide_sample() -> Grid {
+        Grid::new(
+            vec!["a".into(), "b".into(), "c".into(), "d".into()],
+            vec![vec!["1".into(), "2".into(), "3".into(), "4".into()]],
+        )
+    }
+
+    #[test]
+    fn scroll_right_stops_leaving_the_last_column_visible() {
+        let mut pane = GridPane::new();
+        pane.set_grid(wide_sample());
+        for _ in 0..10 {
+            pane.scroll_right();
+        }
+        assert_eq!(pane.col_offset, 3);
+    }
+
+    #[test]
+    fn scroll_left_stops_at_zero() {
+        let mut pane = GridPane::new();
+        pane.set_grid(wide_sample());
+        pane.scroll_right();
+        pane.scroll_right();
+        pane.scroll_left();
+        pane.scroll_left();
+        pane.scroll_left();
+        assert_eq!(pane.col_offset, 0);
+    }
+
+    #[test]
+    fn set_grid_resets_the_column_offset() {
+        let mut pane = GridPane::new();
+        pane.set_grid(wide_sample());
+        pane.scroll_right();
+        pane.scroll_right();
+        pane.set_grid(wide_sample());
+        assert_eq!(pane.col_offset, 0);
+    }
+
+    #[allow(
+        clippy::unwrap_used,
+        reason = "test code fails fast -- see db-core's own test files for the same convention"
+    )]
+    #[test]
+    fn scrolling_right_hides_leading_columns_and_shows_a_hint() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let mut pane = GridPane::new();
+        pane.set_grid(wide_sample());
+        pane.scroll_right();
+        pane.scroll_right();
+
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| pane.render(frame, frame.area()))
+            .unwrap();
+        let content = terminal.backend().buffer().content();
+        let rendered: String = content.iter().map(|cell| cell.symbol()).collect();
+
+        assert!(
+            !rendered.contains('a') && !rendered.contains('1'),
+            "expected hidden leading columns not to render:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('c') && rendered.contains('3'),
+            "expected a visible column to still render:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("2 column(s) hidden"),
+            "expected a hint about hidden columns in the title:\n{rendered}"
+        );
     }
 }

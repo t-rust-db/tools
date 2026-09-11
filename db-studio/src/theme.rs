@@ -56,8 +56,10 @@ pub fn selection_bg() -> Color {
 
 /// A pane's outer block, rounded, titled, and bordered per whether it
 /// currently has keyboard focus (Longbridge Terminal's convention --
-/// nothing distinguished this in M1).
-pub fn pane_block(title: &'static str, focused: bool) -> Block<'static> {
+/// nothing distinguished this in M1). Generic over the title so a
+/// caller with a computed title (db-studio#42's "N column(s) hidden"
+/// grid title) doesn't need a separate owned-string variant.
+pub fn pane_block(title: impl Into<ratatui::text::Line<'static>>, focused: bool) -> Block<'static> {
     let border_color = if focused { accent() } else { subtext() };
     let mut border_style = Style::default().fg(border_color);
     if focused {
