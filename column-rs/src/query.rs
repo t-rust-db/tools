@@ -46,6 +46,11 @@ pub enum QueryError {
     Vm(crate::vm::VmError),
     File(db_core::storage::FileError),
     Io(String),
+    /// A `SINCE`/`UNTIL` clause (db-core ADR 0018) reached the batch
+    /// planner -- that clause is stream-only (db-core#308); column-rs
+    /// has no `.log` files, so this only fires on a query that
+    /// deliberately (or mistakenly) uses stream-only syntax.
+    ScopeClauseUnsupported,
 }
 
 impl fmt::Display for QueryError {
@@ -71,6 +76,12 @@ impl fmt::Display for QueryError {
             QueryError::Vm(e) => write!(f, "{e}"),
             QueryError::File(e) => write!(f, "{e}"),
             QueryError::Io(e) => write!(f, "{e}"),
+            QueryError::ScopeClauseUnsupported => {
+                write!(
+                    f,
+                    "SINCE/UNTIL is a stream-only clause, not supported over Parquet"
+                )
+            }
         }
     }
 }
@@ -99,6 +110,7 @@ impl From<PlanError> for QueryError {
             PlanError::UnsupportedSelectItem(msg) => QueryError::UnsupportedSelectItem(msg),
             PlanError::NoJoinClause => QueryError::NoJoinClause,
             PlanError::Internal(msg) => QueryError::PlannerInvariant(msg),
+            PlanError::ScopeClauseUnsupported => QueryError::ScopeClauseUnsupported,
         }
     }
 }
@@ -571,13 +583,19 @@ impl QueryEngine {
                 TableStats {
                     row_groups: file.num_row_groups(),
                     rows: file.num_rows(),
+                    // column-rs is single-mode: every SCAN in the plan
+                    // is already understood to be a Parquet file, so
+                    // there's no cross-mode join source label to carry
+                    // (db-core#315, ADR-0019 -- stream/row-driven joins
+                    // only).
+                    source: None,
                 },
             );
         }
         Ok(planner::explain(query, |table| {
             stats
                 .get(table)
-                .copied()
+                .cloned()
                 .expect("every table the query references was opened above")
         })?)
     }
