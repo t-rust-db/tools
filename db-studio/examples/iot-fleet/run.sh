@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Generates the fixtures (if missing) and launches db-studio against
-# fleet.sqlite and readings.parquet as two open files.
+# fleet.sqlite, readings.parquet, and device.log as three open files.
 #
 #   ./run.sh
 #
@@ -38,8 +38,8 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 
-if [ ! -f fixture/fleet.sqlite ] || [ ! -f fixture/readings.parquet ]; then
+if [ ! -f fixture/fleet.sqlite ] || [ ! -f fixture/readings.parquet ] || [ ! -f fixture/device.log ]; then
     ./fixture/generate.sh
 fi
 
-exec "$BIN" fixture/fleet.sqlite fixture/readings.parquet
+exec "$BIN" fixture/fleet.sqlite fixture/readings.parquet fixture/device.log

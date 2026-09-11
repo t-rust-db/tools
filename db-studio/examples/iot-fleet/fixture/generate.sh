@@ -2,7 +2,7 @@
 # Generates the iot-fleet fixtures used by ../queries/*.sql:
 #   - fleet.sqlite   (row mode)   -- sites/devices/sensors dimensions, via sqlite3
 #   - readings.parquet (batch mode) -- device/sensor time-series metrics, via DuckDB
-#   - device.log     (stream mode, not yet openable by db-studio -- see ../README.md)
+#   - device.log     (stream mode) -- device events, real Heroku-style logfmt
 # Re-run any time to regenerate -- all three are gitignored.
 set -euo pipefail
 
@@ -73,19 +73,25 @@ SQL
 echo "wrote $ROOT/readings.parquet"
 
 # --- device.log: raw events ---------------------------------------------
-# db-studio can't open .log files yet (stream mode is M5, not built) --
-# this fixture is forward-looking, see ../README.md.
+# Real Heroku-style logfmt (ts=/level=/msg= are db-core's recognized
+# aliases, see storage::stream::alias) -- every line carries the same
+# core fields (ts, level, device, site, event, msg) plus one optional
+# event-specific detail field, so db-studio's grid shows a consistent
+# schema instead of one column per distinct key seen across the file
+# (db-core#348 fixed StreamEngine's format detection; a prior version
+# of this fixture used bare positional timestamp/level tokens, which
+# don't match any alias and parsed as garbage per-line boolean columns).
 rm -f device.log
 cat > device.log <<'LOG'
-2026-09-10T00:03:11Z INFO  device=1 site=1 msg="heartbeat ok"
-2026-09-10T02:14:47Z WARN  device=3 site=2 msg="humidity sensor reading unstable"
-2026-09-10T05:41:02Z INFO  device=5 site=3 msg="firmware check ok" firmware=1.9.5
-2026-09-10T08:22:59Z ERROR device=2 site=1 msg="connectivity lost" retries=3
-2026-09-10T08:24:10Z INFO  device=2 site=1 msg="connectivity restored"
-2026-09-10T11:05:33Z WARN  device=5 site=3 msg="vibration threshold exceeded" value=2.8
-2026-09-10T14:47:20Z INFO  device=4 site=2 msg="heartbeat ok"
-2026-09-10T18:02:15Z ERROR device=1 site=1 msg="sensor read timeout" sensor=1
-2026-09-10T21:30:44Z INFO  device=3 site=2 msg="firmware check ok" firmware=2.0.1
-2026-09-10T23:58:02Z WARN  device=2 site=1 msg="battery low" level=12
+ts=2026-09-10T00:03:11Z level=info device=1 site=1 event=heartbeat msg="heartbeat ok"
+ts=2026-09-10T02:14:47Z level=warn device=3 site=2 event=humidity msg="humidity sensor reading unstable"
+ts=2026-09-10T05:41:02Z level=info device=5 site=3 event=firmware msg="firmware check ok" firmware=1.9.5
+ts=2026-09-10T08:22:59Z level=error device=2 site=1 event=connectivity msg="connectivity lost" retries=3
+ts=2026-09-10T08:24:10Z level=info device=2 site=1 event=connectivity msg="connectivity restored"
+ts=2026-09-10T11:05:33Z level=warn device=5 site=3 event=vibration msg="vibration threshold exceeded" reading=2.8
+ts=2026-09-10T14:47:20Z level=info device=4 site=2 event=heartbeat msg="heartbeat ok"
+ts=2026-09-10T18:02:15Z level=error device=1 site=1 event=sensor_timeout msg="sensor read timeout" sensor=1
+ts=2026-09-10T21:30:44Z level=info device=3 site=2 event=firmware msg="firmware check ok" firmware=2.0.1
+ts=2026-09-10T23:58:02Z level=warn device=2 site=1 event=battery msg="battery low" battery_pct=12
 LOG
 echo "wrote $ROOT/device.log"
