@@ -70,6 +70,13 @@ impl QueryPane {
         self.textarea.cursor()
     }
 
+    /// The current buffer text -- db-studio#30/#31's Plan/Opcodes views
+    /// read this (not the last-submitted query) so they can preview a
+    /// query before running it with `F5`.
+    pub fn text(&self) -> String {
+        self.textarea.lines().join("\n")
+    }
+
     /// Handles one key event. Returns the submitted query text on `F5`
     /// (and clears the buffer), otherwise `None`. A popup consumes
     /// Up/Down/Tab/Enter/Esc itself before any of them reach the
@@ -80,10 +87,13 @@ impl QueryPane {
             if text.trim().is_empty() {
                 return None;
             }
-            self.textarea = TextArea::default();
-            self.textarea
-                .set_selection_style(Style::default().bg(theme::selection_bg()));
-            self.popup = None;
+            // Deliberately *not* cleared: F2/F3 (Plan/Opcodes) read this
+            // same buffer to preview a query before running it, and
+            // clearing it here left them with nothing right after F5 --
+            // "parse: empty statement" on the very query you just ran.
+            // Every other SQL tool keeps the query visible after
+            // running it too, for the same reason: you're usually about
+            // to tweak and re-run it, not start from scratch.
             return Some(text);
         }
 
@@ -269,13 +279,26 @@ mod tests {
     }
 
     #[test]
-    fn typing_then_f5_submits_and_clears() {
+    fn typing_then_f5_submits_and_keeps_the_text() {
         let mut pane = pane_with_candidates();
         for c in "SELECT 1".chars() {
             assert_eq!(pane.handle_key(key(KeyCode::Char(c))), None);
         }
         assert_eq!(pane.handle_key(f5()), Some("SELECT 1".to_string()));
-        assert_eq!(pane.textarea.lines(), &[""]);
+        // Not cleared: F2/F3 preview a plan/opcodes from this same
+        // buffer, and pressing F5 again should re-run the same query,
+        // not an empty one.
+        assert_eq!(pane.textarea.lines(), &["SELECT 1"]);
+    }
+
+    #[test]
+    fn f5_twice_in_a_row_submits_the_same_query_both_times() {
+        let mut pane = pane_with_candidates();
+        for c in "SELECT 1".chars() {
+            pane.handle_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(pane.handle_key(f5()), Some("SELECT 1".to_string()));
+        assert_eq!(pane.handle_key(f5()), Some("SELECT 1".to_string()));
     }
 
     #[test]

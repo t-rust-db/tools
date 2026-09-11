@@ -2,6 +2,18 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.5.0] - 2026-09-10
+
+### Added
+
+- **M4: introspection panes, both modes** (epic #29). `F1`-`F4` cycle the results area between Results (default), Query plan, Opcodes, and File statistics -- all rendering data `Engine` already computed (`explain_plan`/`explain_opcodes`/`stats`), no new query-planning logic in db-studio (#30-#33). Plan/Opcodes read the query pane's *current* text, not the last-submitted query, so a plan can be previewed before running with `F5`. A compile/parse failure while viewing Plan/Opcodes routes to the existing error pane and leaves the current view unchanged, rather than replacing it with something broken.
+- Unlike M3, this milestone had no `db-core` blocker -- verified before starting that both `RowEngine` and `BatchEngine` already implement the needed `Engine` methods.
+
+### Fixed
+
+- `F5` no longer clears the query pane's text after running -- it broke `F2`/`F3` immediately afterward (they read the query pane's current text, so right after running they had nothing to preview and errored with "parse: empty statement"). Every other SQL tool keeps the query visible after running it too.
+- `F5` now switches back to the Results view before running -- previously, running a query while viewing Plan/Opcodes/Stats updated the results grid invisibly behind whichever of those stayed on screen, making `F5` look like it had stopped working.
+
 ## [0.4.0] - 2026-09-10
 
 ### Added
