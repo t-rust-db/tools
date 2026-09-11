@@ -14,7 +14,7 @@ authors = ["Ilja Heitlager <iheitlager@schubergphilis.com>"]
 # path -- a path dependency always builds against whatever commit
 # happens to be checked out on disk, which is a real hazard in a
 # multi-checkout/worktree environment.
-db-core = { version = "0.86.1", git = "https://github.com/t-rust-db/db-core", tag = "v0.86.1", default-features = false, features = ["engine-row", "engine-column", "engine-stream"] }
+db-core = { version = "0.88.1", git = "https://github.com/t-rust-db/db-core", tag = "v0.88.1", default-features = false, features = ["engine-row", "engine-column", "engine-stream"] }
 ratatui = "0.30.2"
 crossterm = "0.29.0"
 tui-textarea-2 = { version = "0.13.2", default-features = false, features = ["ratatui", "crossterm"] }
