@@ -71,7 +71,7 @@ impl GridPane {
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         let header = Row::new(self.grid.headers.clone()).style(
             Style::default()
-                .fg(theme::text())
+                .fg(theme::header())
                 .add_modifier(Modifier::BOLD),
         );
         let rows = self.grid.rows.iter().map(|r| Row::new(r.clone()));

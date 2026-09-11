@@ -32,8 +32,11 @@ pub fn render(frame: &mut Frame, area: Rect, sections: &[OpcodeSection]) {
         Constraint::Length(16),
         Constraint::Min(0),
     ];
-    let header = Row::new(vec!["addr", "opcode", "operands"])
-        .style(Style::default().add_modifier(Modifier::BOLD));
+    let header = Row::new(vec!["addr", "opcode", "operands"]).style(
+        Style::default()
+            .fg(theme::header())
+            .add_modifier(Modifier::BOLD),
+    );
     let table = Table::new(lines, widths)
         .header(header)
         .block(theme::pane_block("results -- opcodes (F1 results)", false));

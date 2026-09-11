@@ -46,6 +46,10 @@ pub fn identifier() -> Color {
     mocha().blue.into()
 }
 
+pub fn header() -> Color {
+    mocha().yellow.into()
+}
+
 pub fn selection_bg() -> Color {
     mocha().surface1.into()
 }
