@@ -340,3 +340,75 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    reason = "test code fails fast -- see db-core's own test files for the same convention"
+)]
+mod tests {
+    use super::*;
+    use db_core::engine::stream::StreamEngine;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn stream_fixture() -> PathBuf {
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.log"
+        ))
+    }
+
+    /// db-studio#37: a `.log` file opened through `StreamEngine` builds a
+    /// real schema tree entry (not just an empty branch) and reports
+    /// `Mode::Stream` in the status bar -- the same end-to-end wiring
+    /// `App::new` already does for row/batch, verified here against a
+    /// real engine rather than a fabricated `TableInfo`.
+    #[test]
+    fn a_log_file_gets_a_real_schema_tree_entry_and_stream_mode() {
+        let path = stream_fixture();
+        let engine = StreamEngine::open(&path).unwrap();
+        let mut app = App::new(vec![OpenFile {
+            path,
+            engine: Box::new(engine),
+        }]);
+
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+
+        // Expand the file root, then the `log` table under it, so the
+        // rendered tree shows the actual column list, not just the
+        // collapsed file-root label -- `select_first`/`toggle_selected`
+        // only take effect after a render has populated the tree's
+        // flattened-item cache (see schema_tree.rs's own note).
+        app.schema_tree.handle_key(enter());
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        app.schema_tree.handle_key(down());
+        app.schema_tree.handle_key(enter());
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+
+        let content = terminal.backend().buffer().content();
+        let rendered: String = content.iter().map(|cell| cell.symbol()).collect();
+        assert!(
+            rendered.contains("sample.log"),
+            "expected the file root in the tree:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("message"),
+            "expected the `log` table's predefined columns in the tree:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("mode: stream"),
+            "expected the status bar to report stream mode:\n{rendered}"
+        );
+    }
+
+    fn enter() -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::from(KeyCode::Enter)
+    }
+
+    fn down() -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::from(KeyCode::Down)
+    }
+}
