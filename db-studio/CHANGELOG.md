@@ -2,6 +2,13 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.6.0] - 2026-09-11
+
+### Added
+
+- **M5: third mode: `.log` / stream** (epic #35). `.log` files open through db-core's `StreamEngine`, the third `Engine` mode alongside row/batch (`main.rs`'s `open_by_extension`, #36). db-core's stream engine (its own epic, db-core#302) was already complete by the time this landed -- no `db-core` changes were needed here, unlike M3's `#295` blocker. Verified end to end rather than assumed: the schema tree, introspection panes (`F2`/`F3`/`F4`), and error pane were all already mode-agnostic and needed zero rendering-code changes to handle stream data correctly (#37-#39); a query switching between `.sqlite`, `.parquet`, and `.log` files in one session runs against the right engine and reports the right mode throughout (#40).
+- `JOIN`/window-function queries against a `.log` file's single table surface specific `ErrorKind::Unsupported` messages (e.g. "JOIN with `l2`: the stream engine has one table") through the existing generic error pane.
+
 ## [0.5.0] - 2026-09-10
 
 ### Added
