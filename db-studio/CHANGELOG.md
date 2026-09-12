@@ -2,6 +2,12 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.8.0] - 2026-09-12
+
+### Added
+
+- **Inline row-detail expansion in the results grid** (#45): `Tab` reaches a new third focus stop on the grid (`Query` -> `Tree` -> `Grid` -> `Query`); `Enter` there opens the selected row's full-value detail section (`key: value` per line, `raw` sorted first for `.log` files), inserted directly below it in the same table rather than a separate pane. Navigating rows auto-collapses it.
+
 ## [0.7.1] - 2026-09-12
 
 ### Fixed

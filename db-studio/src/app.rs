@@ -58,13 +58,17 @@ fn cell_display(cell: &Cell) -> String {
     }
 }
 
-/// Which pane has keyboard focus. Grid/error aren't in this enum -- they
-/// take no directional/edit input of their own, only the global
-/// PageUp/PageDown scroll keys, which work regardless of focus.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Which pane has keyboard focus. Error isn't in this enum -- it takes
+/// no directional/edit input of its own. `Grid` (db-studio#45) exists
+/// only so `Enter` can mean "toggle this row's detail section" without
+/// colliding with `Query`'s newline or `Tree`'s expand/collapse --
+/// PageUp/PageDown/Shift+Left/Right already scroll the grid regardless
+/// of focus, same as before.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     Query,
     Tree,
+    Grid,
 }
 
 /// Which view the big-right area shows (db-studio#29). `Plan`/`Opcodes`
@@ -168,7 +172,10 @@ impl App {
         self.schema_tree
             .render(frame, tree_area, self.focus == Focus::Tree);
         match &self.view {
-            OutputView::Results => self.grid_pane.render(frame, grid_area),
+            OutputView::Results => {
+                self.grid_pane
+                    .render(frame, grid_area, self.focus == Focus::Grid)
+            }
             OutputView::Plan(rows) => plan_pane::render(frame, grid_area, rows),
             OutputView::Opcodes(sections) => opcode_pane::render(frame, grid_area, sections),
             OutputView::Stats => {
@@ -265,7 +272,8 @@ impl App {
         if key.code == KeyCode::Tab && !query_has_popup {
             self.focus = match self.focus {
                 Focus::Query => Focus::Tree,
-                Focus::Tree => Focus::Query,
+                Focus::Tree => Focus::Grid,
+                Focus::Grid => Focus::Query,
             };
             return;
         }
@@ -345,6 +353,12 @@ impl App {
                     }
                 }
             }
+            Focus::Grid => match key.code {
+                KeyCode::Enter => self.grid_pane.toggle_expanded(),
+                KeyCode::Down => self.grid_pane.scroll_down(),
+                KeyCode::Up => self.grid_pane.scroll_up(),
+                _ => {}
+            },
         }
     }
 
@@ -872,5 +886,31 @@ mod tests {
             text.contains("<NULL>"),
             "expected the NULL marker for the row missing `extra`:\n{text}"
         );
+    }
+
+    /// db-studio#45: `Tab` reaches `Focus::Grid` (a third stop after
+    /// Query/Tree), and `Enter` there expands the selected row's detail
+    /// section -- end to end, through the real key-dispatch path, not
+    /// just `GridPane` in isolation.
+    #[test]
+    fn tab_reaches_grid_focus_and_enter_there_expands_the_row() {
+        let mut app = stream_app();
+        app.submit("SELECT severity_text, message FROM log LIMIT 1");
+        assert_eq!(app.focus, Focus::Query);
+
+        app.handle_key(crossterm::event::KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Tree);
+        app.handle_key(crossterm::event::KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Grid);
+
+        app.handle_key(crossterm::event::KeyEvent::from(KeyCode::Enter));
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("severity_text:") && text.contains("message:"),
+            "expected the row's detail section after Enter:\n{text}"
+        );
+
+        app.handle_key(crossterm::event::KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Query);
     }
 }
