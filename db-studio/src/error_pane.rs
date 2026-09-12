@@ -4,7 +4,7 @@
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::theme;
@@ -30,11 +30,11 @@ impl ErrorPane {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
-        let block = theme::pane_block("error", false);
         let text = self.message.as_deref().unwrap_or("");
         let paragraph = Paragraph::new(text)
             .style(Style::default().fg(theme::error()))
-            .block(block);
+            .wrap(Wrap { trim: false })
+            .block(theme::pane_block_borderless());
         frame.render_widget(paragraph, area);
     }
 }

@@ -20,10 +20,11 @@ use ratatui::Frame;
 use crate::completion;
 use crate::error_pane::ErrorPane;
 use crate::grid_pane::{Grid, GridPane};
+use crate::open::open_by_extension;
 use crate::query_pane::QueryPane;
 use crate::schema_tree::{FileSchema, SchemaTreePane};
 use crate::terminal::Tui;
-use crate::{opcode_pane, plan_pane, stats_pane, status_bar};
+use crate::{clipboard, opcode_pane, plan_pane, stats_pane, status_bar, theme};
 use db_core::engine::{OpcodeSection, PlanRow};
 
 /// One file opened on the command line, per db-studio#16 -- `main.rs`
@@ -78,6 +79,10 @@ pub struct App {
     schema_tree: SchemaTreePane,
     grid_pane: GridPane,
     error_pane: ErrorPane,
+    /// The `Ctrl+O` open-file prompt's text, while it's open
+    /// (db-studio#42) -- `None` means it isn't, and every key reaches
+    /// its normal destination instead of this buffer.
+    open_prompt: Option<String>,
 }
 
 impl App {
@@ -113,7 +118,17 @@ impl App {
             schema_tree: SchemaTreePane::new(file_schemas),
             grid_pane: GridPane::new(),
             error_pane: ErrorPane::new(),
+            open_prompt: None,
         }
+    }
+
+    /// Loads persisted query history (db-studio#42, from the XDG
+    /// cache) into the query pane -- a separate builder step, not part
+    /// of `new`, so tests constructing an `App` don't need a real
+    /// cache directory or its own I/O.
+    pub fn with_history(mut self, history: Vec<String>) -> Self {
+        self.query_pane = self.query_pane.with_history(history);
+        self
     }
 
     pub fn run(&mut self, terminal: &mut Tui) -> io::Result<()> {
@@ -149,7 +164,18 @@ impl App {
                 }
             }
         }
-        self.error_pane.render(frame, error_area);
+        if let Some(prompt) = &self.open_prompt {
+            // Overlays the error pane's area rather than adding a new
+            // layout row -- the two are never needed at once (typing a
+            // path to open isn't something a query error interrupts).
+            let text = format!("open file: {prompt}\u{2588}");
+            let paragraph = ratatui::widgets::Paragraph::new(text)
+                .style(ratatui::style::Style::default().fg(theme::text()))
+                .block(theme::pane_block_borderless());
+            frame.render_widget(paragraph, error_area);
+        } else {
+            self.error_pane.render(frame, error_area);
+        }
         let active_file = self.files.get(self.active);
         let active_label = active_file.map(|f| file_label(&f.path)).unwrap_or_default();
         let active_mode = active_file
@@ -175,106 +201,137 @@ impl App {
             return Ok(());
         }
         if let Event::Key(key) = event::read()? {
-            if key.kind != KeyEventKind::Press {
-                return Ok(());
+            if key.kind == KeyEventKind::Press {
+                self.handle_key(key);
             }
-            // A query-pane completion popup claims Esc (close it) and Tab
-            // (accept the selection) for itself before either reaches
-            // this function's own quit/focus-cycle handling below.
-            let query_has_popup = self.focus == Focus::Query && self.query_pane.has_open_popup();
+        }
+        Ok(())
+    }
 
-            // `q` is a valid SQL character, so it can no longer double as
-            // quit now that the query pane accepts arbitrary text (#1's
-            // scaffold had no text input yet, so it was safe there).
-            let is_ctrl_c =
-                key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
-            if is_ctrl_c || (key.code == KeyCode::Esc && !query_has_popup) {
-                self.running = false;
-                return Ok(());
-            }
-            if key.code == KeyCode::Tab && !query_has_popup {
-                self.focus = match self.focus {
-                    Focus::Query => Focus::Tree,
-                    Focus::Tree => Focus::Query,
-                };
-                return Ok(());
-            }
-            // F1-F4 switch the output view regardless of focus -- like
-            // PageUp/PageDown, they're not text input the query pane
-            // could otherwise claim.
-            match key.code {
-                KeyCode::F(1) => {
+    /// One key event's worth of dispatch -- split out from
+    /// `handle_events` so tests can drive it with a synthetic
+    /// `KeyEvent` directly, without a real terminal for
+    /// `crossterm::event::read` to poll.
+    fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
+        let is_ctrl_c =
+            key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
+        if is_ctrl_c {
+            self.running = false;
+            return;
+        }
+        // The open-file prompt (db-studio#42, `Ctrl+O`) claims every
+        // key while active -- typing a path must not also move the
+        // query cursor or the tree selection underneath it.
+        if self.open_prompt.is_some() {
+            self.handle_open_prompt_key(key);
+            return;
+        }
+        // A query-pane completion popup claims Esc (close it) and Tab
+        // (accept the selection) for itself before either reaches
+        // this function's own quit/focus-cycle handling below.
+        let query_has_popup = self.focus == Focus::Query && self.query_pane.has_open_popup();
+
+        // `q` is a valid SQL character, so it can only double as
+        // quit when the query pane isn't the one reading keys (#1's
+        // scaffold had no text input yet, so it was unconditionally
+        // safe there).
+        let is_q_outside_query = self.focus != Focus::Query && key.code == KeyCode::Char('q');
+        if is_q_outside_query || (key.code == KeyCode::Esc && !query_has_popup) {
+            self.running = false;
+            return;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
+            self.open_prompt = Some(String::new());
+            return;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('y') {
+            self.copy_current_view();
+            return;
+        }
+        if key.code == KeyCode::Tab && !query_has_popup {
+            self.focus = match self.focus {
+                Focus::Query => Focus::Tree,
+                Focus::Tree => Focus::Query,
+            };
+            return;
+        }
+        // F1-F4 switch the output view regardless of focus -- like
+        // PageUp/PageDown, they're not text input the query pane
+        // could otherwise claim.
+        match key.code {
+            KeyCode::F(1) => {
+                if !self.run_tree_shortcut() {
                     self.view = OutputView::Results;
-                    return Ok(());
                 }
-                KeyCode::F(2) => {
-                    self.refresh_plan();
-                    return Ok(());
-                }
-                KeyCode::F(3) => {
-                    self.refresh_opcodes();
-                    return Ok(());
-                }
-                KeyCode::F(4) => {
-                    self.view = OutputView::Stats;
-                    return Ok(());
-                }
-                _ => {}
+                return;
             }
-            // PageUp/PageDown scroll the grid regardless of focus -- the
-            // grid itself isn't focusable, and nothing else claims these
-            // keys.
+            KeyCode::F(2) => {
+                self.refresh_plan();
+                return;
+            }
+            KeyCode::F(3) => {
+                self.refresh_opcodes();
+                return;
+            }
+            KeyCode::F(4) => {
+                self.view = OutputView::Stats;
+                return;
+            }
+            _ => {}
+        }
+        // PageUp/PageDown scroll the grid regardless of focus -- the
+        // grid itself isn't focusable, and nothing else claims these
+        // keys.
+        match key.code {
+            KeyCode::PageDown => {
+                self.grid_pane.scroll_down();
+                return;
+            }
+            KeyCode::PageUp => {
+                self.grid_pane.scroll_up();
+                return;
+            }
+            _ => {}
+        }
+        // Shift+Left/Right scroll the grid horizontally (db-studio#42),
+        // also regardless of focus -- plain Left/Right are already
+        // claimed by the query pane's cursor and the tree's
+        // collapse/expand, so a wide result set (e.g. `SELECT *` over
+        // a log's Tier-3 columns) needs a key nothing else uses.
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
             match key.code {
-                KeyCode::PageDown => {
-                    self.grid_pane.scroll_down();
-                    return Ok(());
+                KeyCode::Right => {
+                    self.grid_pane.scroll_right();
+                    return;
                 }
-                KeyCode::PageUp => {
-                    self.grid_pane.scroll_up();
-                    return Ok(());
+                KeyCode::Left => {
+                    self.grid_pane.scroll_left();
+                    return;
                 }
                 _ => {}
             }
-            // Shift+Left/Right scroll the grid horizontally (db-studio#42),
-            // also regardless of focus -- plain Left/Right are already
-            // claimed by the query pane's cursor and the tree's
-            // collapse/expand, so a wide result set (e.g. `SELECT *` over
-            // a log's Tier-3 columns) needs a key nothing else uses.
-            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                match key.code {
-                    KeyCode::Right => {
-                        self.grid_pane.scroll_right();
-                        return Ok(());
-                    }
-                    KeyCode::Left => {
-                        self.grid_pane.scroll_left();
-                        return Ok(());
-                    }
-                    _ => {}
+        }
+        match self.focus {
+            Focus::Query => {
+                if let Some(query) = self.query_pane.handle_key(key) {
+                    crate::history::append(&query);
+                    self.submit(&query);
                 }
             }
-            match self.focus {
-                Focus::Query => {
-                    if let Some(query) = self.query_pane.handle_key(key) {
-                        self.submit(&query);
-                    }
-                }
-                Focus::Tree => {
-                    self.schema_tree.handle_key(key);
-                    // Enter/Space is schema_tree's own toggle-expand key
-                    // (handled above) -- if it landed on a file root
-                    // rather than a table/column, it also switches which
-                    // file queries run against (db-studio#18).
-                    let is_accept = matches!(key.code, KeyCode::Enter | KeyCode::Char(' '));
-                    if is_accept {
-                        if let Some(file_key) = self.schema_tree.selected_file_key() {
-                            self.switch_active_file(file_key.to_string());
-                        }
+            Focus::Tree => {
+                self.schema_tree.handle_key(key);
+                // Enter/Space is schema_tree's own toggle-expand key
+                // (handled above) -- if it landed on a file root
+                // rather than a table/column, it also switches which
+                // file queries run against (db-studio#18).
+                let is_accept = matches!(key.code, KeyCode::Enter | KeyCode::Char(' '));
+                if is_accept {
+                    if let Some(file_key) = self.schema_tree.selected_file_key() {
+                        self.switch_active_file(file_key.to_string());
                     }
                 }
             }
         }
-        Ok(())
     }
 
     /// Makes the open file at `path` (matched against `OpenFile::path`'s
@@ -295,6 +352,108 @@ impl App {
             .map(|f| completion::candidates(&f.engine.tables().unwrap_or_default()))
             .unwrap_or_default();
         self.query_pane.set_candidates(candidates);
+    }
+
+    /// `F1`'s object-browser shortcut (db-studio#42): a table selected
+    /// in the schema tree runs `SELECT * FROM <table> LIMIT 1000`, a
+    /// column runs `SELECT DISTINCT <column> FROM <table> LIMIT 100` --
+    /// against whichever file it belongs to (switching to it first, so
+    /// this works even when browsing a file that isn't already active).
+    /// Returns `false` (nothing to do) when the tree's selection is a
+    /// file root or nothing at all, so `F1` falls back to its plain
+    /// "show Results" behavior.
+    fn run_tree_shortcut(&mut self) -> bool {
+        if let Some((file, table)) = self.schema_tree.selected_table() {
+            let (file, table) = (file.to_string(), table.to_string());
+            self.switch_active_file(file);
+            let query = format!("SELECT * FROM {table} LIMIT 1000");
+            self.query_pane.set_query(&query);
+            self.submit(&query);
+            return true;
+        }
+        if let Some((file, table, column)) = self.schema_tree.selected_column() {
+            let (file, table, column) = (file.to_string(), table.to_string(), column.to_string());
+            self.switch_active_file(file);
+            let query = format!("SELECT DISTINCT {column} FROM {table} LIMIT 100");
+            self.query_pane.set_query(&query);
+            self.submit(&query);
+            return true;
+        }
+        false
+    }
+
+    /// Copies whichever output view is currently showing to the system
+    /// clipboard as plain text (db-studio#42, `Ctrl+Y`) -- no ANSI
+    /// styling, no box-drawing border characters, regardless of which
+    /// view (Results/Plan/Opcodes/Stats) is active.
+    fn copy_current_view(&self) {
+        let text = match &self.view {
+            OutputView::Results => self.grid_pane.plain_text(),
+            OutputView::Plan(rows) => plan_pane::plain_text(rows),
+            OutputView::Opcodes(sections) => opcode_pane::plain_text(sections),
+            OutputView::Stats => self
+                .files
+                .get(self.active)
+                .map(|f| stats_pane::plain_text(&f.engine.stats()))
+                .unwrap_or_default(),
+        };
+        clipboard::copy(&text);
+    }
+
+    /// Handles one key while the `Ctrl+O` open-file prompt is active
+    /// (db-studio#42): `Enter` attempts to open the typed path,
+    /// `Esc` cancels, `Backspace` edits, anything else appends.
+    fn handle_open_prompt_key(&mut self, key: crossterm::event::KeyEvent) {
+        let Some(prompt) = &mut self.open_prompt else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.open_prompt = None;
+            }
+            KeyCode::Enter => {
+                let path = std::mem::take(prompt);
+                self.open_prompt = None;
+                self.open_file(path);
+            }
+            KeyCode::Backspace => {
+                prompt.pop();
+            }
+            KeyCode::Char(c) => {
+                prompt.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    /// Opens `path` and adds it as a new file root (db-studio#42) --
+    /// the same per-extension dispatch `main.rs` uses for the files
+    /// given on the command line, so a `.sqlite`/`.parquet`/`.log`
+    /// opened this way behaves identically to one opened at startup.
+    /// A bad path reports through the error pane rather than refusing
+    /// to start, since the app is already running.
+    fn open_file(&mut self, path: String) {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let path_buf = PathBuf::from(trimmed);
+        match open_by_extension(&path_buf) {
+            Ok(engine) => {
+                let schema = FileSchema {
+                    key: path_buf.display().to_string(),
+                    label: file_label(&path_buf),
+                    tables: engine.tables().unwrap_or_default(),
+                };
+                self.schema_tree.add_file(schema);
+                self.files.push(OpenFile {
+                    path: path_buf,
+                    engine,
+                });
+                self.error_pane.clear();
+            }
+            Err(err) => self.error_pane.set_error(err.to_string()),
+        }
     }
 
     fn submit(&mut self, query: &str) {
@@ -603,5 +762,64 @@ mod tests {
             text.contains("GET /api/orders 500"),
             "expected real stream-mode results:\n{text}"
         );
+    }
+
+    /// db-studio#42/#43: `F1` on a table selected in the schema tree
+    /// runs `SELECT * FROM <table> LIMIT 1000` and shows its results,
+    /// rather than just switching to the (until-now-empty) Results view.
+    #[test]
+    fn f1_on_a_selected_table_runs_a_select_star_and_shows_results() {
+        let mut app = stream_app();
+        rendered(&mut app); // populates the tree's flattened-item cache
+        app.schema_tree.handle_key(enter()); // expand the file root
+        rendered(&mut app); // populates the cache for the now-visible table
+        app.schema_tree.handle_key(down()); // select the `log` table
+
+        assert_eq!(
+            app.schema_tree.selected_table().map(|(_, t)| t),
+            Some("log")
+        );
+        assert!(app.run_tree_shortcut());
+        assert_eq!(app.query_pane.text(), "SELECT * FROM log LIMIT 1000");
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("message") && text.contains("row(s)"),
+            "expected F1's SELECT * to have actually run:\n{text}"
+        );
+    }
+
+    /// db-studio#42: pressing `q` while the tree has focus quits --
+    /// `q` still can't double as quit while the query editor has focus,
+    /// since it's a valid SQL character there.
+    #[test]
+    fn q_quits_when_the_tree_has_focus_but_not_the_query_pane() {
+        let mut app = stream_app();
+        app.focus = Focus::Tree;
+        app.handle_key(crossterm::event::KeyEvent::from(KeyCode::Char('q')));
+        assert!(!app.running);
+
+        let mut app2 = stream_app();
+        app2.focus = Focus::Query;
+        app2.handle_key(crossterm::event::KeyEvent::from(KeyCode::Char('q')));
+        assert!(app2.running);
+        assert_eq!(app2.query_pane.text(), "q");
+    }
+
+    /// db-studio#42: `Ctrl+O` opens the prompt, typing a path and
+    /// pressing Enter opens it as a new file root -- a bad path reports
+    /// through the error pane instead of crashing or being ignored.
+    #[test]
+    fn open_file_adds_a_new_root_and_a_bad_path_is_a_visible_error() {
+        let mut app = stream_app();
+        let sqlite_path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.sqlite"
+        ));
+        let before = app.files.len();
+        app.open_file(sqlite_path.display().to_string());
+        assert_eq!(app.files.len(), before + 1);
+
+        app.open_file("/no/such/file.sqlite".to_string());
+        assert_eq!(app.files.len(), before + 1, "a bad path must not open");
     }
 }

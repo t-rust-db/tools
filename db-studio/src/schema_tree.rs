@@ -54,6 +54,21 @@ impl SchemaTreePane {
         }
     }
 
+    /// Adds one more file root to an already-running tree
+    /// (db-studio#42's `Ctrl+O` dynamic open) -- `new`'s per-file
+    /// construction, without rebuilding the whole tree or disturbing
+    /// the current selection/scroll of the roots already there.
+    pub fn add_file(&mut self, file: FileSchema) {
+        let table_items = file
+            .tables
+            .into_iter()
+            .filter_map(Self::table_item)
+            .collect();
+        if let Ok(item) = TreeItem::new(file.key, file.label, table_items) {
+            self.items.push(item);
+        }
+    }
+
     fn table_item(table: TableInfo) -> Option<TreeItem<'static, String>> {
         let children = table
             .columns
@@ -100,6 +115,29 @@ impl SchemaTreePane {
     /// table or column nested under one. `db-studio#18` uses this to
     /// tell "switch the active file" apart from "just expanding a
     /// table."
+    /// The selected node's `(file_key, table_name)`, when the selection
+    /// is exactly a table (a two-element path) -- db-studio#42's `F1`
+    /// shortcut uses this to build `SELECT * FROM <table> LIMIT 1000`
+    /// against the right file without requiring the table's own file
+    /// root to already be the active one.
+    pub fn selected_table(&self) -> Option<(&str, &str)> {
+        match self.state.selected() {
+            [file, table] => Some((file.as_str(), table.as_str())),
+            _ => None,
+        }
+    }
+
+    /// The selected node's `(file_key, table_name, column_name)`, when
+    /// the selection is exactly a column (a three-element path) --
+    /// db-studio#42's `F1` shortcut uses this to build
+    /// `SELECT DISTINCT <column> FROM <table> LIMIT 100`.
+    pub fn selected_column(&self) -> Option<(&str, &str, &str)> {
+        match self.state.selected() {
+            [file, table, column] => Some((file.as_str(), table.as_str(), column.as_str())),
+            _ => None,
+        }
+    }
+
     pub fn selected_file_key(&self) -> Option<&str> {
         match self.state.selected() {
             [key] => Some(key.as_str()),

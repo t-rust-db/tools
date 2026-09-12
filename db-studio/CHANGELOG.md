@@ -2,6 +2,16 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.7.0] - 2026-09-12
+
+### Added
+
+- **Usability batch from hands-on testing** (#42): `F1` on a schema-tree table/column runs `SELECT * FROM <table> LIMIT 1000`/`SELECT DISTINCT <column> FROM <table> LIMIT 100` and shows results; a real horizontal `Scrollbar` widget alongside the existing column-hiding scroll; `Ctrl+Y` copies the active output view to the system clipboard via OSC 52 (plain text, no ANSI/border chars); `Up`/`Down` at the query buffer's edges cycles submitted-query history, persisted at `$XDG_CACHE_HOME/db-studio/history`; `Ctrl+O` opens a path-input prompt to add a new file mid-session; the query editor shows line numbers; `q` quits when the schema tree has focus.
+
+### Changed
+
+- Query plan pane word-wraps and indents one space per depth instead of two; error pane word-wraps instead of clipping to one line; query and error panes render borderless; results pane title shows a row count; query pane title no longer mentions F5.
+
 ## [0.6.0] - 2026-09-11
 
 ### Added

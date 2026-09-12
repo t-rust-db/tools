@@ -6,11 +6,14 @@
 //! to the matching `Engine`.
 
 mod app;
+mod clipboard;
 mod completion;
 mod error_pane;
 mod grid_pane;
 mod highlight;
+mod history;
 mod opcode_pane;
+mod open;
 mod plan_pane;
 mod query_pane;
 mod schema_tree;
@@ -23,32 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use app::OpenFile;
-use db_core::engine::column::BatchEngine;
-use db_core::engine::row::RowEngine;
-use db_core::engine::stream::StreamEngine;
-use db_core::engine::{Engine, EngineError, ErrorKind};
-
-/// Opens `path` through whichever `Engine` its extension implies.
-/// Case-insensitive (`.SQLITE`, `.Parquet`, `.LOG`, ... all match) --
-/// file extensions aren't a place users expect case to matter.
-fn open_by_extension(path: &Path) -> Result<Box<dyn Engine>, EngineError> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase);
-    match ext.as_deref() {
-        Some("sqlite" | "db") => RowEngine::open(path).map(|e| Box::new(e) as Box<dyn Engine>),
-        Some("parquet") => BatchEngine::open(path).map(|e| Box::new(e) as Box<dyn Engine>),
-        Some("log") => StreamEngine::open(path).map(|e| Box::new(e) as Box<dyn Engine>),
-        other => Err(EngineError::new(
-            ErrorKind::Open,
-            format!(
-                "unrecognized file extension {:?} -- expected .sqlite/.db (row mode), .parquet (batch mode), or .log (stream mode)",
-                other.unwrap_or("<none>")
-            ),
-        )),
-    }
-}
+use open::open_by_extension;
 
 fn main() -> ExitCode {
     let paths: Vec<String> = std::env::args().skip(1).collect();
@@ -78,7 +56,9 @@ fn main() -> ExitCode {
 
     let result = (|| -> std::io::Result<()> {
         let mut term = terminal::init()?;
-        let run_result = app::App::new(files).run(&mut term);
+        let run_result = app::App::new(files)
+            .with_history(history::load())
+            .run(&mut term);
         terminal::restore()?;
         run_result
     })();

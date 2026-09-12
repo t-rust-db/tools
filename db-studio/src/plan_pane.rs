@@ -8,31 +8,41 @@ use db_core::engine::PlanRow;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::theme;
 
-/// Renders `rows` as an indented tree: each row's depth is however many
-/// ancestors precede it via the `parent` chain, computed fresh rather
-/// than assuming input order is already depth-first (row's root has
-/// `parent == 0`; batch's root has `parent == id` -- both terminate the
-/// same walk).
-pub fn render(frame: &mut Frame, area: Rect, rows: &[PlanRow]) {
-    let lines: Vec<Line> = rows
-        .iter()
+/// One line per row, indented one space per ancestor (not two -- a
+/// deeply nested plan otherwise runs out of horizontal room fast).
+fn lines(rows: &[PlanRow]) -> Vec<String> {
+    rows.iter()
         .map(|row| {
             let depth = ancestor_depth(rows, row);
-            Line::from(format!("{}{}", "  ".repeat(depth), row.detail))
+            format!("{}{}", " ".repeat(depth), row.detail)
         })
-        .collect();
-    let paragraph = Paragraph::new(lines)
+        .collect()
+}
+
+/// Renders `rows` as an indented tree, word-wrapped to the pane's width
+/// -- a long plan `detail` string (a filter/join condition, typically)
+/// used to run off the right edge instead of wrapping.
+pub fn render(frame: &mut Frame, area: Rect, rows: &[PlanRow]) {
+    let text: Vec<Line> = lines(rows).into_iter().map(Line::from).collect();
+    let paragraph = Paragraph::new(text)
         .style(Style::default())
+        .wrap(Wrap { trim: false })
         .block(theme::pane_block(
             "results -- query plan (F1 results)",
             false,
         ));
     frame.render_widget(paragraph, area);
+}
+
+/// Plain-text form of the same tree (db-studio#42's clipboard yank) --
+/// identical content to [`render`], without the `Line`/style wrapping.
+pub fn plain_text(rows: &[PlanRow]) -> String {
+    lines(rows).join("\n")
 }
 
 /// How many ancestors `row` has by walking `parent` links, stopping at

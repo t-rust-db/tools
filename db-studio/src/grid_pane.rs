@@ -57,6 +57,18 @@ impl GridPane {
         self.set_grid(Grid::default());
     }
 
+    /// Tab-separated, newline-per-row plain text (db-studio#42's
+    /// clipboard yank) -- headers first, no box-drawing/ANSI styling,
+    /// so pasting elsewhere gets exactly the data.
+    pub fn plain_text(&self) -> String {
+        let mut out = self.grid.headers.join("\t");
+        for row in &self.grid.rows {
+            out.push('\n');
+            out.push_str(&row.join("\t"));
+        }
+        out
+    }
+
     pub fn scroll_down(&mut self) {
         if self.grid.rows.is_empty() {
             return;
@@ -103,14 +115,14 @@ impl GridPane {
         } else {
             vec![Constraint::Ratio(1, visible_headers.len() as u32); visible_headers.len()]
         };
-        // Scrolled-right state is otherwise invisible (no horizontal
-        // scrollbar) -- the title is the only cue that columns to the
-        // left are hidden, same spirit as the vertical scrollbar cueing
-        // there's more above/below.
+        // Row count (rainfrog's convention) up front, then the hidden-
+        // column hint when scrolled right -- otherwise scrolling is
+        // invisible with no horizontal scrollbar's own visual cue.
+        let row_count = self.grid.rows.len();
         let title = if offset > 0 {
-            format!("results -- {offset} column(s) hidden to the left")
+            format!("results -- {row_count} row(s), {offset} column(s) hidden to the left")
         } else {
-            "results".to_string()
+            format!("results -- {row_count} row(s)")
         };
         let table = Table::new(rows, widths)
             .header(header)
@@ -133,6 +145,26 @@ impl GridPane {
                     horizontal: 0,
                 }),
                 &mut scrollbar_state,
+            );
+        }
+
+        // Horizontal scrollbar (db-studio#42) -- Shift+Left/Right
+        // already scrolled column visibility (db-studio#42) with only
+        // the title as a cue; a real scrollbar makes "there are more
+        // columns this way" visible without reading the title text.
+        if self.grid.headers.len() > 1 {
+            let last_offset = self.grid.headers.len().saturating_sub(1);
+            let mut h_scrollbar_state = ScrollbarState::new(last_offset.max(1)).position(offset);
+            let h_scrollbar = Scrollbar::new(ScrollbarOrientation::HorizontalBottom)
+                .begin_symbol(None)
+                .end_symbol(None);
+            frame.render_stateful_widget(
+                h_scrollbar,
+                area.inner(Margin {
+                    vertical: 0,
+                    horizontal: 1,
+                }),
+                &mut h_scrollbar_state,
             );
         }
     }
@@ -197,9 +229,13 @@ mod tests {
     }
 
     fn wide_sample() -> Grid {
+        // Non-numeric values (not "1", "2", ...): the row-count hint in
+        // the title now legitimately contains digits, so digit-valued
+        // cells would be indistinguishable from it in a rendered-buffer
+        // substring check.
         Grid::new(
             vec!["a".into(), "b".into(), "c".into(), "d".into()],
-            vec![vec!["1".into(), "2".into(), "3".into(), "4".into()]],
+            vec![vec!["wow".into(), "xen".into(), "eek".into(), "ohh".into()]],
         )
     }
 
@@ -258,11 +294,11 @@ mod tests {
         let rendered: String = content.iter().map(|cell| cell.symbol()).collect();
 
         assert!(
-            !rendered.contains('a') && !rendered.contains('1'),
+            !rendered.contains('a') && !rendered.contains("wow"),
             "expected hidden leading columns not to render:\n{rendered}"
         );
         assert!(
-            rendered.contains('c') && rendered.contains('3'),
+            rendered.contains('c') && rendered.contains("eek"),
             "expected a visible column to still render:\n{rendered}"
         );
         assert!(
