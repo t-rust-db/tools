@@ -119,13 +119,11 @@ impl App {
                 tables: f.engine.tables().unwrap_or_default(),
             })
             .collect();
-        // Completion offers the first (initially active) file's names;
-        // switch_active_file (db-studio#18) recomputes this when the
-        // active file changes.
-        let candidates = files
-            .first()
-            .map(|f| completion::candidates(&f.engine.tables().unwrap_or_default()))
-            .unwrap_or_default();
+        // Completion offers every open file's names, not just the
+        // active one (db-studio#48) -- switching which file is active
+        // doesn't need to recompute this list at all any more, unlike
+        // before #46, since it was never file-specific to begin with.
+        let candidates = Self::completion_candidates(&files);
         Self {
             running: true,
             files,
@@ -374,12 +372,25 @@ impl App {
             return;
         };
         self.active = index;
-        let candidates = self
-            .files
-            .get(index)
-            .map(|f| completion::candidates(&f.engine.tables().unwrap_or_default()))
-            .unwrap_or_default();
-        self.query_pane.set_candidates(candidates);
+        // Completion candidates are session-wide (db-studio#48, every
+        // open file's names, not just the active one), so there's
+        // nothing to recompute here any more -- unlike before #46.
+    }
+
+    /// The query editor's completion candidates (db-studio#48): every
+    /// open file's table/column names (not just the active file's, so
+    /// switching files doesn't need to recompute this) plus a static
+    /// list of SQL keywords and built-in function names. Recomputed
+    /// whenever the open-file set changes -- at startup and whenever
+    /// `Ctrl+O` opens a new one.
+    fn completion_candidates(files: &[OpenFile]) -> Vec<String> {
+        let mut names = completion::keywords();
+        for file in files {
+            names.extend(completion::candidates(
+                &file.engine.tables().unwrap_or_default(),
+            ));
+        }
+        names
     }
 
     /// `F1`'s object-browser shortcut (db-studio#42): a table selected
@@ -478,6 +489,8 @@ impl App {
                     path: path_buf,
                     engine,
                 });
+                self.query_pane
+                    .set_candidates(Self::completion_candidates(&self.files));
                 self.error_pane.clear();
             }
             Err(err) => self.error_pane.set_error(err.to_string()),
@@ -912,5 +925,40 @@ mod tests {
 
         app.handle_key(crossterm::event::KeyEvent::from(KeyCode::Tab));
         assert_eq!(app.focus, Focus::Query);
+    }
+
+    /// db-studio#48: completion candidates cover every open file's
+    /// tables/columns (not just the active one) plus static SQL
+    /// keywords/functions -- verified via a real multi-file `App`,
+    /// not just `completion_candidates` in isolation.
+    #[test]
+    fn completion_candidates_span_every_open_file_plus_keywords() {
+        use db_core::engine::row::RowEngine;
+
+        let sqlite_path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.sqlite"
+        ));
+        let log_path = stream_fixture();
+        let app = App::new(vec![
+            OpenFile {
+                engine: Box::new(RowEngine::open(&sqlite_path).unwrap()),
+                path: sqlite_path,
+            },
+            OpenFile {
+                engine: Box::new(StreamEngine::open(&log_path).unwrap()),
+                path: log_path,
+            },
+        ]);
+        let candidates = App::completion_candidates(&app.files);
+        assert!(candidates.contains(&"items".to_string()), "sqlite table");
+        assert!(candidates.contains(&"log".to_string()), "stream table");
+        assert!(candidates.contains(&"SELECT".to_string()), "keyword");
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case("regexp_extract")),
+            "scalar function"
+        );
     }
 }
