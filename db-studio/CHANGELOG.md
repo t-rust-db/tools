@@ -2,6 +2,12 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.7.1] - 2026-09-12
+
+### Fixed
+
+- **`NULL` cells rendered as blank, indistinguishable from an empty string** (#44): `Cell::Null` now renders as `<NULL>` in the results grid instead of an empty string -- `Cell::Display`'s "NULL is empty" convention is correct for db-core's shell-style clients (sqlite-rs/column-rs/loglume), but made a sparse result (e.g. `SELECT *` over a `.log` file's Tier-3 columns, absent on most rows) look indistinguishable from one full of blanks.
+
 ## [0.7.0] - 2026-09-12
 
 ### Added
