@@ -34,17 +34,67 @@ pub struct QueryPane {
     textarea: TextArea<'static>,
     candidates: Vec<String>,
     popup: Option<Popup>,
+    /// Previously submitted queries, oldest first (db-studio#42) --
+    /// `Up`/`Down` at the buffer's top/bottom row cycle through these
+    /// like a shell's history, rather than moving the cursor past the
+    /// edge of the text (nothing else claims that gesture there).
+    history: Vec<String>,
+    /// Index into `history` while navigating it; `None` means the
+    /// buffer holds live (or not-yet-submitted) text, not a recalled
+    /// entry.
+    history_index: Option<usize>,
+    /// The buffer's text from just before `Up` first stepped into
+    /// history -- restored verbatim if `Down` steps back past the
+    /// newest entry, so navigating history and returning loses nothing
+    /// you'd already typed.
+    draft: Option<String>,
 }
 
 impl QueryPane {
     pub fn new(candidates: Vec<String>) -> Self {
-        let mut textarea = TextArea::default();
-        textarea.set_selection_style(Style::default().bg(theme::selection_bg()));
         Self {
-            textarea,
+            textarea: Self::configure(TextArea::default()),
             candidates,
             popup: None,
+            history: Vec::new(),
+            history_index: None,
+            draft: None,
         }
+    }
+
+    /// Loads previously submitted queries (db-studio#42, from the XDG
+    /// cache) for `Up`/`Down` history navigation -- oldest first, same
+    /// order [`history`] is appended to on submit.
+    pub fn with_history(mut self, history: Vec<String>) -> Self {
+        self.history = history;
+        self
+    }
+
+    fn configure(mut textarea: TextArea<'static>) -> TextArea<'static> {
+        textarea.set_selection_style(Style::default().bg(theme::selection_bg()));
+        // A gutter, not a decoration: knowing which line an error or a
+        // plan detail refers to needs line numbers to point at -- copy
+        // (db-studio#42's clipboard yank) reads the buffer's raw text,
+        // never the gutter, so pasting elsewhere never carries them.
+        textarea.set_line_number_style(Style::default().fg(theme::subtext()));
+        textarea
+    }
+
+    /// Replaces the buffer's text outright -- the schema tree's
+    /// table/column shortcuts (db-studio#42) and history navigation
+    /// both need this rather than simulated keystrokes.
+    fn set_text(&mut self, text: &str) {
+        self.textarea = Self::configure(TextArea::from(text.split('\n').map(str::to_string)));
+        self.textarea.move_cursor(tui_textarea::CursorMove::Bottom);
+        self.textarea.move_cursor(tui_textarea::CursorMove::End);
+        self.popup = None;
+    }
+
+    /// Same as [`Self::set_text`], for the schema tree's table/column
+    /// shortcuts -- the only external caller, so this stays a thin
+    /// public wrapper rather than making `set_text` itself public.
+    pub fn set_query(&mut self, text: &str) {
+        self.set_text(text);
     }
 
     /// Replaces the completion candidate list -- db-studio#18 calls this
@@ -94,6 +144,7 @@ impl QueryPane {
             // Every other SQL tool keeps the query visible after
             // running it too, for the same reason: you're usually about
             // to tweak and re-run it, not start from scratch.
+            self.push_history(text.clone());
             return Some(text);
         }
 
@@ -101,9 +152,69 @@ impl QueryPane {
             return None;
         }
 
+        // The popup branch above already returned if one was open, so
+        // reaching here means there isn't one.
+        if self.handle_history_key(key.code) {
+            return None;
+        }
+
         self.textarea.input(key);
+        self.history_index = None;
         self.update_popup();
         None
+    }
+
+    /// Appends `text` to history (db-studio#42), deduping an immediate
+    /// repeat of the last entry -- re-running the same query with `F5`
+    /// shouldn't fill history with copies of itself.
+    fn push_history(&mut self, text: String) {
+        if self.history.last() != Some(&text) {
+            self.history.push(text);
+        }
+        self.history_index = None;
+        self.draft = None;
+    }
+
+    /// `Up` at the buffer's first line steps to an older history entry;
+    /// `Down` at its last line steps to a newer one (or back to the
+    /// live draft past the newest). Returns `true` when the key was
+    /// consumed this way, so the caller doesn't also forward it to the
+    /// textarea as a cursor move.
+    fn handle_history_key(&mut self, code: KeyCode) -> bool {
+        let (row, _) = self.textarea.cursor();
+        let last_row = self.textarea.lines().len().saturating_sub(1);
+        match code {
+            KeyCode::Up if row == 0 && !self.history.is_empty() => {
+                let next_index = match self.history_index {
+                    None => {
+                        self.draft = Some(self.textarea.lines().join("\n"));
+                        self.history.len().saturating_sub(1)
+                    }
+                    Some(i) => i.saturating_sub(1),
+                };
+                self.history_index = Some(next_index);
+                let text = self.history.get(next_index).cloned().unwrap_or_default();
+                self.set_text(&text);
+                true
+            }
+            KeyCode::Down if row == last_row && self.history_index.is_some() => {
+                match self.history_index {
+                    Some(i) if i.saturating_add(1) < self.history.len() => {
+                        let next_index = i + 1;
+                        self.history_index = Some(next_index);
+                        let text = self.history.get(next_index).cloned().unwrap_or_default();
+                        self.set_text(&text);
+                    }
+                    _ => {
+                        self.history_index = None;
+                        let text = self.draft.take().unwrap_or_default();
+                        self.set_text(&text);
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Returns `true` when `code` was a popup-navigation/accept/dismiss
@@ -190,11 +301,11 @@ impl QueryPane {
         for (start, end, style) in highlight::highlights(&text) {
             self.textarea.custom_highlight((start, end), style, 10);
         }
-        // The submit key isn't discoverable otherwise -- Enter inserting
-        // a newline instead of running the query (needed for multi-line
-        // editing) reads as "the engine stopped working" without this.
-        self.textarea
-            .set_block(theme::pane_block("query -- F5 to run", focused));
+        // Borderless (db-studio#42): a border/title on a pane visited
+        // on every keystroke read as chrome, not information, once the
+        // line-number gutter already marks its left edge.
+        let _ = focused;
+        self.textarea.set_block(theme::pane_block_borderless());
         frame.render_widget(&self.textarea, area);
     }
 
@@ -381,5 +492,48 @@ mod tests {
         pane.handle_key(key(KeyCode::Down));
         pane.handle_key(key(KeyCode::Tab));
         assert_eq!(pane.textarea.lines(), &["priceless"]);
+    }
+
+    #[test]
+    fn up_at_the_top_line_recalls_the_most_recent_history_entry() {
+        let mut pane = pane_with_candidates()
+            .with_history(vec!["SELECT 1".to_string(), "SELECT 2".to_string()]);
+        pane.handle_key(key(KeyCode::Up));
+        assert_eq!(pane.text(), "SELECT 2");
+        pane.handle_key(key(KeyCode::Up));
+        assert_eq!(pane.text(), "SELECT 1");
+        // Oldest entry reached -- Up again stays put, doesn't panic or wrap.
+        pane.handle_key(key(KeyCode::Up));
+        assert_eq!(pane.text(), "SELECT 1");
+    }
+
+    #[test]
+    fn down_past_the_newest_entry_restores_the_live_draft() {
+        let mut pane = pane_with_candidates().with_history(vec!["SELECT 1".to_string()]);
+        for c in "SELECT 2".chars() {
+            pane.handle_key(key(KeyCode::Char(c)));
+        }
+        pane.handle_key(key(KeyCode::Up));
+        assert_eq!(pane.text(), "SELECT 1");
+        pane.handle_key(key(KeyCode::Down));
+        assert_eq!(pane.text(), "SELECT 2");
+    }
+
+    #[test]
+    fn submitting_a_query_appends_it_to_history() {
+        let mut pane = pane_with_candidates();
+        for c in "SELECT 1".chars() {
+            pane.handle_key(key(KeyCode::Char(c)));
+        }
+        pane.handle_key(f5());
+        assert_eq!(pane.history, vec!["SELECT 1".to_string()]);
+    }
+
+    #[test]
+    fn set_query_replaces_the_buffer_and_moves_the_cursor_to_the_end() {
+        let mut pane = pane_with_candidates();
+        pane.set_query("SELECT * FROM t");
+        assert_eq!(pane.text(), "SELECT * FROM t");
+        assert_eq!(pane.cursor(), (0, "SELECT * FROM t".len()));
     }
 }

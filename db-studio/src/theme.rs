@@ -72,3 +72,13 @@ pub fn pane_block(title: impl Into<ratatui::text::Line<'static>>, focused: bool)
         .border_style(border_style)
         .style(Style::default().bg(base()).fg(text()))
 }
+
+/// A borderless pane background/foreground, no title chrome -- for the
+/// query and error panes, which are dense enough (and visited often
+/// enough while typing) that a border felt like pure noise rather than
+/// a useful frame.
+pub fn pane_block_borderless() -> Block<'static> {
+    Block::default()
+        .borders(Borders::NONE)
+        .style(Style::default().bg(base()).fg(text()))
+}

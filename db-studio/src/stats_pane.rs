@@ -42,6 +42,26 @@ pub fn render(frame: &mut Frame, area: Rect, stats: FileStats) {
     frame.render_widget(paragraph, area);
 }
 
+/// Plain-text form of the same stats (db-studio#42's clipboard yank).
+pub fn plain_text(stats: &FileStats) -> String {
+    match stats {
+        FileStats::Row {
+            page_size,
+            page_count,
+            freelist_pages,
+        } => format!(
+            "page size:       {page_size}\npage count:      {page_count}\nfreelist pages:  {freelist_pages}"
+        ),
+        FileStats::Batch { row_groups, rows } => {
+            format!("row groups:  {row_groups}\nrows:        {rows}")
+        }
+        FileStats::Stream {
+            bytes_parsed,
+            lines,
+        } => format!("bytes parsed:  {bytes_parsed}\nlines:         {lines}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

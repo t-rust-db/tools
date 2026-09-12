@@ -43,6 +43,22 @@ pub fn render(frame: &mut Frame, area: Rect, sections: &[OpcodeSection]) {
     frame.render_widget(table, area);
 }
 
+/// Plain-text form of the same listing (db-studio#42's clipboard
+/// yank): `addr\topcode\toperands` per line, `[section]` markers as
+/// their own line when there's more than one section.
+pub fn plain_text(sections: &[OpcodeSection]) -> String {
+    let mut out = Vec::new();
+    for section in sections {
+        if sections.len() > 1 {
+            out.push(format!("[{}]", section.label));
+        }
+        for op in &section.rows {
+            out.push(format!("{}\t{}\t{}", op.addr, op.opcode, op.operands));
+        }
+    }
+    out.join("\n")
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
