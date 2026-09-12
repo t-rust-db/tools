@@ -2,6 +2,17 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.9.0] - 2026-09-12
+
+### Added
+
+- **Rainfrog-style completion popup** (#48): static SQL keywords/scalar function names (sourced from db-core's `keyword_names()`/`SCALAR_FUNCTION_NAMES` rather than hand-maintained) alongside table/column names from every open file, not just the active one.
+
+### Fixed
+
+- A real `nucleo-matcher` 0.3.1 panic ("should have been caught by prefilter") on certain all-uppercase-keyword/lowercase-needle shapes -- `rank()` now lowercases both sides itself before matching.
+- Bumped db-core to v0.88.2.
+
 ## [0.8.0] - 2026-09-12
 
 ### Added

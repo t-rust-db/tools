@@ -1,6 +1,6 @@
 [package]
 name = "db-studio"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 description = "A TUI database studio for the t-rust-db family -- open a .sqlite/.parquet/.log file, get a query pane and grid output over the matching db-core engine"
 license = "Apache-2.0"
@@ -14,7 +14,7 @@ authors = ["Ilja Heitlager <iheitlager@schubergphilis.com>"]
 # path -- a path dependency always builds against whatever commit
 # happens to be checked out on disk, which is a real hazard in a
 # multi-checkout/worktree environment.
-db-core = { version = "0.88.1", git = "https://github.com/t-rust-db/db-core", tag = "v0.88.1", default-features = false, features = ["engine-row", "engine-column", "engine-stream"] }
+db-core = { version = "0.88.2", git = "https://github.com/t-rust-db/db-core", tag = "v0.88.2", default-features = false, features = ["engine-row", "engine-column", "engine-stream"] }
 ratatui = "0.30.2"
 crossterm = "0.29.0"
 tui-textarea-2 = { version = "0.13.2", default-features = false, features = ["ratatui", "crossterm"] }
