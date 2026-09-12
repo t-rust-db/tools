@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use db_core::engine::Engine;
+use db_core::engine::{Cell, Engine};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::Frame;
 
@@ -42,6 +42,20 @@ fn file_label(path: &std::path::Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+/// A grid cell's display text (db-studio#44) -- `Cell::Display`
+/// itself renders `NULL` as empty, correct for db-core's shell-style
+/// clients (sqlite-rs/column-rs/loglume, matching `sqlite3`'s own CLI
+/// convention), but that makes a `NULL` indistinguishable from a real
+/// empty string in a grid meant to be looked at rather than piped.
+/// Only `Cell::Null` gets the special case; every other variant still
+/// renders exactly as `Cell::Display` already does.
+fn cell_display(cell: &Cell) -> String {
+    match cell {
+        Cell::Null => "<NULL>".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// Which pane has keyboard focus. Grid/error aren't in this enum -- they
@@ -472,7 +486,7 @@ impl App {
                 let rows = result
                     .rows
                     .into_iter()
-                    .map(|row| row.iter().map(ToString::to_string).collect())
+                    .map(|row| row.iter().map(cell_display).collect())
                     .collect();
                 self.grid_pane.set_grid(Grid::new(headers, rows));
                 self.error_pane.clear();
@@ -821,5 +835,42 @@ mod tests {
 
         app.open_file("/no/such/file.sqlite".to_string());
         assert_eq!(app.files.len(), before + 1, "a bad path must not open");
+    }
+
+    /// db-studio#44: `Cell::Null` and a real empty string must render
+    /// differently -- otherwise a sparse result (e.g. `SELECT *` over a
+    /// `.log` file's Tier-3 columns, where most fields don't apply to
+    /// most rows) looks indistinguishable from one full of blanks.
+    #[test]
+    fn cell_display_marks_null_but_leaves_a_real_empty_string_blank() {
+        assert_eq!(cell_display(&Cell::Null), "<NULL>");
+        assert_eq!(cell_display(&Cell::Text(String::new())), "");
+        assert_eq!(cell_display(&Cell::Text("hi".to_string())), "hi");
+        assert_eq!(cell_display(&Cell::Int(0)), "0");
+    }
+
+    /// Same check end to end: a real stream query over a Tier-3 field
+    /// that only some lines carry shows `<NULL>` for the rows missing
+    /// it, not a blank cell -- exactly the sparse-`SELECT *` shape
+    /// db-studio#44 was filed over.
+    #[test]
+    fn a_real_null_column_shows_the_null_marker_in_the_grid() {
+        let path = std::env::temp_dir().join(format!(
+            "db_studio_null_marker_test_{}.log",
+            std::process::id()
+        ));
+        std::fs::write(&path, "ts=2026-01-01T00:00:00Z level=info msg=\"has extra\" extra=1\nts=2026-01-01T00:00:01Z level=info msg=\"no extra\"\n").unwrap();
+
+        let engine = StreamEngine::open(&path).unwrap();
+        let mut app = App::new(vec![OpenFile {
+            path,
+            engine: Box::new(engine),
+        }]);
+        app.submit("SELECT extra FROM log");
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("<NULL>"),
+            "expected the NULL marker for the row missing `extra`:\n{text}"
+        );
     }
 }
