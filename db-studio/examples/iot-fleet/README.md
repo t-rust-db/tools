@@ -71,7 +71,8 @@ with the same real tools that produced them (`sqlite3`/`duckdb`), so a
 truncated or corrupt file from a failed `generate.sh` run shows up as a
 Makefile error, not as a confusing db-studio failure later. `make
 check-sqlite`/`make check-parquet` run just one side; `make clean`
-removes all three generated fixtures.
+removes all three generated fixtures. `make help` (or a bare `make`)
+lists every target.
 
 Generates the fixtures if missing, then launches db-studio with
 `fleet.sqlite`, `readings.parquet`, and `device.log` all open. Unlike
