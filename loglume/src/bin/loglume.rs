@@ -42,6 +42,10 @@ struct Args {
     /// Scope of history to query, e.g. "1h", "1d", "100000 lines", "256mb"
     #[arg(long)]
     scope: Option<String>,
+
+    /// Open an interactive TUI viewer instead of printing to stdout
+    #[arg(long)]
+    tui: bool,
 }
 
 fn main() {
@@ -58,6 +62,16 @@ fn main() {
 fn run(args: &Args) -> io::Result<()> {
     let sql = build_sql(&args.filter, args.scope.as_deref(), args.max_lines)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+
+    if args.tui {
+        let path = args.file.as_deref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--tui requires a file argument (stdin isn't supported)",
+            )
+        })?;
+        return tui::run(path, sql);
+    }
 
     match &args.file {
         Some(path) => {
@@ -79,11 +93,11 @@ fn run(args: &Args) -> io::Result<()> {
     }
 }
 
-fn engine_err(e: EngineError) -> io::Error {
+pub(crate) fn engine_err(e: EngineError) -> io::Error {
     io::Error::other(e.to_string())
 }
 
-fn open_engine(path: &Path) -> io::Result<StreamEngine> {
+pub(crate) fn open_engine(path: &Path) -> io::Result<StreamEngine> {
     StreamEngine::open(path).map_err(engine_err)
 }
 
@@ -170,23 +184,23 @@ fn print_rows(result: &QueryResult, start: usize) {
     let mut out = stdout.lock();
 
     for row in result.rows.iter().skip(start) {
-        let line = raw_idx
-            .and_then(|idx| row.get(idx))
-            .and_then(|cell| match cell {
-                Cell::Text(s) => Some(s.clone()),
-                _ => None,
-            });
-        match line {
-            Some(line) => {
-                let _ = writeln!(out, "{line}");
-            }
-            None => {
-                // Not a `SELECT *`-shaped result (e.g. an aggregate query);
-                // fall back to printing every cell in the row.
-                let cells: Vec<String> = row.iter().map(format_cell).collect();
-                let _ = writeln!(out, "{}", cells.join("\t"));
-            }
-        }
+        let _ = writeln!(out, "{}", format_row(row, raw_idx));
+    }
+}
+
+/// Render one result row as a single display line: the "raw" column's text
+/// if present (typical `SELECT *` shape), else every cell tab-joined (e.g.
+/// an aggregate query). Shared by the plain CLI output and the TUI list.
+pub(crate) fn format_row(row: &[Cell], raw_idx: Option<usize>) -> String {
+    let line = raw_idx
+        .and_then(|idx| row.get(idx))
+        .and_then(|cell| match cell {
+            Cell::Text(s) => Some(s.clone()),
+            _ => None,
+        });
+    match line {
+        Some(line) => line,
+        None => row.iter().map(format_cell).collect::<Vec<_>>().join("\t"),
     }
 }
 
@@ -209,7 +223,7 @@ fn print_footer(result: &QueryResult) {
     eprintln!("-- {}", format_scope_report(report));
 }
 
-fn format_scope_report(report: &ScopeReport) -> String {
+pub(crate) fn format_scope_report(report: &ScopeReport) -> String {
     let range = match (report.first_ts, report.last_ts) {
         (Some(first), Some(last)) => {
             format!("{} -> {}", format_ts_ns(first), format_ts_ns(last))
@@ -269,7 +283,7 @@ fn build_sql(filter: &str, scope: Option<&str>, max_lines: usize) -> Result<Stri
     Ok(sql)
 }
 
-fn rewrite_filter_to_sql(filter: &str) -> Result<String, String> {
+pub(crate) fn rewrite_filter_to_sql(filter: &str) -> Result<String, String> {
     let trimmed = filter.trim();
     if trimmed.len() >= 6 && trimmed[..6].eq_ignore_ascii_case("select") {
         return Ok(trimmed.to_string());
@@ -383,9 +397,313 @@ fn facility_keyword(fac: Facility) -> &'static str {
     }
 }
 
+/// Interactive TUI viewer (`--tui`).
+///
+/// Reuses the same `StreamEngine`/SQL query path as the plain CLI: the
+/// filter bar compiles through [`rewrite_filter_to_sql`], the same
+/// function `--filter` uses, so there is exactly one place that
+/// understands loglume's filter syntax.
+mod tui {
+    use super::{engine_err, format_row, format_scope_report, open_engine, rewrite_filter_to_sql};
+    use crossterm::event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
+    };
+    use crossterm::execute;
+    use crossterm::terminal::{
+        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    };
+    use loglume::{Engine, QueryResult};
+    use ratatui::backend::CrosstermBackend;
+    use ratatui::layout::{Constraint, Direction, Layout};
+    use ratatui::style::{Modifier, Style};
+    use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+    use ratatui::Terminal;
+    use std::io::{self, Stdout};
+    use std::path::Path;
+    use std::sync::mpsc::{self, TryRecvError};
+    use std::time::{Duration, Instant};
+
+    type Tui = Terminal<CrosstermBackend<Stdout>>;
+
+    const TICK_RATE: Duration = Duration::from_millis(100);
+
+    /// Run the interactive TUI against `path`, starting with `initial_sql`.
+    pub(crate) fn run(path: &Path, initial_sql: String) -> io::Result<()> {
+        install_panic_hook();
+        let mut terminal = init_terminal()?;
+        let result = App::new(path, initial_sql)?.run(&mut terminal);
+        restore_terminal(&mut terminal)?;
+        result
+    }
+
+    fn init_terminal() -> io::Result<Tui> {
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        Terminal::new(CrosstermBackend::new(stdout))
+    }
+
+    fn restore_terminal(terminal: &mut Tui) -> io::Result<()> {
+        disable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        terminal.show_cursor()
+    }
+
+    /// A panic mid-render must not leave the user's terminal in raw/
+    /// alternate-screen mode, so restore it first, then chain to the
+    /// default hook.
+    fn install_panic_hook() {
+        let original = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = disable_raw_mode();
+            let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+            original(info);
+        }));
+    }
+
+    struct App {
+        engine: loglume::StreamEngine,
+        sql: String,
+        result: QueryResult,
+        list_state: ListState,
+        filter_text: String,
+        editing_filter: bool,
+        status: Option<String>,
+        watch_rx: mpsc::Receiver<notify::Result<notify::Event>>,
+        _watcher: notify::RecommendedWatcher,
+    }
+
+    impl App {
+        fn new(path: &Path, sql: String) -> io::Result<Self> {
+            use notify::{RecursiveMode, Watcher};
+
+            let mut engine = open_engine(path)?;
+            let result = engine.run_query(&sql).map_err(engine_err)?;
+
+            let (tx, rx) = mpsc::channel();
+            let mut watcher = notify::recommended_watcher(move |res| {
+                let _ = tx.send(res);
+            })
+            .map_err(|e| io::Error::other(e.to_string()))?;
+            watcher
+                .watch(path, RecursiveMode::NonRecursive)
+                .map_err(|e| io::Error::other(e.to_string()))?;
+
+            let mut list_state = ListState::default();
+            if !result.rows.is_empty() {
+                list_state.select(Some(result.rows.len() - 1));
+            }
+
+            let filter_text = sql.clone();
+            Ok(Self {
+                engine,
+                sql,
+                result,
+                list_state,
+                filter_text,
+                editing_filter: false,
+                status: None,
+                watch_rx: rx,
+                _watcher: watcher,
+            })
+        }
+
+        fn run(mut self, terminal: &mut Tui) -> io::Result<()> {
+            let mut last_tick = Instant::now();
+            loop {
+                terminal.draw(|frame| self.draw(frame))?;
+
+                if self.drain_file_events()? {
+                    self.requery(true)?;
+                }
+
+                let timeout = TICK_RATE.saturating_sub(last_tick.elapsed());
+                if event::poll(timeout)? {
+                    if let Event::Key(key) = event::read()? {
+                        if key.kind == KeyEventKind::Press && self.handle_key(key.code)? {
+                            return Ok(());
+                        }
+                    }
+                }
+                if last_tick.elapsed() >= TICK_RATE {
+                    last_tick = Instant::now();
+                }
+            }
+        }
+
+        /// Non-blocking drain of the file watcher; returns true if a
+        /// refresh is warranted (coalesces a burst of events into one
+        /// requery instead of one per filesystem event).
+        fn drain_file_events(&mut self) -> io::Result<bool> {
+            let mut dirty = false;
+            loop {
+                match self.watch_rx.try_recv() {
+                    Ok(Ok(event)) if event.kind.is_modify() || event.kind.is_create() => {
+                        dirty = true;
+                    }
+                    Ok(_) => {}
+                    Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+                }
+            }
+            if dirty {
+                self.engine.refresh().map_err(engine_err)?;
+            }
+            Ok(dirty)
+        }
+
+        /// Re-run the current query. `follow_tail` sticks the selection to
+        /// the newest row (for live-append refreshes); otherwise the view
+        /// resets to the top (for an explicit filter change).
+        fn requery(&mut self, follow_tail: bool) -> io::Result<()> {
+            match self.engine.run_query(&self.sql) {
+                Ok(result) => {
+                    let was_at_end = follow_tail
+                        && self
+                            .list_state
+                            .selected()
+                            .is_none_or(|i| i + 1 >= self.result.rows.len());
+                    self.result = result;
+                    self.list_state = ListState::default();
+                    if !self.result.rows.is_empty() {
+                        let selected = if was_at_end {
+                            self.result.rows.len() - 1
+                        } else {
+                            0
+                        };
+                        self.list_state.select(Some(selected));
+                    }
+                    self.status = None;
+                }
+                Err(e) => {
+                    self.status = Some(format!("query error: {e}"));
+                }
+            }
+            Ok(())
+        }
+
+        /// Returns true if the app should quit.
+        fn handle_key(&mut self, code: KeyCode) -> io::Result<bool> {
+            if self.editing_filter {
+                match code {
+                    KeyCode::Enter => {
+                        self.editing_filter = false;
+                        match rewrite_filter_to_sql(&self.filter_text) {
+                            Ok(sql) => {
+                                self.sql = sql;
+                                self.requery(false)?;
+                            }
+                            Err(e) => self.status = Some(format!("filter error: {e}")),
+                        }
+                    }
+                    KeyCode::Esc => {
+                        self.editing_filter = false;
+                        self.filter_text = self.sql.clone();
+                    }
+                    KeyCode::Backspace => {
+                        self.filter_text.pop();
+                    }
+                    KeyCode::Char(c) => self.filter_text.push(c),
+                    _ => {}
+                }
+                return Ok(false);
+            }
+
+            match code {
+                KeyCode::Char('q') | KeyCode::Esc => return Ok(true),
+                KeyCode::Char('j') | KeyCode::Down => self.select_relative(1),
+                KeyCode::Char('k') | KeyCode::Up => self.select_relative(-1),
+                KeyCode::PageDown => self.select_relative(10),
+                KeyCode::PageUp => self.select_relative(-10),
+                KeyCode::Char('/') | KeyCode::Char(':') => {
+                    self.editing_filter = true;
+                    self.filter_text = self.sql.clone();
+                }
+                KeyCode::Char('r') => self.requery(true)?,
+                _ => {}
+            }
+            Ok(false)
+        }
+
+        fn select_relative(&mut self, delta: isize) {
+            let len = self.result.rows.len();
+            if len == 0 {
+                return;
+            }
+            let current = self.list_state.selected().unwrap_or(0) as isize;
+            let next = (current + delta).clamp(0, len as isize - 1);
+            self.list_state.select(Some(next as usize));
+        }
+
+        fn draw(&mut self, frame: &mut ratatui::Frame) {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(1), Constraint::Length(3)])
+                .split(frame.area());
+            let (Some(&list_area), Some(&filter_area)) = (chunks.first(), chunks.get(1)) else {
+                return;
+            };
+
+            let raw_idx = self.result.columns.iter().position(|c| c == "raw");
+            let items: Vec<ListItem> = self
+                .result
+                .rows
+                .iter()
+                .map(|row| ListItem::new(format_row(row, raw_idx)))
+                .collect();
+
+            let title = self
+                .result
+                .scope_report
+                .as_ref()
+                .map(|r| format!("loglume — {}", format_scope_report(r)))
+                .unwrap_or_else(|| "loglume".to_string());
+
+            let list = List::new(items)
+                .block(Block::default().borders(Borders::ALL).title(title))
+                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            frame.render_stateful_widget(list, list_area, &mut self.list_state);
+
+            let filter_title = if self.editing_filter {
+                "filter (Enter to apply, Esc to cancel)"
+            } else {
+                "filter (/ to edit, j/k to move, PgUp/PgDn, q to quit)"
+            };
+            let filter_body = self
+                .status
+                .clone()
+                .unwrap_or_else(|| self.filter_text.clone());
+            let input = Paragraph::new(filter_body)
+                .block(Block::default().borders(Borders::ALL).title(filter_title));
+            frame.render_widget(input, filter_area);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_row_uses_raw_column_when_present() {
+        let row = vec![Cell::Int(42), Cell::Text("hello world".to_string())];
+        assert_eq!(format_row(&row, Some(1)), "hello world");
+    }
+
+    #[test]
+    fn format_row_falls_back_to_all_cells_without_raw_column() {
+        let row = vec![Cell::Int(42), Cell::Text("count".to_string())];
+        assert_eq!(format_row(&row, None), "42\tcount");
+    }
+
+    #[test]
+    fn format_row_falls_back_when_raw_column_is_not_text() {
+        let row = vec![Cell::Int(42)];
+        assert_eq!(format_row(&row, Some(0)), "42");
+    }
 
     #[test]
     fn severity_ge_rewrites_to_sql() {

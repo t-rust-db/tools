@@ -2,7 +2,7 @@
 name = "loglume"
 version = "0.1.3"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/t-rust-db/loglume"
 description = "Fast CLI log viewer with SQL filtering, built on db-core"
@@ -20,6 +20,8 @@ path = "src/lib.rs"
 db-core = { version = "0.90.0", git = "https://github.com/t-rust-db/db-core", tag = "v0.90.0", default-features = false, features = ["engine-stream", "storage-stream", "vm-stream"] }
 clap = { version = "4", features = ["derive"] }
 notify = "8"
+ratatui = "0.30.2"
+crossterm = "0.29.0"
 
 [dev-dependencies]
 assert_cmd = "2"
