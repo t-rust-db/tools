@@ -391,3 +391,149 @@ fn parse_facility_name(name: &str) -> Option<Facility> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parse a single raw syslog line into a batch of one entry.
+    fn batch_for(line: &str) -> (loglume::LogBatch<'static>, ()) {
+        let raw: &'static str = Box::leak(format!("{line}\n").into_boxed_str());
+        let parser = SyslogParser::new();
+        let source = Source::new(SourceKind::File, "test");
+        let (batch, _consumed) = parser.parse_batch(source, raw.as_bytes(), 1);
+        (batch, ())
+    }
+
+    // facility=kern(0), severity=emerg(0) -> pri 0
+    const KERN_EMERG: &str = "<0>Sep 9 08:00:00 host kernel[1]: panic";
+    // facility=auth(4), severity=warning(4) -> pri 36
+    const AUTH_WARNING: &str = "<36>Sep 9 08:00:00 host sshd[1]: bad login";
+    // facility=daemon(3), severity=err(3) -> pri 27
+    const DAEMON_ERR: &str = "<27>Sep 9 08:00:00 host nginx[1]: 500";
+    // facility=user(1), severity=notice(5) -> pri 13 (less urgent than warning)
+    const USER_NOTICE: &str = "<13>Sep 9 08:00:00 host app[1]: heads up";
+
+    #[test]
+    fn severity_ge_matches_equal_and_above() {
+        let filter = parse_filter("severity >= WARN").expect("valid filter");
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(KERN_EMERG);
+        assert!(filter(&batch, 0));
+    }
+
+    #[test]
+    fn severity_ge_rejects_below() {
+        let filter = parse_filter("severity >= ERR").expect("valid filter");
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(!filter(&batch, 0));
+    }
+
+    // Severity's Ord follows urgency, not raw syslog numeric codes: EMERG is
+    // the "greatest" severity, DEBUG the "least" (e.g. EMERG > ERR > WARNING).
+
+    #[test]
+    fn severity_gt() {
+        let filter = parse_filter("severity > ERR").expect("valid filter");
+        let (batch, _) = batch_for(KERN_EMERG);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(DAEMON_ERR);
+        assert!(!filter(&batch, 0));
+    }
+
+    #[test]
+    fn severity_le() {
+        let filter = parse_filter("severity <= ERR").expect("valid filter");
+        let (batch, _) = batch_for(DAEMON_ERR);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(KERN_EMERG);
+        assert!(!filter(&batch, 0));
+    }
+
+    #[test]
+    fn severity_lt() {
+        let filter = parse_filter("severity < WARN").expect("valid filter");
+        let (batch, _) = batch_for(USER_NOTICE);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(!filter(&batch, 0));
+    }
+
+    #[test]
+    fn severity_eq() {
+        let filter = parse_filter("severity = WARN").expect("valid filter");
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(DAEMON_ERR);
+        assert!(!filter(&batch, 0));
+    }
+
+    #[test]
+    fn facility_eq_matches_by_name() {
+        let filter = parse_filter("facility = auth").expect("valid filter");
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(KERN_EMERG);
+        assert!(!filter(&batch, 0));
+    }
+
+    #[test]
+    fn facility_eq_matches_alias() {
+        let filter = parse_filter("facility = kernel").expect("valid filter");
+        let (batch, _) = batch_for(KERN_EMERG);
+        assert!(filter(&batch, 0));
+    }
+
+    #[test]
+    fn and_combinator_uppercase() {
+        let filter = parse_filter("severity >= WARN AND facility = auth").expect("valid filter");
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(KERN_EMERG);
+        assert!(!filter(&batch, 0));
+    }
+
+    #[test]
+    fn and_combinator_lowercase() {
+        let filter = parse_filter("severity >= WARN and facility = auth").expect("valid filter");
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(filter(&batch, 0));
+    }
+
+    #[test]
+    fn unrecognized_severity_level_is_an_error() {
+        let err = match parse_filter("severity >= BOGUS") {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(err.contains("BOGUS"));
+    }
+
+    #[test]
+    fn unrecognized_facility_name_is_an_error() {
+        let err = match parse_filter("facility = nope") {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(err.contains("nope"));
+    }
+
+    #[test]
+    fn unrecognized_filter_expression_is_an_error() {
+        let err = match parse_filter("bogus filter") {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(err.contains("bogus filter"));
+    }
+
+    #[test]
+    fn find_tail_offset_basic() {
+        let data = b"a\nb\nc\nd\n";
+        // Last 2 lines are "c\n" and "d\n" -> offset points at 'c'
+        assert_eq!(find_tail_offset(data, 2), 4);
+        assert_eq!(find_tail_offset(data, 0), 0);
+        assert_eq!(find_tail_offset(data, 100), 0);
+    }
+}
