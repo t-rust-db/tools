@@ -62,13 +62,11 @@ fn process_file(path: &PathBuf, filter: &str, max_lines: usize, tail: usize) -> 
     #[allow(unsafe_code)]
     let mmap = unsafe { Mmap::map(&file)? };
 
-    let source = Source::new(
-        SourceKind::File,
-        path.to_str().unwrap_or("unknown"),
-    );
+    let source = Source::new(SourceKind::File, path.to_str().unwrap_or("unknown"));
 
-    let parser = SyslogParser::with_year(2024); // TODO: detect from file or system
-    let filter_fn = parse_filter(filter);
+    let parser = SyslogParser::new();
+    let filter_fn =
+        parse_filter(filter).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
     // Find start offset for tail mode
     let start_offset = if tail > 0 {
@@ -79,7 +77,11 @@ fn process_file(path: &PathBuf, filter: &str, max_lines: usize, tail: usize) -> 
 
     let mut offset = start_offset;
     let mut total_lines = 0;
-    let limit = if max_lines == 0 { usize::MAX } else { max_lines };
+    let limit = if max_lines == 0 {
+        usize::MAX
+    } else {
+        max_lines
+    };
 
     while offset < mmap.len() && total_lines < limit {
         let remaining = mmap.get(offset..).unwrap_or(&[]);
@@ -108,11 +110,13 @@ fn process_file(path: &PathBuf, filter: &str, max_lines: usize, tail: usize) -> 
 }
 
 fn process_file_follow(path: &PathBuf, filter: &str, tail: usize) -> io::Result<()> {
-    use std::thread;
-    use std::time::Duration;
+    use notify::{RecursiveMode, Watcher};
+    use std::io::Seek;
+    use std::sync::mpsc;
 
-    let filter_fn = parse_filter(filter);
-    let parser = SyslogParser::with_year(2024);
+    let filter_fn =
+        parse_filter(filter).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let parser = SyslogParser::new();
     let source = Source::new(SourceKind::File, path.to_str().unwrap_or("unknown"));
 
     // Initial read with tail
@@ -139,16 +143,28 @@ fn process_file_follow(path: &PathBuf, filter: &str, tail: usize) -> io::Result<
 
     let mut pos = buffer.len();
 
-    // Poll for new content
-    loop {
-        thread::sleep(Duration::from_millis(100));
+    // Watch for filesystem writes instead of polling on a fixed interval.
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |res| {
+        // The receiving end may have gone away if we're shutting down; ignore send errors.
+        let _ = tx.send(res);
+    })
+    .map_err(|e| io::Error::other(e.to_string()))?;
+    watcher
+        .watch(path, RecursiveMode::NonRecursive)
+        .map_err(|e| io::Error::other(e.to_string()))?;
+
+    for res in rx {
+        let event = res.map_err(|e| io::Error::other(e.to_string()))?;
+        if !event.kind.is_modify() && !event.kind.is_create() {
+            continue;
+        }
 
         let metadata = std::fs::metadata(path)?;
         let new_len = metadata.len() as usize;
 
         if new_len > pos {
             let mut file = File::open(path)?;
-            use std::io::Seek;
             file.seek(std::io::SeekFrom::Start(pos as u64))?;
 
             let mut new_data = Vec::new();
@@ -165,8 +181,13 @@ fn process_file_follow(path: &PathBuf, filter: &str, tail: usize) -> io::Result<
                 }
                 pos = pos.saturating_add(consumed);
             }
+        } else if new_len < pos {
+            // File was truncated/replaced (log rotation): restart from the top.
+            pos = 0;
         }
     }
+
+    Ok(())
 }
 
 fn process_stdin(filter: &str, max_lines: usize) -> io::Result<()> {
@@ -174,10 +195,15 @@ fn process_stdin(filter: &str, max_lines: usize) -> io::Result<()> {
 
     let stdin = io::stdin();
     let source = Source::new(SourceKind::Stdin, "stdin");
-    let parser = SyslogParser::with_year(2024);
-    let filter_fn = parse_filter(filter);
+    let parser = SyslogParser::new();
+    let filter_fn =
+        parse_filter(filter).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
-    let limit = if max_lines == 0 { usize::MAX } else { max_lines };
+    let limit = if max_lines == 0 {
+        usize::MAX
+    } else {
+        max_lines
+    };
     let mut lines_processed: usize = 0;
 
     // Read line-by-line for streaming support
@@ -244,26 +270,32 @@ fn find_tail_offset(data: &[u8], n: usize) -> usize {
 /// - `severity >= WARN AND facility = auth`
 ///
 /// TODO: integrate with db-core parser for full SQL WHERE support.
-fn parse_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool> {
+type FilterPredicate = Box<dyn Fn(&LogBatch<'_>, usize) -> bool>;
+
+fn parse_filter(filter: &str) -> Result<FilterPredicate, String> {
     let filter = filter.trim();
 
     // Handle AND combinator
     if let Some((left, right)) = filter.split_once(" AND ") {
-        let left_fn = parse_single_filter(left.trim());
-        let right_fn = parse_single_filter(right.trim());
-        return Box::new(move |batch, i| left_fn(batch, i) && right_fn(batch, i));
+        let left_fn = parse_single_filter(left.trim())?;
+        let right_fn = parse_single_filter(right.trim())?;
+        return Ok(Box::new(move |batch, i| {
+            left_fn(batch, i) && right_fn(batch, i)
+        }));
     }
     if let Some((left, right)) = filter.split_once(" and ") {
-        let left_fn = parse_single_filter(left.trim());
-        let right_fn = parse_single_filter(right.trim());
-        return Box::new(move |batch, i| left_fn(batch, i) && right_fn(batch, i));
+        let left_fn = parse_single_filter(left.trim())?;
+        let right_fn = parse_single_filter(right.trim())?;
+        return Ok(Box::new(move |batch, i| {
+            left_fn(batch, i) && right_fn(batch, i)
+        }));
     }
 
     parse_single_filter(filter)
 }
 
 /// Parse a single filter clause.
-fn parse_single_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool> {
+fn parse_single_filter(filter: &str) -> Result<FilterPredicate, String> {
     let filter = filter.trim();
 
     // Try parsing "severity <op> <level>"
@@ -272,48 +304,66 @@ fn parse_single_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool
 
         if let Some(level_str) = rest.strip_prefix(">=") {
             let level_str = level_str.trim();
-            if let Some(level) = Severity::parse(level_str) {
-                return Box::new(move |batch, i| {
-                    batch.severity.get(i).and_then(|s| *s).map_or(false, |s| s >= level)
-                });
-            }
+            let level = Severity::parse(level_str)
+                .ok_or_else(|| format!("unrecognized severity level '{level_str}'"))?;
+            return Ok(Box::new(move |batch, i| {
+                batch
+                    .severity
+                    .get(i)
+                    .and_then(|s| *s)
+                    .is_some_and(|s| s >= level)
+            }));
         }
 
         if let Some(level_str) = rest.strip_prefix(">") {
             let level_str = level_str.trim();
-            if let Some(level) = Severity::parse(level_str) {
-                return Box::new(move |batch, i| {
-                    batch.severity.get(i).and_then(|s| *s).map_or(false, |s| s > level)
-                });
-            }
+            let level = Severity::parse(level_str)
+                .ok_or_else(|| format!("unrecognized severity level '{level_str}'"))?;
+            return Ok(Box::new(move |batch, i| {
+                batch
+                    .severity
+                    .get(i)
+                    .and_then(|s| *s)
+                    .is_some_and(|s| s > level)
+            }));
         }
 
         if let Some(level_str) = rest.strip_prefix("<=") {
             let level_str = level_str.trim();
-            if let Some(level) = Severity::parse(level_str) {
-                return Box::new(move |batch, i| {
-                    batch.severity.get(i).and_then(|s| *s).map_or(false, |s| s <= level)
-                });
-            }
+            let level = Severity::parse(level_str)
+                .ok_or_else(|| format!("unrecognized severity level '{level_str}'"))?;
+            return Ok(Box::new(move |batch, i| {
+                batch
+                    .severity
+                    .get(i)
+                    .and_then(|s| *s)
+                    .is_some_and(|s| s <= level)
+            }));
         }
 
         if let Some(level_str) = rest.strip_prefix("<") {
             let level_str = level_str.trim();
-            if let Some(level) = Severity::parse(level_str) {
-                return Box::new(move |batch, i| {
-                    batch.severity.get(i).and_then(|s| *s).map_or(false, |s| s < level)
-                });
-            }
+            let level = Severity::parse(level_str)
+                .ok_or_else(|| format!("unrecognized severity level '{level_str}'"))?;
+            return Ok(Box::new(move |batch, i| {
+                batch
+                    .severity
+                    .get(i)
+                    .and_then(|s| *s)
+                    .is_some_and(|s| s < level)
+            }));
         }
 
         if let Some(level_str) = rest.strip_prefix("=") {
             let level_str = level_str.trim();
-            if let Some(level) = Severity::parse(level_str) {
-                return Box::new(move |batch, i| {
-                    batch.severity.get(i).and_then(|s| *s).map_or(false, |s| s == level)
-                });
-            }
+            let level = Severity::parse(level_str)
+                .ok_or_else(|| format!("unrecognized severity level '{level_str}'"))?;
+            return Ok(Box::new(move |batch, i| {
+                batch.severity.get(i).and_then(|s| *s) == Some(level)
+            }));
         }
+
+        return Err(format!("unrecognized severity operator in '{filter}'"));
     }
 
     // Try parsing "facility = <name>"
@@ -321,17 +371,16 @@ fn parse_single_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool
         let rest = rest.trim();
         if let Some(name) = rest.strip_prefix("=") {
             let name = name.trim();
-            if let Some(fac) = parse_facility_name(name) {
-                return Box::new(move |batch, i| {
-                    batch.facility.get(i).and_then(|f| *f).map_or(false, |f| f == fac)
-                });
-            }
+            let fac = parse_facility_name(name)
+                .ok_or_else(|| format!("unrecognized facility name '{name}'"))?;
+            return Ok(Box::new(move |batch, i| {
+                batch.facility.get(i).and_then(|f| *f) == Some(fac)
+            }));
         }
+        return Err(format!("unrecognized facility operator in '{filter}'"));
     }
 
-    // Fallback: match all (TODO: proper error handling)
-    eprintln!("warning: unrecognized filter '{filter}', matching all lines");
-    Box::new(|_, _| true)
+    Err(format!("unrecognized filter expression '{filter}'"))
 }
 
 /// Parse facility name to enum.
@@ -358,5 +407,151 @@ fn parse_facility_name(name: &str) -> Option<Facility> {
         "local6" => Some(Facility::Local6),
         "local7" => Some(Facility::Local7),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parse a single raw syslog line into a batch of one entry.
+    fn batch_for(line: &str) -> (loglume::LogBatch<'static>, ()) {
+        let raw: &'static str = Box::leak(format!("{line}\n").into_boxed_str());
+        let parser = SyslogParser::new();
+        let source = Source::new(SourceKind::File, "test");
+        let (batch, _consumed) = parser.parse_batch(source, raw.as_bytes(), 1);
+        (batch, ())
+    }
+
+    // facility=kern(0), severity=emerg(0) -> pri 0
+    const KERN_EMERG: &str = "<0>Sep 9 08:00:00 host kernel[1]: panic";
+    // facility=auth(4), severity=warning(4) -> pri 36
+    const AUTH_WARNING: &str = "<36>Sep 9 08:00:00 host sshd[1]: bad login";
+    // facility=daemon(3), severity=err(3) -> pri 27
+    const DAEMON_ERR: &str = "<27>Sep 9 08:00:00 host nginx[1]: 500";
+    // facility=user(1), severity=notice(5) -> pri 13 (less urgent than warning)
+    const USER_NOTICE: &str = "<13>Sep 9 08:00:00 host app[1]: heads up";
+
+    #[test]
+    fn severity_ge_matches_equal_and_above() {
+        let filter = parse_filter("severity >= WARN").expect("valid filter");
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(KERN_EMERG);
+        assert!(filter(&batch, 0));
+    }
+
+    #[test]
+    fn severity_ge_rejects_below() {
+        let filter = parse_filter("severity >= ERR").expect("valid filter");
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(!filter(&batch, 0));
+    }
+
+    // Severity's Ord follows urgency, not raw syslog numeric codes: EMERG is
+    // the "greatest" severity, DEBUG the "least" (e.g. EMERG > ERR > WARNING).
+
+    #[test]
+    fn severity_gt() {
+        let filter = parse_filter("severity > ERR").expect("valid filter");
+        let (batch, _) = batch_for(KERN_EMERG);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(DAEMON_ERR);
+        assert!(!filter(&batch, 0));
+    }
+
+    #[test]
+    fn severity_le() {
+        let filter = parse_filter("severity <= ERR").expect("valid filter");
+        let (batch, _) = batch_for(DAEMON_ERR);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(KERN_EMERG);
+        assert!(!filter(&batch, 0));
+    }
+
+    #[test]
+    fn severity_lt() {
+        let filter = parse_filter("severity < WARN").expect("valid filter");
+        let (batch, _) = batch_for(USER_NOTICE);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(!filter(&batch, 0));
+    }
+
+    #[test]
+    fn severity_eq() {
+        let filter = parse_filter("severity = WARN").expect("valid filter");
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(DAEMON_ERR);
+        assert!(!filter(&batch, 0));
+    }
+
+    #[test]
+    fn facility_eq_matches_by_name() {
+        let filter = parse_filter("facility = auth").expect("valid filter");
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(KERN_EMERG);
+        assert!(!filter(&batch, 0));
+    }
+
+    #[test]
+    fn facility_eq_matches_alias() {
+        let filter = parse_filter("facility = kernel").expect("valid filter");
+        let (batch, _) = batch_for(KERN_EMERG);
+        assert!(filter(&batch, 0));
+    }
+
+    #[test]
+    fn and_combinator_uppercase() {
+        let filter = parse_filter("severity >= WARN AND facility = auth").expect("valid filter");
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(filter(&batch, 0));
+        let (batch, _) = batch_for(KERN_EMERG);
+        assert!(!filter(&batch, 0));
+    }
+
+    #[test]
+    fn and_combinator_lowercase() {
+        let filter = parse_filter("severity >= WARN and facility = auth").expect("valid filter");
+        let (batch, _) = batch_for(AUTH_WARNING);
+        assert!(filter(&batch, 0));
+    }
+
+    #[test]
+    fn unrecognized_severity_level_is_an_error() {
+        let err = match parse_filter("severity >= BOGUS") {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(err.contains("BOGUS"));
+    }
+
+    #[test]
+    fn unrecognized_facility_name_is_an_error() {
+        let err = match parse_filter("facility = nope") {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(err.contains("nope"));
+    }
+
+    #[test]
+    fn unrecognized_filter_expression_is_an_error() {
+        let err = match parse_filter("bogus filter") {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(err.contains("bogus filter"));
+    }
+
+    #[test]
+    fn find_tail_offset_basic() {
+        let data = b"a\nb\nc\nd\n";
+        // Last 2 lines are "c\n" and "d\n" -> offset points at 'c'
+        assert_eq!(find_tail_offset(data, 2), 4);
+        assert_eq!(find_tail_offset(data, 0), 0);
+        assert_eq!(find_tail_offset(data, 100), 0);
     }
 }
