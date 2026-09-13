@@ -9,3 +9,6 @@ pub use db_core::storage::{
     Facility, FieldColumn, FieldStore, LogBatch, Resource, Severity, Source, SourceKind,
     SyslogParser,
 };
+
+pub use db_core::engine::stream::StreamEngine;
+pub use db_core::engine::{Cell, Engine, EngineError, ErrorKind, QueryResult, ScopeReport};
