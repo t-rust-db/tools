@@ -62,10 +62,7 @@ fn process_file(path: &PathBuf, filter: &str, max_lines: usize, tail: usize) -> 
     #[allow(unsafe_code)]
     let mmap = unsafe { Mmap::map(&file)? };
 
-    let source = Source::new(
-        SourceKind::File,
-        path.to_str().unwrap_or("unknown"),
-    );
+    let source = Source::new(SourceKind::File, path.to_str().unwrap_or("unknown"));
 
     let parser = SyslogParser::with_year(2024); // TODO: detect from file or system
     let filter_fn = parse_filter(filter);
@@ -79,7 +76,11 @@ fn process_file(path: &PathBuf, filter: &str, max_lines: usize, tail: usize) -> 
 
     let mut offset = start_offset;
     let mut total_lines = 0;
-    let limit = if max_lines == 0 { usize::MAX } else { max_lines };
+    let limit = if max_lines == 0 {
+        usize::MAX
+    } else {
+        max_lines
+    };
 
     while offset < mmap.len() && total_lines < limit {
         let remaining = mmap.get(offset..).unwrap_or(&[]);
@@ -177,7 +178,11 @@ fn process_stdin(filter: &str, max_lines: usize) -> io::Result<()> {
     let parser = SyslogParser::with_year(2024);
     let filter_fn = parse_filter(filter);
 
-    let limit = if max_lines == 0 { usize::MAX } else { max_lines };
+    let limit = if max_lines == 0 {
+        usize::MAX
+    } else {
+        max_lines
+    };
     let mut lines_processed: usize = 0;
 
     // Read line-by-line for streaming support
@@ -244,7 +249,9 @@ fn find_tail_offset(data: &[u8], n: usize) -> usize {
 /// - `severity >= WARN AND facility = auth`
 ///
 /// TODO: integrate with db-core parser for full SQL WHERE support.
-fn parse_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool> {
+type FilterPredicate = Box<dyn Fn(&LogBatch<'_>, usize) -> bool>;
+
+fn parse_filter(filter: &str) -> FilterPredicate {
     let filter = filter.trim();
 
     // Handle AND combinator
@@ -263,7 +270,7 @@ fn parse_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool> {
 }
 
 /// Parse a single filter clause.
-fn parse_single_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool> {
+fn parse_single_filter(filter: &str) -> FilterPredicate {
     let filter = filter.trim();
 
     // Try parsing "severity <op> <level>"
@@ -274,7 +281,11 @@ fn parse_single_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool
             let level_str = level_str.trim();
             if let Some(level) = Severity::parse(level_str) {
                 return Box::new(move |batch, i| {
-                    batch.severity.get(i).and_then(|s| *s).map_or(false, |s| s >= level)
+                    batch
+                        .severity
+                        .get(i)
+                        .and_then(|s| *s)
+                        .is_some_and(|s| s >= level)
                 });
             }
         }
@@ -283,7 +294,11 @@ fn parse_single_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool
             let level_str = level_str.trim();
             if let Some(level) = Severity::parse(level_str) {
                 return Box::new(move |batch, i| {
-                    batch.severity.get(i).and_then(|s| *s).map_or(false, |s| s > level)
+                    batch
+                        .severity
+                        .get(i)
+                        .and_then(|s| *s)
+                        .is_some_and(|s| s > level)
                 });
             }
         }
@@ -292,7 +307,11 @@ fn parse_single_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool
             let level_str = level_str.trim();
             if let Some(level) = Severity::parse(level_str) {
                 return Box::new(move |batch, i| {
-                    batch.severity.get(i).and_then(|s| *s).map_or(false, |s| s <= level)
+                    batch
+                        .severity
+                        .get(i)
+                        .and_then(|s| *s)
+                        .is_some_and(|s| s <= level)
                 });
             }
         }
@@ -301,7 +320,11 @@ fn parse_single_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool
             let level_str = level_str.trim();
             if let Some(level) = Severity::parse(level_str) {
                 return Box::new(move |batch, i| {
-                    batch.severity.get(i).and_then(|s| *s).map_or(false, |s| s < level)
+                    batch
+                        .severity
+                        .get(i)
+                        .and_then(|s| *s)
+                        .is_some_and(|s| s < level)
                 });
             }
         }
@@ -310,7 +333,7 @@ fn parse_single_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool
             let level_str = level_str.trim();
             if let Some(level) = Severity::parse(level_str) {
                 return Box::new(move |batch, i| {
-                    batch.severity.get(i).and_then(|s| *s).map_or(false, |s| s == level)
+                    batch.severity.get(i).and_then(|s| *s) == Some(level)
                 });
             }
         }
@@ -323,7 +346,7 @@ fn parse_single_filter(filter: &str) -> Box<dyn Fn(&LogBatch<'_>, usize) -> bool
             let name = name.trim();
             if let Some(fac) = parse_facility_name(name) {
                 return Box::new(move |batch, i| {
-                    batch.facility.get(i).and_then(|f| *f).map_or(false, |f| f == fac)
+                    batch.facility.get(i).and_then(|f| *f) == Some(fac)
                 });
             }
         }
