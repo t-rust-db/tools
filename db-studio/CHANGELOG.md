@@ -2,6 +2,13 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.10.1] - 2026-09-13
+
+### Fixed
+
+- Query execution time (#50) now renders top-**right** in the query pane, not top-left where it covered up typed text.
+- Completion popup (#48): candidates are deduplicated -- a file with several tables sharing a column name (e.g. every table's own `id`) no longer floods the popup with the same word repeated once per table.
+
 ## [0.10.0] - 2026-09-13
 
 ### Added
