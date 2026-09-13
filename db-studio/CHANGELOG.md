@@ -2,6 +2,12 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.10.2] - 2026-09-13
+
+### Changed
+
+- Query execution time (#50) moved from a top-right overlay on the query editor into the results pane's own title bar (right-aligned) -- it's a property of the results, not the editor.
+
 ## [0.10.1] - 2026-09-13
 
 ### Fixed

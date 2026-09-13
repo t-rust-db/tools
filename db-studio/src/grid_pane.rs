@@ -150,7 +150,20 @@ impl GridPane {
             .collect()
     }
 
-    pub fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
+    /// `duration_label` is the last submitted query's execution time
+    /// (db-studio#50, already formatted -- e.g. `"12ms"`), shown
+    /// right-aligned in this pane's own title bar rather than as a
+    /// separate overlay on the query editor: it's a property of the
+    /// *results* (this run, this data), not of the editor itself, and
+    /// the editor's left edge is where the cursor and typed text
+    /// actually sit.
+    pub fn render(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        focused: bool,
+        duration_label: Option<String>,
+    ) {
         let offset = self.col_offset.min(self.grid.headers.len());
         let visible_headers = self.grid.headers.get(offset..).unwrap_or_default();
         let header = Row::new(visible_headers.to_vec()).style(
@@ -183,9 +196,17 @@ impl GridPane {
         } else {
             format!("results -- {row_count} row(s)")
         };
+        let mut block = theme::pane_block(title, focused);
+        if let Some(label) = duration_label {
+            block = block.title(
+                ratatui::text::Line::from(format!(" {label} "))
+                    .style(Style::default().fg(theme::subtext()))
+                    .right_aligned(),
+            );
+        }
         let table = Table::new(rows, widths)
             .header(header)
-            .block(theme::pane_block(title, focused))
+            .block(block)
             .row_highlight_style(
                 Style::default()
                     .bg(theme::selection_bg())
@@ -347,7 +368,7 @@ mod tests {
         let backend = TestBackend::new(80, 10);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| pane.render(frame, frame.area(), false))
+            .draw(|frame| pane.render(frame, frame.area(), false, None))
             .unwrap();
         let content = terminal.backend().buffer().content();
         let rendered: String = content.iter().map(|cell| cell.symbol()).collect();
@@ -422,7 +443,7 @@ mod tests {
         let backend = TestBackend::new(80, 10);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| pane.render(frame, frame.area(), false))
+            .draw(|frame| pane.render(frame, frame.area(), false, None))
             .unwrap();
         let content = terminal.backend().buffer().content();
         let rendered: String = content.iter().map(|cell| cell.symbol()).collect();
@@ -430,6 +451,36 @@ mod tests {
         assert!(
             rendered.contains("a: 1") && rendered.contains("b: 2"),
             "expected the expanded row's detail lines:\n{rendered}"
+        );
+    }
+
+    /// db-studio#50 follow-up: the query duration renders in the
+    /// results pane's own title bar (right-aligned), not as a separate
+    /// overlay elsewhere -- it's a property of these results, not of
+    /// the query editor.
+    #[allow(
+        clippy::unwrap_used,
+        reason = "test code fails fast -- see db-core's own test files for the same convention"
+    )]
+    #[test]
+    fn duration_label_renders_in_the_title_bar() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let mut pane = GridPane::new();
+        pane.set_grid(sample());
+
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| pane.render(frame, frame.area(), false, Some("12ms".to_string())))
+            .unwrap();
+        let content = terminal.backend().buffer().content();
+        let rendered: String = content.iter().map(|cell| cell.symbol()).collect();
+
+        assert!(
+            rendered.contains("12ms"),
+            "expected the duration label in the title bar:\n{rendered}"
         );
     }
 }
