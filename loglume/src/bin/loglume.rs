@@ -65,7 +65,8 @@ fn process_file(path: &PathBuf, filter: &str, max_lines: usize, tail: usize) -> 
     let source = Source::new(SourceKind::File, path.to_str().unwrap_or("unknown"));
 
     let parser = SyslogParser::new();
-    let filter_fn = parse_filter(filter);
+    let filter_fn =
+        parse_filter(filter).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
     // Find start offset for tail mode
     let start_offset = if tail > 0 {
@@ -112,7 +113,8 @@ fn process_file_follow(path: &PathBuf, filter: &str, tail: usize) -> io::Result<
     use std::thread;
     use std::time::Duration;
 
-    let filter_fn = parse_filter(filter);
+    let filter_fn =
+        parse_filter(filter).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     let parser = SyslogParser::new();
     let source = Source::new(SourceKind::File, path.to_str().unwrap_or("unknown"));
 
@@ -176,7 +178,8 @@ fn process_stdin(filter: &str, max_lines: usize) -> io::Result<()> {
     let stdin = io::stdin();
     let source = Source::new(SourceKind::Stdin, "stdin");
     let parser = SyslogParser::new();
-    let filter_fn = parse_filter(filter);
+    let filter_fn =
+        parse_filter(filter).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
     let limit = if max_lines == 0 {
         usize::MAX
@@ -251,26 +254,30 @@ fn find_tail_offset(data: &[u8], n: usize) -> usize {
 /// TODO: integrate with db-core parser for full SQL WHERE support.
 type FilterPredicate = Box<dyn Fn(&LogBatch<'_>, usize) -> bool>;
 
-fn parse_filter(filter: &str) -> FilterPredicate {
+fn parse_filter(filter: &str) -> Result<FilterPredicate, String> {
     let filter = filter.trim();
 
     // Handle AND combinator
     if let Some((left, right)) = filter.split_once(" AND ") {
-        let left_fn = parse_single_filter(left.trim());
-        let right_fn = parse_single_filter(right.trim());
-        return Box::new(move |batch, i| left_fn(batch, i) && right_fn(batch, i));
+        let left_fn = parse_single_filter(left.trim())?;
+        let right_fn = parse_single_filter(right.trim())?;
+        return Ok(Box::new(move |batch, i| {
+            left_fn(batch, i) && right_fn(batch, i)
+        }));
     }
     if let Some((left, right)) = filter.split_once(" and ") {
-        let left_fn = parse_single_filter(left.trim());
-        let right_fn = parse_single_filter(right.trim());
-        return Box::new(move |batch, i| left_fn(batch, i) && right_fn(batch, i));
+        let left_fn = parse_single_filter(left.trim())?;
+        let right_fn = parse_single_filter(right.trim())?;
+        return Ok(Box::new(move |batch, i| {
+            left_fn(batch, i) && right_fn(batch, i)
+        }));
     }
 
     parse_single_filter(filter)
 }
 
 /// Parse a single filter clause.
-fn parse_single_filter(filter: &str) -> FilterPredicate {
+fn parse_single_filter(filter: &str) -> Result<FilterPredicate, String> {
     let filter = filter.trim();
 
     // Try parsing "severity <op> <level>"
@@ -279,64 +286,66 @@ fn parse_single_filter(filter: &str) -> FilterPredicate {
 
         if let Some(level_str) = rest.strip_prefix(">=") {
             let level_str = level_str.trim();
-            if let Some(level) = Severity::parse(level_str) {
-                return Box::new(move |batch, i| {
-                    batch
-                        .severity
-                        .get(i)
-                        .and_then(|s| *s)
-                        .is_some_and(|s| s >= level)
-                });
-            }
+            let level = Severity::parse(level_str)
+                .ok_or_else(|| format!("unrecognized severity level '{level_str}'"))?;
+            return Ok(Box::new(move |batch, i| {
+                batch
+                    .severity
+                    .get(i)
+                    .and_then(|s| *s)
+                    .is_some_and(|s| s >= level)
+            }));
         }
 
         if let Some(level_str) = rest.strip_prefix(">") {
             let level_str = level_str.trim();
-            if let Some(level) = Severity::parse(level_str) {
-                return Box::new(move |batch, i| {
-                    batch
-                        .severity
-                        .get(i)
-                        .and_then(|s| *s)
-                        .is_some_and(|s| s > level)
-                });
-            }
+            let level = Severity::parse(level_str)
+                .ok_or_else(|| format!("unrecognized severity level '{level_str}'"))?;
+            return Ok(Box::new(move |batch, i| {
+                batch
+                    .severity
+                    .get(i)
+                    .and_then(|s| *s)
+                    .is_some_and(|s| s > level)
+            }));
         }
 
         if let Some(level_str) = rest.strip_prefix("<=") {
             let level_str = level_str.trim();
-            if let Some(level) = Severity::parse(level_str) {
-                return Box::new(move |batch, i| {
-                    batch
-                        .severity
-                        .get(i)
-                        .and_then(|s| *s)
-                        .is_some_and(|s| s <= level)
-                });
-            }
+            let level = Severity::parse(level_str)
+                .ok_or_else(|| format!("unrecognized severity level '{level_str}'"))?;
+            return Ok(Box::new(move |batch, i| {
+                batch
+                    .severity
+                    .get(i)
+                    .and_then(|s| *s)
+                    .is_some_and(|s| s <= level)
+            }));
         }
 
         if let Some(level_str) = rest.strip_prefix("<") {
             let level_str = level_str.trim();
-            if let Some(level) = Severity::parse(level_str) {
-                return Box::new(move |batch, i| {
-                    batch
-                        .severity
-                        .get(i)
-                        .and_then(|s| *s)
-                        .is_some_and(|s| s < level)
-                });
-            }
+            let level = Severity::parse(level_str)
+                .ok_or_else(|| format!("unrecognized severity level '{level_str}'"))?;
+            return Ok(Box::new(move |batch, i| {
+                batch
+                    .severity
+                    .get(i)
+                    .and_then(|s| *s)
+                    .is_some_and(|s| s < level)
+            }));
         }
 
         if let Some(level_str) = rest.strip_prefix("=") {
             let level_str = level_str.trim();
-            if let Some(level) = Severity::parse(level_str) {
-                return Box::new(move |batch, i| {
-                    batch.severity.get(i).and_then(|s| *s) == Some(level)
-                });
-            }
+            let level = Severity::parse(level_str)
+                .ok_or_else(|| format!("unrecognized severity level '{level_str}'"))?;
+            return Ok(Box::new(move |batch, i| {
+                batch.severity.get(i).and_then(|s| *s) == Some(level)
+            }));
         }
+
+        return Err(format!("unrecognized severity operator in '{filter}'"));
     }
 
     // Try parsing "facility = <name>"
@@ -344,17 +353,16 @@ fn parse_single_filter(filter: &str) -> FilterPredicate {
         let rest = rest.trim();
         if let Some(name) = rest.strip_prefix("=") {
             let name = name.trim();
-            if let Some(fac) = parse_facility_name(name) {
-                return Box::new(move |batch, i| {
-                    batch.facility.get(i).and_then(|f| *f) == Some(fac)
-                });
-            }
+            let fac = parse_facility_name(name)
+                .ok_or_else(|| format!("unrecognized facility name '{name}'"))?;
+            return Ok(Box::new(move |batch, i| {
+                batch.facility.get(i).and_then(|f| *f) == Some(fac)
+            }));
         }
+        return Err(format!("unrecognized facility operator in '{filter}'"));
     }
 
-    // Fallback: match all (TODO: proper error handling)
-    eprintln!("warning: unrecognized filter '{filter}', matching all lines");
-    Box::new(|_, _| true)
+    Err(format!("unrecognized filter expression '{filter}'"))
 }
 
 /// Parse facility name to enum.
