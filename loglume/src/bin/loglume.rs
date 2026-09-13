@@ -5,6 +5,7 @@
 //!     loglume "severity >= WARN" app.log
 //!     loglume "select * from log where severity >= 'WARN' and facility = 'kern'" app.log
 //!     cat app.log | loglume "severity = ERROR"
+//!     loglume "severity >= WARN" --tui a.log b.log   # side-by-side panes
 
 use clap::Parser;
 use loglume::{
@@ -23,9 +24,10 @@ struct Args {
     #[arg(required = true)]
     filter: String,
 
-    /// Log file to read (reads stdin if omitted)
+    /// Log file(s) to read (reads stdin if omitted). Multiple files require
+    /// --tui and open as side-by-side panes.
     #[arg()]
-    file: Option<PathBuf>,
+    files: Vec<PathBuf>,
 
     /// Maximum lines to process (0 = unlimited)
     #[arg(short = 'n', long, default_value = "0")]
@@ -64,24 +66,17 @@ fn run(args: &Args) -> io::Result<()> {
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
     if args.tui {
-        let path = args.file.as_deref().ok_or_else(|| {
-            io::Error::new(
+        if args.files.is_empty() {
+            return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "--tui requires a file argument (stdin isn't supported)",
-            )
-        })?;
-        return tui::run(path, sql);
+                "--tui requires at least one file argument (stdin isn't supported)",
+            ));
+        }
+        return tui::run(&args.files, sql);
     }
 
-    match &args.file {
-        Some(path) => {
-            if args.follow {
-                run_follow(path, &sql, args.tail)
-            } else {
-                run_once(path, &sql, args.tail)
-            }
-        }
-        None => {
+    match args.files.as_slice() {
+        [] => {
             if args.follow {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -90,6 +85,17 @@ fn run(args: &Args) -> io::Result<()> {
             }
             run_stdin(&sql, args.tail)
         }
+        [path] => {
+            if args.follow {
+                run_follow(path, &sql, args.tail)
+            } else {
+                run_once(path, &sql, args.tail)
+            }
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "multiple files require --tui (side-by-side panes)",
+        )),
     }
 }
 
@@ -415,11 +421,11 @@ mod tui {
     use loglume::{Engine, QueryResult};
     use ratatui::backend::CrosstermBackend;
     use ratatui::layout::{Constraint, Direction, Layout};
-    use ratatui::style::{Modifier, Style};
+    use ratatui::style::{Color, Modifier, Style};
     use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
     use ratatui::Terminal;
     use std::io::{self, Stdout};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::mpsc::{self, TryRecvError};
     use std::time::{Duration, Instant};
 
@@ -427,11 +433,12 @@ mod tui {
 
     const TICK_RATE: Duration = Duration::from_millis(100);
 
-    /// Run the interactive TUI against `path`, starting with `initial_sql`.
-    pub(crate) fn run(path: &Path, initial_sql: String) -> io::Result<()> {
+    /// Run the interactive TUI against `paths`, each opened in its own pane,
+    /// all starting with `initial_sql`.
+    pub(crate) fn run(paths: &[PathBuf], initial_sql: String) -> io::Result<()> {
         install_panic_hook();
         let mut terminal = init_terminal()?;
-        let result = App::new(path, initial_sql)?.run(&mut terminal);
+        let result = App::new(paths, initial_sql)?.run(&mut terminal);
         restore_terminal(&mut terminal)?;
         result
     }
@@ -465,7 +472,10 @@ mod tui {
         }));
     }
 
-    struct App {
+    /// One open file with its own engine, query, and scroll/edit state —
+    /// independent of every other pane.
+    struct Pane {
+        path: PathBuf,
         engine: loglume::StreamEngine,
         sql: String,
         result: QueryResult,
@@ -477,7 +487,7 @@ mod tui {
         _watcher: notify::RecommendedWatcher,
     }
 
-    impl App {
+    impl Pane {
         fn new(path: &Path, sql: String) -> io::Result<Self> {
             use notify::{RecursiveMode, Watcher};
 
@@ -500,6 +510,7 @@ mod tui {
 
             let filter_text = sql.clone();
             Ok(Self {
+                path: path.to_path_buf(),
                 engine,
                 sql,
                 result,
@@ -512,31 +523,8 @@ mod tui {
             })
         }
 
-        fn run(mut self, terminal: &mut Tui) -> io::Result<()> {
-            let mut last_tick = Instant::now();
-            loop {
-                terminal.draw(|frame| self.draw(frame))?;
-
-                if self.drain_file_events()? {
-                    self.requery(true)?;
-                }
-
-                let timeout = TICK_RATE.saturating_sub(last_tick.elapsed());
-                if event::poll(timeout)? {
-                    if let Event::Key(key) = event::read()? {
-                        if key.kind == KeyEventKind::Press && self.handle_key(key.code)? {
-                            return Ok(());
-                        }
-                    }
-                }
-                if last_tick.elapsed() >= TICK_RATE {
-                    last_tick = Instant::now();
-                }
-            }
-        }
-
-        /// Non-blocking drain of the file watcher; returns true if a
-        /// refresh is warranted (coalesces a burst of events into one
+        /// Non-blocking drain of this pane's file watcher; returns true if
+        /// a refresh is warranted (coalesces a burst of events into one
         /// requery instead of one per filesystem event).
         fn drain_file_events(&mut self) -> io::Result<bool> {
             let mut dirty = false;
@@ -555,7 +543,7 @@ mod tui {
             Ok(dirty)
         }
 
-        /// Re-run the current query. `follow_tail` sticks the selection to
+        /// Re-run this pane's query. `follow_tail` sticks the selection to
         /// the newest row (for live-append refreshes); otherwise the view
         /// resets to the top (for an explicit filter change).
         fn requery(&mut self, follow_tail: bool) -> io::Result<()> {
@@ -585,8 +573,11 @@ mod tui {
             Ok(())
         }
 
-        /// Returns true if the app should quit.
-        fn handle_key(&mut self, code: KeyCode) -> io::Result<bool> {
+        /// Handle a key while this pane is focused. Pane-management keys
+        /// (quit/close-pane/cycle-focus) are intercepted by `App` before
+        /// reaching here, except while editing the filter text, where they
+        /// must fall through to ordinary text input instead.
+        fn handle_key(&mut self, code: KeyCode) -> io::Result<()> {
             if self.editing_filter {
                 match code {
                     KeyCode::Enter => {
@@ -609,11 +600,10 @@ mod tui {
                     KeyCode::Char(c) => self.filter_text.push(c),
                     _ => {}
                 }
-                return Ok(false);
+                return Ok(());
             }
 
             match code {
-                KeyCode::Char('q') | KeyCode::Esc => return Ok(true),
                 KeyCode::Char('j') | KeyCode::Down => self.select_relative(1),
                 KeyCode::Char('k') | KeyCode::Up => self.select_relative(-1),
                 KeyCode::PageDown => self.select_relative(10),
@@ -625,7 +615,7 @@ mod tui {
                 KeyCode::Char('r') => self.requery(true)?,
                 _ => {}
             }
-            Ok(false)
+            Ok(())
         }
 
         fn select_relative(&mut self, delta: isize) {
@@ -638,13 +628,19 @@ mod tui {
             self.list_state.select(Some(next as usize));
         }
 
-        fn draw(&mut self, frame: &mut ratatui::Frame) {
+        fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, focused: bool) {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Min(1), Constraint::Length(3)])
-                .split(frame.area());
+                .split(area);
             let (Some(&list_area), Some(&filter_area)) = (chunks.first(), chunks.get(1)) else {
                 return;
+            };
+
+            let border_style = if focused {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
             };
 
             let raw_idx = self.result.columns.iter().position(|c| c == "raw");
@@ -655,30 +651,218 @@ mod tui {
                 .map(|row| ListItem::new(format_row(row, raw_idx)))
                 .collect();
 
+            let name = self
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| self.path.to_string_lossy().into_owned());
             let title = self
                 .result
                 .scope_report
                 .as_ref()
-                .map(|r| format!("loglume — {}", format_scope_report(r)))
-                .unwrap_or_else(|| "loglume".to_string());
+                .map(|r| format!("{name} — {}", format_scope_report(r)))
+                .unwrap_or(name);
 
             let list = List::new(items)
-                .block(Block::default().borders(Borders::ALL).title(title))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border_style)
+                        .title(title),
+                )
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
             frame.render_stateful_widget(list, list_area, &mut self.list_state);
 
             let filter_title = if self.editing_filter {
                 "filter (Enter to apply, Esc to cancel)"
             } else {
-                "filter (/ to edit, j/k to move, PgUp/PgDn, q to quit)"
+                "filter (/ edit, j/k move, Tab pane, x close, q quit)"
             };
             let filter_body = self
                 .status
                 .clone()
                 .unwrap_or_else(|| self.filter_text.clone());
-            let input = Paragraph::new(filter_body)
-                .block(Block::default().borders(Borders::ALL).title(filter_title));
+            let input = Paragraph::new(filter_body).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(border_style)
+                    .title(filter_title),
+            );
             frame.render_widget(input, filter_area);
+        }
+    }
+
+    struct App {
+        panes: Vec<Pane>,
+        focused: usize,
+    }
+
+    impl App {
+        fn new(paths: &[PathBuf], sql: String) -> io::Result<Self> {
+            let panes = paths
+                .iter()
+                .map(|path| Pane::new(path, sql.clone()))
+                .collect::<io::Result<Vec<_>>>()?;
+            Ok(Self { panes, focused: 0 })
+        }
+
+        fn run(mut self, terminal: &mut Tui) -> io::Result<()> {
+            let mut last_tick = Instant::now();
+            loop {
+                terminal.draw(|frame| self.draw(frame))?;
+
+                for pane in &mut self.panes {
+                    if pane.drain_file_events()? {
+                        pane.requery(true)?;
+                    }
+                }
+
+                let timeout = TICK_RATE.saturating_sub(last_tick.elapsed());
+                if event::poll(timeout)? {
+                    if let Event::Key(key) = event::read()? {
+                        if key.kind == KeyEventKind::Press && self.handle_key(key.code)? {
+                            return Ok(());
+                        }
+                    }
+                }
+                if last_tick.elapsed() >= TICK_RATE {
+                    last_tick = Instant::now();
+                }
+            }
+        }
+
+        /// Returns true if the whole app should quit.
+        fn handle_key(&mut self, code: KeyCode) -> io::Result<bool> {
+            let editing = self
+                .panes
+                .get(self.focused)
+                .is_some_and(|p| p.editing_filter);
+
+            // Pane-management keys are only intercepted outside of filter
+            // editing, so '/'-mode can still type 'q'/'x'/etc. as ordinary
+            // characters.
+            if !editing {
+                match code {
+                    KeyCode::Char('q') => return Ok(true),
+                    // With a single pane, Esc quits (matches the original
+                    // single-pane behavior); with multiple panes it's a no-op
+                    // here since closing/quitting has dedicated keys below.
+                    KeyCode::Esc if self.panes.len() == 1 => return Ok(true),
+                    KeyCode::Tab if self.panes.len() > 1 => {
+                        self.focused = (self.focused + 1) % self.panes.len();
+                        return Ok(false);
+                    }
+                    KeyCode::Char('x') => {
+                        if self.panes.len() <= 1 {
+                            return Ok(true);
+                        }
+                        self.panes.remove(self.focused);
+                        if self.focused >= self.panes.len() {
+                            self.focused = self.panes.len() - 1;
+                        }
+                        return Ok(false);
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(pane) = self.panes.get_mut(self.focused) {
+                pane.handle_key(code)?;
+            }
+            Ok(false)
+        }
+
+        fn draw(&mut self, frame: &mut ratatui::Frame) {
+            let n = self.panes.len().max(1);
+            #[allow(clippy::cast_possible_truncation)]
+            let constraints: Vec<Constraint> =
+                (0..n).map(|_| Constraint::Ratio(1, n as u32)).collect();
+            let columns = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(constraints)
+                .split(frame.area());
+
+            let focused = self.focused;
+            for (i, pane) in self.panes.iter_mut().enumerate() {
+                if let Some(&area) = columns.get(i) {
+                    pane.draw(frame, area, i == focused);
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const SAMPLE_LOG: &str = "tests/logs/sample.log";
+
+        fn two_pane_app() -> App {
+            App::new(
+                &[PathBuf::from(SAMPLE_LOG), PathBuf::from(SAMPLE_LOG)],
+                "SELECT * FROM log WHERE severity >= 'DEBUG'".to_string(),
+            )
+            .expect("open two panes")
+        }
+
+        fn one_pane_app() -> App {
+            App::new(
+                &[PathBuf::from(SAMPLE_LOG)],
+                "SELECT * FROM log WHERE severity >= 'DEBUG'".to_string(),
+            )
+            .expect("open one pane")
+        }
+
+        #[test]
+        fn tab_cycles_focus_across_panes() {
+            let mut app = two_pane_app();
+            assert_eq!(app.focused, 0);
+            assert!(!app.handle_key(KeyCode::Tab).unwrap());
+            assert_eq!(app.focused, 1);
+            assert!(!app.handle_key(KeyCode::Tab).unwrap());
+            assert_eq!(app.focused, 0);
+        }
+
+        #[test]
+        fn closing_a_pane_does_not_affect_the_other() {
+            let mut app = two_pane_app();
+            assert!(!app.handle_key(KeyCode::Char('x')).unwrap());
+            assert_eq!(app.panes.len(), 1);
+            assert_eq!(app.focused, 0);
+            assert_eq!(app.panes[0].path, PathBuf::from(SAMPLE_LOG));
+        }
+
+        #[test]
+        fn closing_the_last_pane_quits() {
+            let mut app = one_pane_app();
+            assert!(app.handle_key(KeyCode::Char('x')).unwrap());
+        }
+
+        #[test]
+        fn q_quits_regardless_of_pane_count() {
+            let mut app = two_pane_app();
+            assert!(app.handle_key(KeyCode::Char('q')).unwrap());
+        }
+
+        #[test]
+        fn esc_quits_single_pane_but_not_multi_pane() {
+            let mut multi = two_pane_app();
+            assert!(!multi.handle_key(KeyCode::Esc).unwrap());
+
+            let mut single = one_pane_app();
+            assert!(single.handle_key(KeyCode::Esc).unwrap());
+        }
+
+        #[test]
+        fn navigation_key_reaches_focused_pane_only() {
+            let mut app = two_pane_app();
+            let other_selected = app.panes[1].list_state.selected();
+            assert!(!app.handle_key(KeyCode::Char('k')).unwrap());
+            assert_eq!(
+                app.panes[1].list_state.selected(),
+                other_selected,
+                "unfocused pane's selection must not change"
+            );
         }
     }
 }
