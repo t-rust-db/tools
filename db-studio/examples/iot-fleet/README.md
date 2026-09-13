@@ -9,36 +9,44 @@ device events in a log file.
 
 A fictional fleet of edge sensors across three sites:
 
-- **`fixture/fleet.sqlite`** (row mode) -- dimensions: `sites`, `devices`,
-  `sensors`. Small, relational, rarely changes.
+- **`fixture/fleet.sqlite`** (row mode) -- dimensions: 6 `sites`, 60
+  `devices` (round-robin across sites, model/firmware from a small
+  catalog), 150 `sensors` (2-3 per device). Small, relational, rarely
+  changes.
 - **`fixture/readings.parquet`** (batch mode) -- metrics: one row per
-  `(device_id, sensor_id, ts, value)` reading, every 5 minutes for 24h across
-  8 sensors (2304 rows). High volume, append-only.
+  `(device_id, sensor_id, ts, value)` reading, every 5 minutes for 24h
+  across all 150 sensors (43,200 rows). High volume, append-only.
 - **`fixture/device.log`** (stream mode) -- events: real Heroku-style
   logfmt (`ts=... level=... device=... site=... event=... msg="..."`),
   parsed through `StreamEngine`'s format auto-detection (db-core#348).
-  Every line shares the same core fields, plus one event-specific detail
-  field (`firmware=`, `retries=`, `reading=`, `sensor=`, `battery_pct=`) --
-  deliberately not a fully uniform schema, since real device logs aren't
-  either, but consistent enough that `SELECT *` doesn't explode into one
-  sparse column per distinct key ever seen in the file.
+  720 lines (~12 per device) across 8 event kinds. Every line shares the
+  same core fields, plus one event-specific detail field (`firmware=`,
+  `retries=`, `reading=`, `sensor=`, `battery_pct=`) -- deliberately not a
+  fully uniform schema, since real device logs aren't either, but
+  consistent enough that `SELECT *` doesn't explode into one sparse
+  column per distinct key ever seen in the file.
 
-Both `fleet.sqlite` and `readings.parquet` are built by `fixture/generate.sh`
-using the real `sqlite3` and `duckdb` CLIs, same convention as
+All three fixtures are generated from one `fixture/generate.sh` DuckDB
+session (`generate_series`/`random()` give a fleet-sized dataset without
+hand-listing hundreds of rows) -- `readings.parquet` is written directly
+by DuckDB, and `fleet.sqlite`'s dimensions are exported to CSV and
+imported by the real `sqlite3` CLI, same convention as
 [`t-rust-db/examples`](https://github.com/t-rust-db/examples)'s `sqlite-rs/`
 and `column-rs/` examples -- this one lives here, inside `db-studio` itself,
 rather than in that shared examples repo, since it's specific to db-studio's
 own three-mode support. All three fixture files are gitignored; regenerate
-any time.
+any time (device/site ids are stable across a regeneration, since both the
+dimensions and the log are derived from the same device id space, but exact
+row content -- timestamps, jittered reading values -- is not).
 
-## Current limitations
+## Cross-mode joins
 
-**No cross-mode joins.** db-studio opens one `Engine` per file, and there's
-no join across a `.sqlite` file and a `.parquet` file in a single query.
-Resolving a `device_id` from `readings.parquet` back to its device/site in
-`fleet.sqlite` (or vice versa) takes two separate queries today, run against
-each open file in turn -- not one query. This is the natural next step for
-this example once db-core grows that capability.
+`FROM log JOIN <table> ON ...` against `device.log` (stream mode) works
+when `<table>` belongs to another currently-open `.sqlite` file (db-studio#54,
+via db-core's `engine::resolve`) -- see
+`queries/device_events_with_model.sql`. There's still no join across a
+`.sqlite` file and a `.parquet` file, or with SQLite driving a stream
+lookup (out of scope per db-core epic #317's v1).
 
 ## Queries
 
@@ -50,6 +58,7 @@ this example once db-core grows that capability.
 | `queries/highest_readings.sql` | batch (`readings.parquet`) | `ORDER BY` + `LIMIT` |
 | `queries/recent_errors.sql` | stream (`device.log`) | `WHERE` on `severity_text` |
 | `queries/events_per_device.sql` | stream (`device.log`) | `GROUP BY` aggregate |
+| `queries/device_events_with_model.sql` | cross-mode (`device.log` JOIN `fleet.sqlite`) | stream-drives-SQLite-lookup `JOIN` (db-studio#54) |
 
 ## Running
 
