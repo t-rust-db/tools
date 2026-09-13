@@ -63,8 +63,15 @@ lookup (out of scope per db-core epic #317's v1).
 ## Running
 
 ```bash
-./run.sh
+make run     # or ./run.sh directly
 ```
+
+`make check` regenerates the fixtures if missing and sanity-checks them
+with the same real tools that produced them (`sqlite3`/`duckdb`), so a
+truncated or corrupt file from a failed `generate.sh` run shows up as a
+Makefile error, not as a confusing db-studio failure later. `make
+check-sqlite`/`make check-parquet` run just one side; `make clean`
+removes all three generated fixtures.
 
 Generates the fixtures if missing, then launches db-studio with
 `fleet.sqlite`, `readings.parquet`, and `device.log` all open. Unlike
