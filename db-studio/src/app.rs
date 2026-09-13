@@ -189,10 +189,12 @@ impl App {
         self.schema_tree
             .render(frame, tree_area, self.focus == Focus::Tree);
         match &self.view {
-            OutputView::Results => {
-                self.grid_pane
-                    .render(frame, grid_area, self.focus == Focus::Grid)
-            }
+            OutputView::Results => self.grid_pane.render(
+                frame,
+                grid_area,
+                self.focus == Focus::Grid,
+                self.query_duration.map(format_duration),
+            ),
             OutputView::Plan(rows) => plan_pane::render(frame, grid_area, rows),
             OutputView::Opcodes(sections) => opcode_pane::render(frame, grid_area, sections),
             OutputView::Stats => {
@@ -227,28 +229,6 @@ impl App {
             self.query_pane.cursor(),
             env!("CARGO_PKG_VERSION"),
         );
-        if let Some(duration) = self.query_duration {
-            // Top-right corner of the query pane (db-studio#50), same
-            // "overlay a small label" approach as the open-file prompt
-            // above -- the query pane has no title bar of its own to
-            // put this in (it's been borderless since #42). Right, not
-            // left: the left edge is where the cursor and typed text
-            // actually sit, so a label there would sit on top of what
-            // you're typing far more often than the right edge would.
-            let text = format!(" {} ", format_duration(duration));
-            let label_width = u16::try_from(text.chars().count())
-                .unwrap_or(u16::MAX)
-                .min(query_area.width);
-            let label_area = ratatui::layout::Rect {
-                x: query_area.x + query_area.width.saturating_sub(label_width),
-                y: query_area.y,
-                width: label_width,
-                height: 1,
-            };
-            let label = ratatui::widgets::Paragraph::new(text)
-                .style(ratatui::style::Style::default().fg(theme::subtext()));
-            frame.render_widget(label, label_area);
-        }
         // Last: ratatui has no z-ordering, so the completion popup must
         // paint after every pane it might overlap, not before.
         self.query_pane.render_popup(frame, query_area);
