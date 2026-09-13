@@ -228,17 +228,21 @@ impl App {
             env!("CARGO_PKG_VERSION"),
         );
         if let Some(duration) = self.query_duration {
-            // Top-left corner of the query editor (db-studio#50), same
+            // Top-right corner of the query pane (db-studio#50), same
             // "overlay a small label" approach as the open-file prompt
             // above -- the query pane has no title bar of its own to
-            // put this in (it's been borderless since #42).
+            // put this in (it's been borderless since #42). Right, not
+            // left: the left edge is where the cursor and typed text
+            // actually sit, so a label there would sit on top of what
+            // you're typing far more often than the right edge would.
             let text = format!(" {} ", format_duration(duration));
+            let label_width = u16::try_from(text.chars().count())
+                .unwrap_or(u16::MAX)
+                .min(query_area.width);
             let label_area = ratatui::layout::Rect {
-                x: query_area.x,
+                x: query_area.x + query_area.width.saturating_sub(label_width),
                 y: query_area.y,
-                width: u16::try_from(text.chars().count())
-                    .unwrap_or(u16::MAX)
-                    .min(query_area.width),
+                width: label_width,
                 height: 1,
             };
             let label = ratatui::widgets::Paragraph::new(text)
@@ -431,6 +435,16 @@ impl App {
                 &file.engine.tables().unwrap_or_default(),
             ));
         }
+        // Deduped, first occurrence wins (db-studio#48 follow-up): a
+        // real multi-table file floods the popup with the same name
+        // repeated once per table sharing it (every table's own `id`
+        // column, say) -- worse across multiple open files, where the
+        // exact same table/column name from two different files is a
+        // byte-identical duplicate string. `rank`'s fuzzy match has no
+        // notion of "already suggested this," so an un-deduped list
+        // burns the popup's whole 8-item limit on repeats of one word.
+        let mut seen = std::collections::HashSet::new();
+        names.retain(|name| seen.insert(name.clone()));
         names
     }
 
@@ -1008,6 +1022,41 @@ mod tests {
                 .any(|c| c.eq_ignore_ascii_case("regexp_extract")),
             "scalar function"
         );
+    }
+
+    /// db-studio#48 follow-up: opening the same table/column names
+    /// twice (two files sharing a table name, or -- the more common
+    /// real case -- one file whose several tables all have an `id`
+    /// column) must not flood the popup with byte-identical repeats of
+    /// the same word; each distinct name appears exactly once.
+    #[test]
+    fn completion_candidates_are_deduplicated() {
+        use db_core::engine::row::RowEngine;
+
+        let sqlite_path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.sqlite"
+        ));
+        let app = App::new(vec![
+            OpenFile {
+                engine: Box::new(RowEngine::open(&sqlite_path).unwrap()),
+                path: sqlite_path.clone(),
+            },
+            OpenFile {
+                engine: Box::new(RowEngine::open(&sqlite_path).unwrap()),
+                path: sqlite_path,
+            },
+        ]);
+        let candidates = App::completion_candidates(&app.files);
+        let unique: std::collections::HashSet<&String> = candidates.iter().collect();
+        assert_eq!(
+            candidates.len(),
+            unique.len(),
+            "expected no duplicate candidates, got {candidates:?}"
+        );
+        // Sanity: the shared name is still present exactly once, not
+        // silently dropped along with its duplicates.
+        assert_eq!(candidates.iter().filter(|c| *c == "items").count(), 1);
     }
 
     #[test]
