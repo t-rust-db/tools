@@ -13,14 +13,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use db_core::engine::{Cell, Engine};
+use db_core::engine::Cell;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::Frame;
 
 use crate::completion;
 use crate::error_pane::ErrorPane;
 use crate::grid_pane::{Grid, GridPane};
-use crate::open::open_by_extension;
+use crate::open::{open_by_extension, EngineHandle};
 use crate::query_pane::QueryPane;
 use crate::schema_tree::{FileSchema, SchemaTreePane};
 use crate::terminal::Tui;
@@ -32,7 +32,7 @@ use db_core::engine::{OpcodeSection, PlanRow};
 /// stderr message, same as M1's single-file convention).
 pub struct OpenFile {
     pub path: PathBuf,
-    pub engine: Box<dyn Engine>,
+    pub engine: EngineHandle,
 }
 
 /// The tree's display label for a file -- its filename, not the full
@@ -532,6 +532,39 @@ impl App {
         }
     }
 
+    /// Finds the currently-open `.sqlite` file whose tables include
+    /// `table_name`, if any (db-studio#54): the lookup side of a
+    /// cross-mode join. Only looks at files other than `skip_index` --
+    /// the active `.log` file itself never has a `RowEngine` to find.
+    fn find_row_lookup(&self, skip_index: usize, table_name: &str) -> Option<usize> {
+        self.files.iter().enumerate().position(|(i, f)| {
+            i != skip_index
+                && f.engine.as_row().is_some()
+                && f.engine
+                    .tables()
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|t| t.name.eq_ignore_ascii_case(table_name))
+        })
+    }
+
+    /// If `query` is a `JOIN` against the active file (a `.log` stream
+    /// file) naming a table that belongs to another currently-open
+    /// `.sqlite` file, returns that other file's index (db-studio#54).
+    /// `None` covers every case that should fall through to the active
+    /// file's own `Engine::run_query`/`explain_plan` unchanged: a parse
+    /// failure (surfaced by that path's own error handling), no `JOIN`
+    /// at all, the active file isn't a stream file, or the `JOIN`
+    /// target isn't any open file's table (so `StreamEngine`'s own
+    /// honest single-table rejection still surfaces).
+    fn cross_mode_lookup(&self, active_index: usize, query: &str) -> Option<usize> {
+        let file = self.files.get(active_index)?;
+        file.engine.as_stream()?;
+        let select = db_core::parser::column::parse(query).ok()?;
+        let join_name = select.from.as_ref()?.joins.first()?.table.name()?;
+        self.find_row_lookup(active_index, join_name)
+    }
+
     fn submit(&mut self, query: &str) {
         // F5 means "run this and show me what happened" -- switching
         // back to Results here is what makes that visible. Without it,
@@ -539,11 +572,30 @@ impl App {
         // grid invisibly behind whichever of those stayed on screen,
         // making F5 look like it had stopped working.
         self.view = OutputView::Results;
-        let Some(file) = self.files.get_mut(self.active) else {
+        if self.files.get(self.active).is_none() {
             return;
-        };
+        }
         let started = std::time::Instant::now();
-        let result = file.engine.run_query(query);
+        let cross_mode = self
+            .cross_mode_lookup(self.active, query)
+            .and_then(|lookup_index| {
+                let stream = self.files.get(self.active)?.engine.as_stream()?;
+                let row = self.files.get(lookup_index)?.engine.as_row()?;
+                Some(db_core::engine::resolve::run_query(stream, row, query))
+            });
+        let result = match cross_mode {
+            // db-studio#54: `.log` JOIN `.sqlite` routes to db-core's
+            // cross-mode resolver instead of the active file's own
+            // single-table `StreamEngine::run_query`, which has no way
+            // to see the other open file's `RowEngine` at all.
+            Some(result) => result,
+            None => {
+                let Some(file) = self.files.get_mut(self.active) else {
+                    return;
+                };
+                file.engine.run_query(query)
+            }
+        };
         // Recorded for success and failure alike (db-studio#50) -- how
         // long a query took to fail is still "how long the attempt
         // took," and leaving the prior successful run's duration on
@@ -576,7 +628,24 @@ impl App {
         let Some(file) = self.files.get(self.active) else {
             return;
         };
-        match file.engine.explain_plan(&text) {
+        let cross_mode = self
+            .cross_mode_lookup(self.active, &text)
+            .and_then(|lookup_index| {
+                let stream = file.engine.as_stream()?;
+                let lookup = self.files.get(lookup_index)?;
+                let row = lookup.engine.as_row()?;
+                Some(db_core::engine::resolve::explain_plan(
+                    stream,
+                    row,
+                    &lookup.path,
+                    &text,
+                ))
+            });
+        let result = match cross_mode {
+            Some(result) => result,
+            None => file.engine.explain_plan(&text),
+        };
+        match result {
             Ok(rows) => {
                 self.view = OutputView::Plan(rows);
                 self.error_pane.clear();
@@ -585,12 +654,27 @@ impl App {
         }
     }
 
-    /// Same as [`Self::refresh_plan`], for the opcode view.
+    /// Same as [`Self::refresh_plan`], for the opcode view -- except
+    /// db-core's cross-mode resolver has no opcodes equivalent
+    /// (db-studio#54: only `run_query`/`explain_plan` exist for a
+    /// stream/SQLite join). A query that *would* route cross-mode gets
+    /// a clear, specific message here instead of falling through to
+    /// `StreamEngine::explain_opcodes`, which would just repeat its own
+    /// "the stream engine has one table" rejection -- honest for a
+    /// single-engine query, but confusing for one that db-studio just
+    /// finished explaining (in the Plan view) *does* run.
     fn refresh_opcodes(&mut self) {
         let text = self.query_pane.text();
         let Some(file) = self.files.get(self.active) else {
             return;
         };
+        if self.cross_mode_lookup(self.active, &text).is_some() {
+            self.error_pane.set_error(
+                "opcodes are not available for cross-mode (stream/SQLite) joins -- use the Plan view (F2) instead"
+                    .to_string(),
+            );
+            return;
+        }
         match file.engine.explain_opcodes(&text) {
             Ok(sections) => {
                 self.view = OutputView::Opcodes(sections);
@@ -609,6 +693,7 @@ impl App {
 mod tests {
     use super::*;
     use db_core::engine::stream::StreamEngine;
+    use db_core::engine::Engine;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -630,7 +715,7 @@ mod tests {
         let engine = StreamEngine::open(&path).unwrap();
         let mut app = App::new(vec![OpenFile {
             path,
-            engine: Box::new(engine),
+            engine: EngineHandle::Stream(engine),
         }]);
 
         let backend = TestBackend::new(120, 30);
@@ -684,7 +769,7 @@ mod tests {
         let engine = StreamEngine::open(&path).unwrap();
         App::new(vec![OpenFile {
             path,
-            engine: Box::new(engine),
+            engine: EngineHandle::Stream(engine),
         }])
     }
 
@@ -803,15 +888,15 @@ mod tests {
 
         let mut app = App::new(vec![
             OpenFile {
-                engine: Box::new(RowEngine::open(&sqlite_path).unwrap()),
+                engine: EngineHandle::Row(RowEngine::open(&sqlite_path).unwrap()),
                 path: sqlite_path.clone(),
             },
             OpenFile {
-                engine: Box::new(BatchEngine::open(&parquet_path).unwrap()),
+                engine: EngineHandle::Batch(BatchEngine::open(&parquet_path).unwrap()),
                 path: parquet_path.clone(),
             },
             OpenFile {
-                engine: Box::new(StreamEngine::open(&log_path).unwrap()),
+                engine: EngineHandle::Stream(StreamEngine::open(&log_path).unwrap()),
                 path: log_path.clone(),
             },
         ]);
@@ -933,7 +1018,7 @@ mod tests {
         let engine = StreamEngine::open(&path).unwrap();
         let mut app = App::new(vec![OpenFile {
             path,
-            engine: Box::new(engine),
+            engine: EngineHandle::Stream(engine),
         }]);
         app.submit("SELECT extra FROM log");
         let text = rendered(&mut app);
@@ -984,11 +1069,11 @@ mod tests {
         let log_path = stream_fixture();
         let app = App::new(vec![
             OpenFile {
-                engine: Box::new(RowEngine::open(&sqlite_path).unwrap()),
+                engine: EngineHandle::Row(RowEngine::open(&sqlite_path).unwrap()),
                 path: sqlite_path,
             },
             OpenFile {
-                engine: Box::new(StreamEngine::open(&log_path).unwrap()),
+                engine: EngineHandle::Stream(StreamEngine::open(&log_path).unwrap()),
                 path: log_path,
             },
         ]);
@@ -1019,11 +1104,11 @@ mod tests {
         ));
         let app = App::new(vec![
             OpenFile {
-                engine: Box::new(RowEngine::open(&sqlite_path).unwrap()),
+                engine: EngineHandle::Row(RowEngine::open(&sqlite_path).unwrap()),
                 path: sqlite_path.clone(),
             },
             OpenFile {
-                engine: Box::new(RowEngine::open(&sqlite_path).unwrap()),
+                engine: EngineHandle::Row(RowEngine::open(&sqlite_path).unwrap()),
                 path: sqlite_path,
             },
         ]);
@@ -1086,11 +1171,11 @@ mod tests {
         let log_path = stream_fixture();
         let mut app = App::new(vec![
             OpenFile {
-                engine: Box::new(RowEngine::open(&sqlite_path).unwrap()),
+                engine: EngineHandle::Row(RowEngine::open(&sqlite_path).unwrap()),
                 path: sqlite_path.clone(),
             },
             OpenFile {
-                engine: Box::new(StreamEngine::open(&log_path).unwrap()),
+                engine: EngineHandle::Stream(StreamEngine::open(&log_path).unwrap()),
                 path: log_path,
             },
         ]);
@@ -1099,5 +1184,128 @@ mod tests {
 
         app.switch_active_file(sqlite_path.display().to_string());
         assert_eq!(app.query_duration, None);
+    }
+
+    /// db-studio#54: opens the real `iot-fleet` example fixtures used to
+    /// verify this feature manually (a `.log` file's stream table joined
+    /// to a `.sqlite` file's lookup table) rather than a synthetic pair
+    /// -- the same fixtures the issue itself was written against.
+    fn iot_fleet_app() -> App {
+        use db_core::engine::row::RowEngine;
+
+        let log_path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/iot-fleet/fixture/device.log"
+        ));
+        let sqlite_path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/iot-fleet/fixture/fleet.sqlite"
+        ));
+        App::new(vec![
+            OpenFile {
+                engine: EngineHandle::Stream(StreamEngine::open(&log_path).unwrap()),
+                path: log_path,
+            },
+            OpenFile {
+                engine: EngineHandle::Row(RowEngine::open(&sqlite_path).unwrap()),
+                path: sqlite_path,
+            },
+        ])
+    }
+
+    /// #54's first acceptance criterion: `FROM log JOIN devices` runs
+    /// successfully and renders real joined rows in the grid, routed
+    /// through `db_core::engine::resolve::run_query` instead of hitting
+    /// `StreamEngine`'s own single-table rejection.
+    #[test]
+    fn cross_mode_join_runs_and_renders_real_rows() {
+        let mut app = iot_fleet_app();
+        app.submit(
+            "SELECT log.message, devices.model FROM log JOIN devices ON log.device = devices.id",
+        );
+        let text = rendered(&mut app);
+        assert!(
+            !app.grid_pane.plain_text().trim().is_empty(),
+            "expected the cross-mode join to produce real rows:\n{text}"
+        );
+        assert!(
+            text.contains("model"),
+            "expected the joined column from the sqlite side to render:\n{text}"
+        );
+    }
+
+    /// #54: F2 (plan) works for the same cross-mode query, via
+    /// `resolve::explain_plan`.
+    #[test]
+    fn cross_mode_join_f2_shows_a_real_plan() {
+        let mut app = iot_fleet_app();
+        type_text(
+            &mut app,
+            "SELECT log.message, devices.model FROM log JOIN devices ON log.device = devices.id",
+        );
+        app.refresh_plan();
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("devices"),
+            "expected the plan to mention the sqlite lookup table:\n{text}"
+        );
+    }
+
+    /// #54: F3 (opcodes) has no cross-mode equivalent upstream --
+    /// db-core's resolver exposes `run_query`/`explain_plan` only, not
+    /// an opcodes function. A cross-mode query must show a clear,
+    /// specific message here, not `StreamEngine`'s own confusing
+    /// single-table rejection (which would otherwise resurface, since
+    /// the active file genuinely is a stream engine with one table).
+    #[test]
+    fn cross_mode_join_f3_shows_a_clear_not_available_message() {
+        let mut app = iot_fleet_app();
+        type_text(
+            &mut app,
+            "SELECT log.message, devices.model FROM log JOIN devices ON log.device = devices.id",
+        );
+        app.refresh_opcodes();
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("not available") && text.contains("cross-mode"),
+            "expected a clear cross-mode-specific message, not a generic error:\n{text}"
+        );
+    }
+
+    /// #54's last acceptance criterion: a `JOIN` naming a table that
+    /// isn't any open file's table still gets `StreamEngine`'s own
+    /// honest single-table rejection -- routing must not swallow this
+    /// into a confusing new error.
+    #[test]
+    fn join_against_an_unknown_table_still_shows_the_stream_engines_own_rejection() {
+        let mut app = iot_fleet_app();
+        app.submit("SELECT log.message FROM log JOIN nonexistent_table ON log.device = nonexistent_table.id");
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("JOIN") && text.contains("one table"),
+            "expected StreamEngine's own single-table rejection, not a cross-mode-routing error:\n{text}"
+        );
+    }
+
+    /// #54: SQLite driving with the stream table as lookup stays
+    /// rejected (v1 scope, matching db-core epic #317) -- the reverse
+    /// join direction must not be silently reinterpreted.
+    #[test]
+    fn sqlite_driving_a_join_against_the_stream_table_stays_rejected() {
+        let mut app = iot_fleet_app();
+        app.switch_active_file(
+            PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/examples/iot-fleet/fixture/fleet.sqlite"
+            ))
+            .display()
+            .to_string(),
+        );
+        app.submit("SELECT devices.model FROM devices JOIN log ON devices.id = log.device");
+        let text = rendered(&mut app);
+        assert!(
+            !text.contains("model") || text.contains("error") || text.contains("unsupported"),
+            "sqlite driving the join must stay rejected, not silently reinterpreted:\n{text}"
+        );
     }
 }
