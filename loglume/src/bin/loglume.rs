@@ -110,8 +110,9 @@ fn process_file(path: &PathBuf, filter: &str, max_lines: usize, tail: usize) -> 
 }
 
 fn process_file_follow(path: &PathBuf, filter: &str, tail: usize) -> io::Result<()> {
-    use std::thread;
-    use std::time::Duration;
+    use notify::{RecursiveMode, Watcher};
+    use std::io::Seek;
+    use std::sync::mpsc;
 
     let filter_fn =
         parse_filter(filter).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
@@ -142,16 +143,28 @@ fn process_file_follow(path: &PathBuf, filter: &str, tail: usize) -> io::Result<
 
     let mut pos = buffer.len();
 
-    // Poll for new content
-    loop {
-        thread::sleep(Duration::from_millis(100));
+    // Watch for filesystem writes instead of polling on a fixed interval.
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |res| {
+        // The receiving end may have gone away if we're shutting down; ignore send errors.
+        let _ = tx.send(res);
+    })
+    .map_err(|e| io::Error::other(e.to_string()))?;
+    watcher
+        .watch(path, RecursiveMode::NonRecursive)
+        .map_err(|e| io::Error::other(e.to_string()))?;
+
+    for res in rx {
+        let event = res.map_err(|e| io::Error::other(e.to_string()))?;
+        if !event.kind.is_modify() && !event.kind.is_create() {
+            continue;
+        }
 
         let metadata = std::fs::metadata(path)?;
         let new_len = metadata.len() as usize;
 
         if new_len > pos {
             let mut file = File::open(path)?;
-            use std::io::Seek;
             file.seek(std::io::SeekFrom::Start(pos as u64))?;
 
             let mut new_data = Vec::new();
@@ -168,8 +181,13 @@ fn process_file_follow(path: &PathBuf, filter: &str, tail: usize) -> io::Result<
                 }
                 pos = pos.saturating_add(consumed);
             }
+        } else if new_len < pos {
+            // File was truncated/replaced (log rotation): restart from the top.
+            pos = 0;
         }
     }
+
+    Ok(())
 }
 
 fn process_stdin(filter: &str, max_lines: usize) -> io::Result<()> {
