@@ -2,6 +2,16 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.11.0] - 2026-09-13
+
+### Added
+
+- **Cross-mode stream/SQLite `JOIN` wired into db-studio** (#54): `FROM log JOIN <table> ON ...` against an open `.log` file now runs when `<table>` belongs to another currently-open `.sqlite` file, routed through db-core's `engine::resolve::run_query`/`explain_plan` (epic #317) instead of hitting `StreamEngine`'s own single-table rejection. `F2` (plan) works for a cross-mode query too; `F3` (opcodes) shows a specific "not available for cross-mode joins" message, since db-core's resolver has no opcodes equivalent for this path. A `JOIN` naming a table that isn't any open file's table still shows `StreamEngine`'s own honest rejection, and SQLite driving the join (stream table as lookup) stays rejected, matching db-core epic #317's v1 scope.
+
+### Changed
+
+- `OpenFile.engine` is now a concrete `EngineHandle` enum (`Row`/`Batch`/`Stream`) instead of `Box<dyn Engine>` -- needed to recover the concrete `&StreamEngine`/`&RowEngine` references db-core's cross-mode resolver requires.
+
 ## [0.10.2] - 2026-09-13
 
 ### Changed
