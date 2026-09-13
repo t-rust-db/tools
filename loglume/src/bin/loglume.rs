@@ -64,7 +64,7 @@ fn process_file(path: &PathBuf, filter: &str, max_lines: usize, tail: usize) -> 
 
     let source = Source::new(SourceKind::File, path.to_str().unwrap_or("unknown"));
 
-    let parser = SyslogParser::with_year(2024); // TODO: detect from file or system
+    let parser = SyslogParser::new();
     let filter_fn = parse_filter(filter);
 
     // Find start offset for tail mode
@@ -113,7 +113,7 @@ fn process_file_follow(path: &PathBuf, filter: &str, tail: usize) -> io::Result<
     use std::time::Duration;
 
     let filter_fn = parse_filter(filter);
-    let parser = SyslogParser::with_year(2024);
+    let parser = SyslogParser::new();
     let source = Source::new(SourceKind::File, path.to_str().unwrap_or("unknown"));
 
     // Initial read with tail
@@ -175,7 +175,7 @@ fn process_stdin(filter: &str, max_lines: usize) -> io::Result<()> {
 
     let stdin = io::stdin();
     let source = Source::new(SourceKind::Stdin, "stdin");
-    let parser = SyslogParser::with_year(2024);
+    let parser = SyslogParser::new();
     let filter_fn = parse_filter(filter);
 
     let limit = if max_lines == 0 {
