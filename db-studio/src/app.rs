@@ -58,6 +58,18 @@ fn cell_display(cell: &Cell) -> String {
     }
 }
 
+/// Formats a query's execution time for the query editor's corner
+/// label (db-studio#50): sub-second as whole milliseconds (`12ms`),
+/// otherwise seconds to two decimal places (`1.23s`) -- the common
+/// convention DataGrip/rainfrog-style clients use.
+fn format_duration(d: Duration) -> String {
+    if d < Duration::from_secs(1) {
+        format!("{}ms", d.as_millis())
+    } else {
+        format!("{:.2}s", d.as_secs_f64())
+    }
+}
+
 /// Which pane has keyboard focus. Error isn't in this enum -- it takes
 /// no directional/edit input of its own. `Grid` (db-studio#45) exists
 /// only so `Enter` can mean "toggle this row's detail section" without
@@ -101,6 +113,12 @@ pub struct App {
     /// (db-studio#42) -- `None` means it isn't, and every key reaches
     /// its normal destination instead of this buffer.
     open_prompt: Option<String>,
+    /// How long the last submitted query took to run (db-studio#50),
+    /// success or failure alike -- `None` before any query has run
+    /// against the current file, or once a different file becomes
+    /// active (a stale duration from a different file/query would be
+    /// misleading, not just unhelpful).
+    query_duration: Option<Duration>,
 }
 
 impl App {
@@ -135,6 +153,7 @@ impl App {
             grid_pane: GridPane::new(),
             error_pane: ErrorPane::new(),
             open_prompt: None,
+            query_duration: None,
         }
     }
 
@@ -208,6 +227,24 @@ impl App {
             self.query_pane.cursor(),
             env!("CARGO_PKG_VERSION"),
         );
+        if let Some(duration) = self.query_duration {
+            // Top-left corner of the query editor (db-studio#50), same
+            // "overlay a small label" approach as the open-file prompt
+            // above -- the query pane has no title bar of its own to
+            // put this in (it's been borderless since #42).
+            let text = format!(" {} ", format_duration(duration));
+            let label_area = ratatui::layout::Rect {
+                x: query_area.x,
+                y: query_area.y,
+                width: u16::try_from(text.chars().count())
+                    .unwrap_or(u16::MAX)
+                    .min(query_area.width),
+                height: 1,
+            };
+            let label = ratatui::widgets::Paragraph::new(text)
+                .style(ratatui::style::Style::default().fg(theme::subtext()));
+            frame.render_widget(label, label_area);
+        }
         // Last: ratatui has no z-ordering, so the completion popup must
         // paint after every pane it might overlap, not before.
         self.query_pane.render_popup(frame, query_area);
@@ -375,6 +412,10 @@ impl App {
         // Completion candidates are session-wide (db-studio#48, every
         // open file's names, not just the active one), so there's
         // nothing to recompute here any more -- unlike before #46.
+        // The last query's duration (db-studio#50) belongs to whatever
+        // file/query produced it -- showing it against a newly active
+        // file would misattribute it.
+        self.query_duration = None;
     }
 
     /// The query editor's completion candidates (db-studio#48): every
@@ -507,7 +548,14 @@ impl App {
         let Some(file) = self.files.get_mut(self.active) else {
             return;
         };
-        match file.engine.run_query(query) {
+        let started = std::time::Instant::now();
+        let result = file.engine.run_query(query);
+        // Recorded for success and failure alike (db-studio#50) -- how
+        // long a query took to fail is still "how long the attempt
+        // took," and leaving the prior successful run's duration on
+        // screen after a subsequent failure would misattribute it.
+        self.query_duration = Some(started.elapsed());
+        match result {
             Ok(result) => {
                 let headers = result.columns;
                 let rows = result
@@ -960,5 +1008,67 @@ mod tests {
                 .any(|c| c.eq_ignore_ascii_case("regexp_extract")),
             "scalar function"
         );
+    }
+
+    #[test]
+    fn format_duration_uses_milliseconds_under_a_second_and_seconds_at_or_above() {
+        assert_eq!(format_duration(Duration::from_millis(0)), "0ms");
+        assert_eq!(format_duration(Duration::from_millis(12)), "12ms");
+        assert_eq!(format_duration(Duration::from_millis(999)), "999ms");
+        assert_eq!(format_duration(Duration::from_secs(1)), "1.00s");
+        assert_eq!(format_duration(Duration::from_millis(1234)), "1.23s");
+    }
+
+    /// db-studio#50: a successful query's execution time renders in
+    /// the query editor's corner, a failed one still records/shows an
+    /// attempt duration (not silently nothing, and not a stale time
+    /// from the file's previous successful run).
+    #[test]
+    fn query_duration_renders_after_success_and_after_failure() {
+        let mut app = stream_app();
+        assert_eq!(app.query_duration, None);
+
+        app.submit("SELECT message FROM log LIMIT 1");
+        assert!(app.query_duration.is_some());
+        let text = rendered(&mut app);
+        assert!(
+            text.contains("ms") || text.contains('s'),
+            "expected a duration label after a successful query:\n{text}"
+        );
+
+        app.submit("SELECT nonexistent_column FROM log");
+        assert!(
+            app.query_duration.is_some(),
+            "a failed query should still record how long the attempt took"
+        );
+    }
+
+    /// db-studio#50: switching the active file drops the previous
+    /// file's query duration -- showing it against a different file
+    /// would misattribute it.
+    #[test]
+    fn switching_active_file_clears_the_query_duration() {
+        use db_core::engine::row::RowEngine;
+
+        let sqlite_path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.sqlite"
+        ));
+        let log_path = stream_fixture();
+        let mut app = App::new(vec![
+            OpenFile {
+                engine: Box::new(RowEngine::open(&sqlite_path).unwrap()),
+                path: sqlite_path.clone(),
+            },
+            OpenFile {
+                engine: Box::new(StreamEngine::open(&log_path).unwrap()),
+                path: log_path,
+            },
+        ]);
+        app.submit("SELECT name FROM items");
+        assert!(app.query_duration.is_some());
+
+        app.switch_active_file(sqlite_path.display().to_string());
+        assert_eq!(app.query_duration, None);
     }
 }
