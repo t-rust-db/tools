@@ -2,6 +2,12 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.10.0] - 2026-09-13
+
+### Added
+
+- **Query execution time** (#50): the last submitted query's duration (success or failure) renders in the query editor's top-left corner -- `Nms` under a second, `N.NNs` at or above. Cleared on switching the active file.
+
 ## [0.9.0] - 2026-09-12
 
 ### Added
