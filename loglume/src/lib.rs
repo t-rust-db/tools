@@ -10,7 +10,9 @@ pub use db_core::storage::{
     SyslogParser,
 };
 
-pub use db_core::engine::stream::StreamEngine;
+pub use db_core::engine::stream::{StandingQuery, StandingQueryEvent, StreamEngine};
 pub use db_core::engine::{
     Cell, CompiledPredicate, Engine, EngineError, ErrorKind, QueryResult, ScopeReport,
 };
+pub use db_core::parser::ast::BinaryOp;
+pub use db_core::vm::stream::EmitMode;
