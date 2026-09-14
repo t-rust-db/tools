@@ -1274,7 +1274,7 @@ mod tui {
                 .fg(self.theme.highlight_fg)
                 .add_modifier(Modifier::BOLD);
             // Detail rows (#33) are inline, not a separate bordered panel:
-            // distinct dim coloring plus a "-+" prefix is what sets them
+            // distinct dim coloring plus a "+-" prefix is what sets them
             // apart from ordinary list rows.
             let detail_style = Style::default().fg(self.theme.detail_dim);
 
@@ -1314,7 +1314,7 @@ mod tui {
                     let field_lines = self.field_lines_for(row);
                     expanded_field_count = field_lines.len();
                     for line in field_lines {
-                        items.push(ListItem::new(format!("    -+ {line}")).style(detail_style));
+                        items.push(ListItem::new(format!("    +- {line}")).style(detail_style));
                     }
                 }
             }
