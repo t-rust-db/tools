@@ -640,7 +640,10 @@ mod config {
 /// function `--filter` uses, so there is exactly one place that
 /// understands loglume's filter syntax.
 mod tui {
-    use super::{engine_err, format_row, format_scope_report, open_engine, rewrite_filter_to_sql};
+    use super::{
+        engine_err, format_row, format_scope_report, open_engine, resolve_highlight_expr,
+        rewrite_filter_to_sql,
+    };
     use crossterm::event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
     };
@@ -648,7 +651,7 @@ mod tui {
     use crossterm::terminal::{
         disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
     };
-    use loglume::{Engine, QueryResult};
+    use loglume::{Cell, CompiledPredicate, Engine, QueryResult};
     use ratatui::backend::CrosstermBackend;
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::style::{Color, Modifier, Style};
@@ -712,6 +715,12 @@ mod tui {
         list_state: ListState,
         filter_text: String,
         editing_filter: bool,
+        /// Restrict-vs-highlight (#4/#14): narrows via `sql`/`filter_text`
+        /// above; this only marks matches, never hides anything.
+        highlight_text: String,
+        highlight: Option<CompiledPredicate>,
+        highlight_enabled: bool,
+        editing_highlight: bool,
         status: Option<String>,
         watch_rx: mpsc::Receiver<notify::Result<notify::Event>>,
         _watcher: notify::RecommendedWatcher,
@@ -747,6 +756,10 @@ mod tui {
                 list_state,
                 filter_text,
                 editing_filter: false,
+                highlight_text: String::new(),
+                highlight: None,
+                highlight_enabled: false,
+                editing_highlight: false,
                 status: None,
                 watch_rx: rx,
                 _watcher: watcher,
@@ -833,6 +846,36 @@ mod tui {
                 return Ok(());
             }
 
+            if self.editing_highlight {
+                match code {
+                    KeyCode::Enter => {
+                        self.editing_highlight = false;
+                        if self.highlight_text.trim().is_empty() {
+                            self.highlight = None;
+                            self.highlight_enabled = false;
+                            self.status = None;
+                        } else {
+                            let expr = resolve_highlight_expr(&self.highlight_text);
+                            match self.engine.compile_predicate(&expr).map_err(engine_err) {
+                                Ok(predicate) => {
+                                    self.highlight = Some(predicate);
+                                    self.highlight_enabled = true;
+                                    self.status = None;
+                                }
+                                Err(e) => self.status = Some(format!("highlight error: {e}")),
+                            }
+                        }
+                    }
+                    KeyCode::Esc => self.editing_highlight = false,
+                    KeyCode::Backspace => {
+                        self.highlight_text.pop();
+                    }
+                    KeyCode::Char(c) => self.highlight_text.push(c),
+                    _ => {}
+                }
+                return Ok(());
+            }
+
             match code {
                 KeyCode::Char('j') | KeyCode::Down => self.select_relative(1),
                 KeyCode::Char('k') | KeyCode::Up => self.select_relative(-1),
@@ -841,6 +884,16 @@ mod tui {
                 KeyCode::Char('/') | KeyCode::Char(':') => {
                     self.editing_filter = true;
                     self.filter_text = self.sql.clone();
+                }
+                KeyCode::Char('?') => {
+                    self.editing_highlight = true;
+                }
+                KeyCode::Char('h') => {
+                    // Toggle rendering on/off without clearing the
+                    // expression (explicit requirement of #14).
+                    if self.highlight.is_some() {
+                        self.highlight_enabled = !self.highlight_enabled;
+                    }
                 }
                 KeyCode::Char('r') => self.requery(true)?,
                 _ => {}
@@ -861,9 +914,15 @@ mod tui {
         fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, focused: bool) {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Min(1), Constraint::Length(3)])
+                .constraints([
+                    Constraint::Min(1),
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                ])
                 .split(area);
-            let (Some(&list_area), Some(&filter_area)) = (chunks.first(), chunks.get(1)) else {
+            let (Some(&list_area), Some(&filter_area), Some(&highlight_area)) =
+                (chunks.first(), chunks.get(1), chunks.get(2))
+            else {
                 return;
             };
 
@@ -874,11 +933,22 @@ mod tui {
             };
 
             let raw_idx = self.result.columns.iter().position(|c| c == "raw");
+            let highlight_style = Style::default()
+                .bg(Color::Yellow)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD);
             let items: Vec<ListItem> = self
                 .result
                 .rows
                 .iter()
-                .map(|row| ListItem::new(format_row(row, raw_idx)))
+                .map(|row| {
+                    let text = format_row(row, raw_idx);
+                    if self.row_is_highlighted(row) {
+                        ListItem::new(text).style(highlight_style)
+                    } else {
+                        ListItem::new(text)
+                    }
+                })
                 .collect();
 
             let name = self
@@ -919,6 +989,38 @@ mod tui {
                     .title(filter_title),
             );
             frame.render_widget(input, filter_area);
+
+            let highlight_title = if self.editing_highlight {
+                "highlight (Enter to apply, Esc to cancel)"
+            } else {
+                "highlight (? edit, h toggle on/off)"
+            };
+            let highlight_body = if self.editing_highlight {
+                self.highlight_text.clone()
+            } else if self.highlight_text.is_empty() {
+                "(none)".to_string()
+            } else {
+                let state = if self.highlight_enabled { "on" } else { "off" };
+                format!("{} [{state}]", self.highlight_text)
+            };
+            let highlight_widget = Paragraph::new(highlight_body).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(border_style)
+                    .title(highlight_title),
+            );
+            frame.render_widget(highlight_widget, highlight_area);
+        }
+
+        /// Whether `row` matches the active highlight predicate, if any is
+        /// compiled and enabled. Eval errors are treated as non-match rather
+        /// than propagated, so one bad row can't crash the render loop.
+        fn row_is_highlighted(&self, row: &[Cell]) -> bool {
+            self.highlight_enabled
+                && self
+                    .highlight
+                    .as_ref()
+                    .is_some_and(|p| p.eval(row, &self.result.columns).unwrap_or(false))
         }
     }
 
@@ -966,11 +1068,11 @@ mod tui {
             let editing = self
                 .panes
                 .get(self.focused)
-                .is_some_and(|p| p.editing_filter);
+                .is_some_and(|p| p.editing_filter || p.editing_highlight);
 
-            // Pane-management keys are only intercepted outside of filter
-            // editing, so '/'-mode can still type 'q'/'x'/etc. as ordinary
-            // characters.
+            // Pane-management keys are only intercepted outside of filter/
+            // highlight editing, so '/'- or '?'-mode can still type
+            // 'q'/'x'/etc. as ordinary characters.
             if !editing {
                 match code {
                     KeyCode::Char('q') => return Ok(true),
@@ -1114,6 +1216,97 @@ mod tui {
                 app.panes[1].list_state.selected(),
                 other_selected,
                 "unfocused pane's selection must not change"
+            );
+        }
+
+        /// Type each char of `s` as a `KeyCode::Char` key press.
+        fn type_str(app: &mut App, s: &str) {
+            for c in s.chars() {
+                assert!(!app.handle_key(KeyCode::Char(c)).unwrap());
+            }
+        }
+
+        #[test]
+        fn highlight_expression_compiles_and_marks_matching_rows() {
+            let mut app = one_pane_app();
+            assert!(!app.handle_key(KeyCode::Char('?')).unwrap());
+            type_str(&mut app, "severity >= ERR");
+            assert!(!app.handle_key(KeyCode::Enter).unwrap());
+
+            let pane = &app.panes[0];
+            assert!(pane.highlight.is_some());
+            assert!(pane.highlight_enabled);
+            assert!(
+                pane.status.is_none(),
+                "no error expected: {:?}",
+                pane.status
+            );
+
+            let has_match = pane
+                .result
+                .rows
+                .iter()
+                .any(|row| pane.row_is_highlighted(row));
+            assert!(
+                has_match,
+                "expected at least one row to match severity >= ERR"
+            );
+        }
+
+        #[test]
+        fn highlight_toggle_disables_without_clearing_expression() {
+            let mut app = one_pane_app();
+            app.handle_key(KeyCode::Char('?')).unwrap();
+            type_str(&mut app, "severity >= ERR");
+            app.handle_key(KeyCode::Enter).unwrap();
+
+            assert!(!app.handle_key(KeyCode::Char('h')).unwrap());
+            let pane = &app.panes[0];
+            assert!(!pane.highlight_enabled);
+            assert_eq!(pane.highlight_text, "severity >= ERR");
+            assert!(
+                pane.highlight.is_some(),
+                "compiled predicate is retained, not cleared"
+            );
+
+            assert!(!app.handle_key(KeyCode::Char('h')).unwrap());
+            assert!(app.panes[0].highlight_enabled);
+        }
+
+        #[test]
+        fn highlight_toggle_is_a_no_op_with_no_expression_set() {
+            let mut app = one_pane_app();
+            assert!(!app.handle_key(KeyCode::Char('h')).unwrap());
+            assert!(!app.panes[0].highlight_enabled);
+        }
+
+        #[test]
+        fn invalid_highlight_expression_reports_an_error_without_crashing() {
+            let mut app = one_pane_app();
+            app.handle_key(KeyCode::Char('?')).unwrap();
+            type_str(&mut app, "not a valid expression at all");
+            assert!(!app.handle_key(KeyCode::Enter).unwrap());
+
+            let pane = &app.panes[0];
+            assert!(pane.highlight.is_none());
+            assert!(pane
+                .status
+                .as_deref()
+                .is_some_and(|s| s.contains("highlight error")));
+        }
+
+        #[test]
+        fn esc_cancels_highlight_edit_without_applying() {
+            let mut app = one_pane_app();
+            app.handle_key(KeyCode::Char('?')).unwrap();
+            type_str(&mut app, "severity >= ERR");
+            assert!(!app.handle_key(KeyCode::Esc).unwrap());
+
+            let pane = &app.panes[0];
+            assert!(!pane.editing_highlight);
+            assert!(
+                pane.highlight.is_none(),
+                "Esc must not apply the typed expression"
             );
         }
     }

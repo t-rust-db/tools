@@ -56,3 +56,11 @@ loglume "severity >= INFO" --highlight "severity >= ERR" app.log
 
 `--highlight` accepts loglume's short forms (`severity`/`facility`) or any
 boolean expression `db-core` understands (e.g. `message LIKE '%oom%'`).
+
+The TUI (`--tui`) has the same distinction as a first-class concept, per
+pane: a highlight bar sits below the filter bar.
+
+| Key | Action |
+|-----|--------|
+| `?` | Edit the highlight expression (`Enter` to apply, `Esc` to cancel) |
+| `h` | Toggle highlight rendering on/off without clearing the expression |
