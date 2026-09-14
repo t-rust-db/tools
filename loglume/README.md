@@ -76,15 +76,16 @@ pane: a highlight bar sits below the filter bar.
 
 ## Display order (TUI)
 
-By default each pane lists rows oldest-first (top-down), like the file
-itself. Press `R` to flip a pane to newest-first ("[newest-first]" appears
-in its title) — new lines from a live-appended file then arrive at the
-*top* instead of the bottom. `R` toggles per pane and jumps the view to
-the current latest row; `j`/`k` still move down/up the list, which means
-"further back in time" when reversed. This is a TUI-only feature — the
-plain CLI's `--follow` output is a real scrolling terminal stream, which
-can't retroactively insert new lines above older ones, so it stays
-oldest-first regardless.
+By default each pane lists rows newest-first (top-down) — new lines from
+a live-appended file arrive at the *top*, so you don't need to scroll to
+see what just happened. Press `R` to flip a pane to oldest-first
+("[oldest-first]" appears in its title), matching the file's natural
+top-down order. `R` toggles per pane and jumps the view to the current
+latest row; `j`/`k` still move down/up the list, which means "further
+back in time" when in the default newest-first mode. This is a TUI-only
+feature — the plain CLI's `--follow` output is a real scrolling terminal
+stream, which can't retroactively insert new lines above older ones, so
+it stays oldest-first regardless.
 
 ## Detail pane (TUI)
 

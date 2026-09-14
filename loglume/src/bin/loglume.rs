@@ -1022,7 +1022,7 @@ mod tui {
 
             let mut list_state = ListState::default();
             if !result.rows.is_empty() {
-                list_state.select(Some(result.rows.len() - 1));
+                list_state.select(Some(0));
             }
 
             let filter_text = sql.clone();
@@ -1038,7 +1038,7 @@ mod tui {
                 highlight: None,
                 highlight_enabled: false,
                 editing_highlight: false,
-                reverse: false,
+                reverse: true,
                 filter_status: None,
                 highlight_status: None,
                 detail_open: false,
@@ -1324,7 +1324,7 @@ mod tui {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| self.path.to_string_lossy().into_owned());
-            let order_tag = if self.reverse { " [newest-first]" } else { "" };
+            let order_tag = if self.reverse { "" } else { " [oldest-first]" };
             let title = self
                 .result
                 .scope_report
@@ -1650,7 +1650,7 @@ mod tui {
             let mut app = one_pane_app();
             let row_before = app.panes[0].selected_row().unwrap().clone();
             let before = app.panes[0].field_lines_for(&row_before);
-            assert!(!app.handle_key(KeyCode::Char('k')).unwrap());
+            assert!(!app.handle_key(KeyCode::Char('j')).unwrap());
             let row_after = app.panes[0].selected_row().unwrap().clone();
             let after = app.panes[0].field_lines_for(&row_after);
             assert_ne!(
@@ -1672,12 +1672,32 @@ mod tui {
         }
 
         #[test]
+        fn pane_defaults_to_reverse_newest_first() {
+            let app = one_pane_app();
+            let len = app.panes[0].result.rows.len();
+            assert!(len > 1, "fixture needs multiple rows for this test");
+            assert!(
+                app.panes[0].reverse,
+                "panes should open newest-first by default"
+            );
+            assert_eq!(app.panes[0].list_state.selected(), Some(0));
+        }
+
+        #[test]
         fn reverse_toggle_flips_render_order_and_jumps_to_latest() {
             let mut app = one_pane_app();
             let len = app.panes[0].result.rows.len();
             assert!(len > 1, "fixture needs multiple rows for this test");
-            assert_eq!(app.panes[0].list_state.selected(), Some(len - 1));
+            assert!(app.panes[0].reverse);
+            assert_eq!(app.panes[0].list_state.selected(), Some(0));
 
+            // Toggling flips to non-reverse and jumps to "latest is the last index".
+            assert!(!app.handle_key(KeyCode::Char('R')).unwrap());
+            let pane = &app.panes[0];
+            assert!(!pane.reverse);
+            assert_eq!(pane.list_state.selected(), Some(len - 1));
+
+            // Toggling back returns to reverse mode, latest at index 0.
             assert!(!app.handle_key(KeyCode::Char('R')).unwrap());
             let pane = &app.panes[0];
             assert!(pane.reverse);
@@ -1686,12 +1706,6 @@ mod tui {
                 Some(0),
                 "toggling reverse should jump the view to the latest row (index 0 in reverse mode)"
             );
-
-            // Toggling back returns to non-reverse "latest is the last index".
-            assert!(!app.handle_key(KeyCode::Char('R')).unwrap());
-            let pane = &app.panes[0];
-            assert!(!pane.reverse);
-            assert_eq!(pane.list_state.selected(), Some(len - 1));
         }
 
         #[test]
