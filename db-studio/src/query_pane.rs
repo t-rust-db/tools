@@ -15,7 +15,7 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState};
 use ratatui::Frame;
 use tui_textarea::TextArea;
 
@@ -346,10 +346,19 @@ fn render_popup(frame: &mut Frame, query_area: Rect, popup: &Popup) {
         width: 30.min(query_area.width),
         height: height.min(query_area.height.saturating_add(6)),
     };
+    // `Block`/`List` only repaint *style* (colors) over their area, not
+    // the underlying glyphs -- without this, whatever the schema tree
+    // pane already drew at these same screen coordinates earlier in the
+    // same frame survives underneath the popup's own text, recolored to
+    // match it: real characters from behind fused with the popup's own,
+    // not a rendering glitch but an unpainted-area bug. `Clear` resets
+    // every cell in `popup_area` to blank before anything else draws.
+    frame.render_widget(Clear, popup_area);
+    let item_style = Style::default().bg(theme::base()).fg(theme::text());
     let items: Vec<ListItem> = popup
         .matches
         .iter()
-        .map(|m| ListItem::new(m.as_str()))
+        .map(|m| ListItem::new(m.as_str()).style(item_style))
         .collect();
     let mut state = ListState::default();
     state.select(Some(popup.selected));
@@ -358,7 +367,7 @@ fn render_popup(frame: &mut Frame, query_area: Rect, popup: &Popup) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .style(Style::default().bg(theme::base()).fg(theme::text())),
+                .style(item_style),
         )
         .highlight_style(
             Style::default()
@@ -535,5 +544,78 @@ mod tests {
         pane.set_query("SELECT * FROM t");
         assert_eq!(pane.text(), "SELECT * FROM t");
         assert_eq!(pane.cursor(), (0, "SELECT * FROM t".len()));
+    }
+
+    /// Reproduces a real leaking-through-the-popup bug reported from
+    /// hands-on testing: something else drawn earlier in the same frame
+    /// at the popup's screen coordinates (here, a long line of `#`s
+    /// standing in for the schema tree pane) must not survive
+    /// underneath the popup's own text -- `Block`/`List` only repaint
+    /// *style* over their area, not the glyphs already there, so
+    /// without an explicit `Clear` first, a short popup item (`"id"`)
+    /// left the tail of whatever was drawn before it (`#`s) visible,
+    /// recolored to match the popup instead of erased.
+    #[test]
+    fn the_popup_clears_whatever_was_drawn_underneath_it_first() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let mut pane = pane_with_candidates();
+        for c in "SELECT i".chars() {
+            pane.handle_key(key(KeyCode::Char(c)));
+        }
+        assert!(pane.has_open_popup(), "expected typing 'i' to open a popup");
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let query_area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 3,
+        };
+        terminal
+            .draw(|frame| {
+                // Stands in for a pane drawn earlier in the same frame
+                // (the schema tree, in the real app) at the same rows
+                // the popup will occupy -- one full line of `#`s per
+                // row, not one long wrapped line, so every row the
+                // popup covers actually has something underneath it.
+                let filler =
+                    ratatui::widgets::Paragraph::new(vec![
+                        ratatui::text::Line::from("#".repeat(60));
+                        10
+                    ]);
+                frame.render_widget(
+                    filler,
+                    Rect {
+                        x: 0,
+                        y: 3,
+                        width: 60,
+                        height: 10,
+                    },
+                );
+                pane.render(frame, query_area, true);
+                pane.render_popup(frame, query_area);
+            })
+            .unwrap();
+
+        // Only the popup's own footprint needs to be clear -- the tree
+        // pane's filler outside it is legitimately still visible, same
+        // as any overlay that doesn't cover the whole screen. Two
+        // matches ("items"/"price") + 2 border rows, mirroring
+        // render_popup's own height calculation.
+        let buffer = terminal.backend().buffer();
+        let mut inside_popup = String::new();
+        for y in 3..7 {
+            for x in 2..32 {
+                inside_popup.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        assert!(
+            !inside_popup.contains('#'),
+            "expected the popup to fully clear its own footprint, \
+             not leave filler characters visible inside it:\n{inside_popup}"
+        );
     }
 }
