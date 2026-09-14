@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use db_core::engine::Cell;
+use db_core::engine::{Cell, Engine};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::Frame;
 
@@ -654,28 +654,36 @@ impl App {
         }
     }
 
-    /// Same as [`Self::refresh_plan`], for the opcode view -- except
-    /// db-core's cross-mode resolver has no opcodes equivalent
-    /// (db-studio#54: only `run_query`/`explain_plan` exist for a
-    /// stream/SQLite join). A query that *would* route cross-mode gets
-    /// a clear, specific message here instead of falling through to
-    /// `StreamEngine::explain_opcodes`, which would just repeat its own
-    /// "the stream engine has one table" rejection -- honest for a
-    /// single-engine query, but confusing for one that db-studio just
-    /// finished explaining (in the Plan view) *does* run.
+    /// Same as [`Self::refresh_plan`], for the opcode view. A cross-mode
+    /// query now gets a real opcode dump too (db-core#382/#387/#388,
+    /// picked up in db-studio#54's follow-up): `CrossModeEngine` is a
+    /// real `Engine` impl with its own `explain_opcodes`, closing the gap
+    /// this view used to paper over with a placeholder message. It's
+    /// reconstructed from both files' paths for this one call rather
+    /// than reusing the already-open engines -- read-only, and simpler
+    /// than threading a borrow of both `OpenFile`s through at once.
     fn refresh_opcodes(&mut self) {
         let text = self.query_pane.text();
         let Some(file) = self.files.get(self.active) else {
             return;
         };
-        if self.cross_mode_lookup(self.active, &text).is_some() {
-            self.error_pane.set_error(
-                "opcodes are not available for cross-mode (stream/SQLite) joins -- use the Plan view (F2) instead"
-                    .to_string(),
-            );
-            return;
-        }
-        match file.engine.explain_opcodes(&text) {
+        let cross_mode = self
+            .cross_mode_lookup(self.active, &text)
+            .and_then(|lookup_index| {
+                let lookup = self.files.get(lookup_index)?;
+                Some(
+                    db_core::engine::resolve::CrossModeEngine::open_stream_sqlite(
+                        &file.path,
+                        &lookup.path,
+                    )
+                    .and_then(|engine| engine.explain_opcodes(&text)),
+                )
+            });
+        let result = match cross_mode {
+            Some(result) => result,
+            None => file.engine.explain_opcodes(&text),
+        };
+        match result {
             Ok(sections) => {
                 self.view = OutputView::Opcodes(sections);
                 self.error_pane.clear();
@@ -1258,7 +1266,7 @@ mod tests {
     /// single-table rejection (which would otherwise resurface, since
     /// the active file genuinely is a stream engine with one table).
     #[test]
-    fn cross_mode_join_f3_shows_a_clear_not_available_message() {
+    fn cross_mode_join_f3_shows_a_real_opcode_dump() {
         let mut app = iot_fleet_app();
         type_text(
             &mut app,
@@ -1267,8 +1275,12 @@ mod tests {
         app.refresh_opcodes();
         let text = rendered(&mut app);
         assert!(
-            text.contains("not available") && text.contains("cross-mode"),
-            "expected a clear cross-mode-specific message, not a generic error:\n{text}"
+            !text.trim().is_empty(),
+            "expected a real opcode dump for the cross-mode query, not an empty view:\n{text}"
+        );
+        assert!(
+            text.contains("JOIN"),
+            "expected the cross-mode opcode dump's section labels to render:\n{text}"
         );
     }
 
