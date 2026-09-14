@@ -126,7 +126,7 @@ fn run(args: &Args) -> io::Result<()> {
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
     if let Some(name) = &args.save_filter {
-        let mut cfg = cfg;
+        let mut cfg = cfg.clone();
         cfg.filters.insert(name.clone(), sql.clone());
         cfg.save()?;
     }
@@ -166,7 +166,7 @@ fn run(args: &Args) -> io::Result<()> {
                 "--tui requires at least one file argument (stdin isn't supported)",
             ));
         }
-        return tui::run(&args.files, sql);
+        return tui::run(&args.files, sql, &cfg.tui.theme);
     }
 
     match args.files.as_slice() {
@@ -668,7 +668,7 @@ mod config {
     use std::io;
     use std::path::PathBuf;
 
-    #[derive(Debug, Default, Serialize, Deserialize)]
+    #[derive(Debug, Default, Clone, Serialize, Deserialize)]
     pub(crate) struct Config {
         #[serde(default)]
         pub(crate) tui: TuiConfig,
@@ -677,7 +677,7 @@ mod config {
         pub(crate) filters: BTreeMap<String, String>,
     }
 
-    #[derive(Debug, Default, Serialize, Deserialize)]
+    #[derive(Debug, Default, Clone, Serialize, Deserialize)]
     pub(crate) struct TuiConfig {
         /// Fallback for `--scope` when not given on the command line.
         #[serde(default)]
@@ -685,6 +685,27 @@ mod config {
         /// Reserved for future key-remapping; not yet applied by the TUI.
         #[serde(default)]
         pub(crate) keybindings: BTreeMap<String, String>,
+        /// Per-key color overrides (#35); unset keys fall back to the
+        /// built-in Catppuccin Mocha defaults.
+        #[serde(default)]
+        pub(crate) theme: ThemeConfig,
+    }
+
+    /// `[tui.theme]`: hex-string (`"#rrggbb"`) overrides for the TUI's
+    /// color roles. Every field is optional -- an absent or invalid value
+    /// falls back to the Catppuccin Mocha default for that role.
+    #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+    pub(crate) struct ThemeConfig {
+        #[serde(default)]
+        pub(crate) border_focused: Option<String>,
+        #[serde(default)]
+        pub(crate) highlight_bg: Option<String>,
+        #[serde(default)]
+        pub(crate) highlight_fg: Option<String>,
+        #[serde(default)]
+        pub(crate) detail_dim: Option<String>,
+        #[serde(default)]
+        pub(crate) status_error: Option<String>,
     }
 
     impl Config {
@@ -817,6 +838,7 @@ mod config {
 /// function `--filter` uses, so there is exactly one place that
 /// understands loglume's filter syntax.
 mod tui {
+    use super::config::ThemeConfig;
     use super::{
         engine_err, format_cell, format_row, format_scope_report, open_engine,
         resolve_highlight_expr, rewrite_filter_to_sql,
@@ -843,12 +865,76 @@ mod tui {
 
     const TICK_RATE: Duration = Duration::from_millis(100);
 
+    /// The TUI's color roles, defaulting to Catppuccin Mocha (#35) to match
+    /// this project's terminal setup (tmux/ghostty), individually
+    /// overridable via `config.toml`'s `[tui.theme]`.
+    #[derive(Debug, Clone, Copy)]
+    struct Theme {
+        border_focused: Color,
+        highlight_bg: Color,
+        highlight_fg: Color,
+        detail_dim: Color,
+        status_error: Color,
+    }
+
+    impl Default for Theme {
+        fn default() -> Self {
+            Self {
+                border_focused: Color::Rgb(0x89, 0xb4, 0xfa), // blue
+                highlight_bg: Color::Rgb(0xf9, 0xe2, 0xaf),   // yellow
+                highlight_fg: Color::Rgb(0x1e, 0x1e, 0x2e),   // base
+                detail_dim: Color::Rgb(0x6c, 0x70, 0x86),     // overlay1
+                status_error: Color::Rgb(0xf3, 0x8b, 0xa8),   // red
+            }
+        }
+    }
+
+    impl Theme {
+        /// Apply `[tui.theme]` overrides on top of the Catppuccin Mocha
+        /// defaults. An unset or unparsable hex value keeps the default
+        /// for that role rather than erroring -- a typo in one key
+        /// shouldn't break every other color.
+        fn resolve(cfg: &ThemeConfig) -> Self {
+            let defaults = Self::default();
+            Self {
+                border_focused: parse_hex_color(cfg.border_focused.as_deref())
+                    .unwrap_or(defaults.border_focused),
+                highlight_bg: parse_hex_color(cfg.highlight_bg.as_deref())
+                    .unwrap_or(defaults.highlight_bg),
+                highlight_fg: parse_hex_color(cfg.highlight_fg.as_deref())
+                    .unwrap_or(defaults.highlight_fg),
+                detail_dim: parse_hex_color(cfg.detail_dim.as_deref())
+                    .unwrap_or(defaults.detail_dim),
+                status_error: parse_hex_color(cfg.status_error.as_deref())
+                    .unwrap_or(defaults.status_error),
+            }
+        }
+    }
+
+    /// Parse a `"#rrggbb"` (or `"rrggbb"`) hex string into a `Color::Rgb`.
+    /// Returns `None` for anything absent or malformed.
+    fn parse_hex_color(hex: Option<&str>) -> Option<Color> {
+        let hex = hex?.trim().strip_prefix('#').unwrap_or(hex?.trim());
+        if hex.len() != 6 {
+            return None;
+        }
+        let r = u8::from_str_radix(hex.get(0..2)?, 16).ok()?;
+        let g = u8::from_str_radix(hex.get(2..4)?, 16).ok()?;
+        let b = u8::from_str_radix(hex.get(4..6)?, 16).ok()?;
+        Some(Color::Rgb(r, g, b))
+    }
+
     /// Run the interactive TUI against `paths`, each opened in its own pane,
     /// all starting with `initial_sql`.
-    pub(crate) fn run(paths: &[PathBuf], initial_sql: String) -> io::Result<()> {
+    pub(crate) fn run(
+        paths: &[PathBuf],
+        initial_sql: String,
+        theme_cfg: &ThemeConfig,
+    ) -> io::Result<()> {
         install_panic_hook();
         let mut terminal = init_terminal()?;
-        let result = App::new(paths, initial_sql)?.run(&mut terminal);
+        let theme = Theme::resolve(theme_cfg);
+        let result = App::new(paths, initial_sql, theme)?.run(&mut terminal);
         restore_terminal(&mut terminal)?;
         result
     }
@@ -913,12 +999,13 @@ mod tui {
         /// column/value pair for the selected row, shrinking the list to
         /// make room (#30). Toggled per pane via 'd'.
         detail_open: bool,
+        theme: Theme,
         watch_rx: mpsc::Receiver<notify::Result<notify::Event>>,
         _watcher: notify::RecommendedWatcher,
     }
 
     impl Pane {
-        fn new(path: &Path, sql: String) -> io::Result<Self> {
+        fn new(path: &Path, sql: String, theme: Theme) -> io::Result<Self> {
             use notify::{RecursiveMode, Watcher};
 
             let mut engine = open_engine(path)?;
@@ -955,6 +1042,7 @@ mod tui {
                 filter_status: None,
                 highlight_status: None,
                 detail_open: false,
+                theme,
                 watch_rx: rx,
                 _watcher: watcher,
             })
@@ -1175,20 +1263,20 @@ mod tui {
             };
 
             let border_style = if focused {
-                Style::default().fg(Color::Yellow)
+                Style::default().fg(self.theme.border_focused)
             } else {
                 Style::default()
             };
 
             let raw_idx = self.result.columns.iter().position(|c| c == "raw");
             let highlight_style = Style::default()
-                .bg(Color::Yellow)
-                .fg(Color::Black)
+                .bg(self.theme.highlight_bg)
+                .fg(self.theme.highlight_fg)
                 .add_modifier(Modifier::BOLD);
             // Detail rows (#33) are inline, not a separate bordered panel:
             // distinct dim coloring plus a "-+" prefix is what sets them
             // apart from ordinary list rows.
-            let detail_style = Style::default().fg(Color::DarkGray);
+            let detail_style = Style::default().fg(self.theme.detail_dim);
 
             // Only the currently selected row can be expanded (detail
             // follows the selection cursor, same as before #33's rework),
@@ -1254,7 +1342,12 @@ mod tui {
                 .filter_status
                 .clone()
                 .unwrap_or_else(|| self.filter_text.clone());
-            let input = Paragraph::new(filter_body).block(
+            let filter_body_style = if self.filter_status.is_some() {
+                Style::default().fg(self.theme.status_error)
+            } else {
+                Style::default()
+            };
+            let input = Paragraph::new(filter_body).style(filter_body_style).block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(border_style)
@@ -1277,12 +1370,19 @@ mod tui {
                 let state = if self.highlight_enabled { "on" } else { "off" };
                 format!("{} [{state}]", self.highlight_text)
             };
-            let highlight_widget = Paragraph::new(highlight_body).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(border_style)
-                    .title(highlight_title),
-            );
+            let highlight_body_style = if self.highlight_status.is_some() {
+                Style::default().fg(self.theme.status_error)
+            } else {
+                Style::default()
+            };
+            let highlight_widget = Paragraph::new(highlight_body)
+                .style(highlight_body_style)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border_style)
+                        .title(highlight_title),
+                );
             frame.render_widget(highlight_widget, highlight_area);
         }
 
@@ -1304,10 +1404,10 @@ mod tui {
     }
 
     impl App {
-        fn new(paths: &[PathBuf], sql: String) -> io::Result<Self> {
+        fn new(paths: &[PathBuf], sql: String, theme: Theme) -> io::Result<Self> {
             let panes = paths
                 .iter()
-                .map(|path| Pane::new(path, sql.clone()))
+                .map(|path| Pane::new(path, sql.clone(), theme))
                 .collect::<io::Result<Vec<_>>>()?;
             Ok(Self { panes, focused: 0 })
         }
@@ -1415,6 +1515,7 @@ mod tui {
             App::new(
                 &[PathBuf::from(SAMPLE_LOG), PathBuf::from(SAMPLE_LOG_2)],
                 "SELECT * FROM log WHERE severity >= 'DEBUG'".to_string(),
+                Theme::default(),
             )
             .expect("open two panes")
         }
@@ -1423,6 +1524,7 @@ mod tui {
             App::new(
                 &[PathBuf::from(SAMPLE_LOG)],
                 "SELECT * FROM log WHERE severity >= 'DEBUG'".to_string(),
+                Theme::default(),
             )
             .expect("open one pane")
         }
@@ -1736,6 +1838,67 @@ mod tui {
                 pane.highlight.is_none(),
                 "Esc must not apply the typed expression"
             );
+        }
+
+        #[test]
+        fn default_theme_is_catppuccin_mocha() {
+            let theme = Theme::default();
+            assert_eq!(theme.border_focused, Color::Rgb(0x89, 0xb4, 0xfa));
+            assert_eq!(theme.highlight_bg, Color::Rgb(0xf9, 0xe2, 0xaf));
+            assert_eq!(theme.highlight_fg, Color::Rgb(0x1e, 0x1e, 0x2e));
+            assert_eq!(theme.detail_dim, Color::Rgb(0x6c, 0x70, 0x86));
+            assert_eq!(theme.status_error, Color::Rgb(0xf3, 0x8b, 0xa8));
+        }
+
+        #[test]
+        fn theme_resolve_with_no_overrides_keeps_defaults() {
+            let theme = Theme::resolve(&ThemeConfig::default());
+            assert_eq!(theme.border_focused, Theme::default().border_focused);
+        }
+
+        #[test]
+        fn theme_resolve_applies_a_valid_override() {
+            let cfg = ThemeConfig {
+                border_focused: Some("#ff0000".to_string()),
+                ..Default::default()
+            };
+            let theme = Theme::resolve(&cfg);
+            assert_eq!(theme.border_focused, Color::Rgb(0xff, 0x00, 0x00));
+            // Untouched keys still fall back to the default.
+            assert_eq!(theme.highlight_bg, Theme::default().highlight_bg);
+        }
+
+        #[test]
+        fn theme_resolve_ignores_an_invalid_override() {
+            let cfg = ThemeConfig {
+                border_focused: Some("not-a-color".to_string()),
+                ..Default::default()
+            };
+            let theme = Theme::resolve(&cfg);
+            assert_eq!(
+                theme.border_focused,
+                Theme::default().border_focused,
+                "an unparsable hex value must fall back to the default, not panic or leave a garbage color"
+            );
+        }
+
+        #[test]
+        fn parse_hex_color_accepts_with_and_without_hash() {
+            assert_eq!(
+                parse_hex_color(Some("#89b4fa")),
+                Some(Color::Rgb(0x89, 0xb4, 0xfa))
+            );
+            assert_eq!(
+                parse_hex_color(Some("89b4fa")),
+                Some(Color::Rgb(0x89, 0xb4, 0xfa))
+            );
+        }
+
+        #[test]
+        fn parse_hex_color_rejects_wrong_length_and_non_hex() {
+            assert_eq!(parse_hex_color(Some("#fff")), None);
+            assert_eq!(parse_hex_color(Some("#gggggg")), None);
+            assert_eq!(parse_hex_color(None), None);
         }
     }
 }
