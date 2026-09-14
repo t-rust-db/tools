@@ -8,6 +8,7 @@
 mod app;
 mod clipboard;
 mod completion;
+mod config;
 mod error_pane;
 mod grid_pane;
 mod highlight;
@@ -34,6 +35,22 @@ fn main() -> ExitCode {
         eprintln!("usage: db-studio <path.sqlite|path.parquet|path.log> [more ...]");
         return ExitCode::FAILURE;
     }
+
+    // `db-studio config` (no file args) is special-cased as a subcommand
+    // rather than a real file to open (db-studio#61, mirroring loglume's
+    // own `loglume config`) -- "config" was never a valid file path to
+    // begin with, so this doesn't shadow any real usage.
+    if paths == ["config"] {
+        return match config::print_resolved() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("db-studio: {err}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    theme::init(config::Config::load().unwrap_or_default().theme);
 
     // Every file opened before the terminal is touched: a bad path is a
     // plain stderr message in the user's shell, not something buried in
