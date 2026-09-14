@@ -33,6 +33,7 @@ start: ## Start interactive log viewer (alias for run with sample)
 
 gen-logs: ## Generate test logs: make gen-logs N=1000
 	python3 tests/logs/gen_syslog.py --seed 42 -n $(or $(N),1000) -o tests/logs/sample.log
+	python3 tests/logs/gen_syslog.py --seed 99 -n 200 -o tests/logs/sample2.log
 
 version: ## Show version
 	@cargo run -- --version

@@ -796,10 +796,14 @@ mod tui {
         use super::*;
 
         const SAMPLE_LOG: &str = "tests/logs/sample.log";
+        const SAMPLE_LOG_2: &str = "tests/logs/sample2.log";
 
+        /// Two *distinct* fixtures (different seed/line count), so pane
+        /// isolation is exercised with genuinely different data per pane
+        /// rather than the same file opened twice.
         fn two_pane_app() -> App {
             App::new(
-                &[PathBuf::from(SAMPLE_LOG), PathBuf::from(SAMPLE_LOG)],
+                &[PathBuf::from(SAMPLE_LOG), PathBuf::from(SAMPLE_LOG_2)],
                 "SELECT * FROM log WHERE severity >= 'DEBUG'".to_string(),
             )
             .expect("open two panes")
@@ -826,10 +830,28 @@ mod tui {
         #[test]
         fn closing_a_pane_does_not_affect_the_other() {
             let mut app = two_pane_app();
+            let remaining_rows_before = app.panes[1].result.rows.len();
+
+            // focused starts at 0 (SAMPLE_LOG), so closing it should leave
+            // pane 1 (SAMPLE_LOG_2) behind, untouched.
             assert!(!app.handle_key(KeyCode::Char('x')).unwrap());
             assert_eq!(app.panes.len(), 1);
             assert_eq!(app.focused, 0);
+            assert_eq!(app.panes[0].path, PathBuf::from(SAMPLE_LOG_2));
+            assert_eq!(app.panes[0].result.rows.len(), remaining_rows_before);
+        }
+
+        #[test]
+        fn panes_hold_genuinely_distinct_data() {
+            let app = two_pane_app();
             assert_eq!(app.panes[0].path, PathBuf::from(SAMPLE_LOG));
+            assert_eq!(app.panes[1].path, PathBuf::from(SAMPLE_LOG_2));
+            assert_ne!(
+                app.panes[0].result.rows.len(),
+                app.panes[1].result.rows.len(),
+                "the two fixtures have different line counts, so their \
+                 filtered row counts should differ too"
+            );
         }
 
         #[test]
