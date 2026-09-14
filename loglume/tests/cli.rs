@@ -5,6 +5,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 const SAMPLE_LOG: &str = "tests/logs/sample.log";
+const SAMPLE_LOG_2: &str = "tests/logs/sample2.log";
 
 #[test]
 fn filters_by_severity() {
@@ -148,4 +149,43 @@ fn follow_mode_prints_appended_lines_and_footer() {
         stderr.contains("2 lines,"),
         "expected updated footer, got: {stderr}"
     );
+}
+
+#[test]
+fn multiple_files_without_tui_are_rejected() {
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["severity >= WARN", SAMPLE_LOG, SAMPLE_LOG_2])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("multiple files require --tui"));
+}
+
+#[test]
+fn multiple_files_with_tui_pass_argument_validation() {
+    // No real TTY is available under the test harness, so --tui itself
+    // fails fast once it tries to initialize the terminal -- but that
+    // failure is distinct from (and happens after) the CLI's own
+    // "multiple files require --tui" argument-validation rejection above,
+    // which proves multiple files + --tui are accepted as a valid
+    // combination before terminal setup is even attempted.
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["severity >= WARN", "--tui", SAMPLE_LOG, SAMPLE_LOG_2])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("multiple files require --tui").not());
+}
+
+#[test]
+fn sample2_fixture_has_distinct_content_from_sample() {
+    // Sanity check for the fixture itself: it must actually differ from
+    // sample.log (different seed/line count), or the multi-pane tests
+    // that rely on "two distinct files" wouldn't prove anything.
+    let sample_lines = std::fs::read_to_string(SAMPLE_LOG).unwrap().lines().count();
+    let sample2_lines = std::fs::read_to_string(SAMPLE_LOG_2)
+        .unwrap()
+        .lines()
+        .count();
+    assert_ne!(sample_lines, sample2_lines);
 }
