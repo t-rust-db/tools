@@ -2,6 +2,12 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.13.0] - 2026-09-14
+
+### Added
+
+- **XDG `config.toml` with theme overrides** (#61, parity with `t-rust-db/loglume#11`/`#35`): `$XDG_CONFIG_HOME/db-studio/config.toml` (or `$HOME/.config/db-studio/config.toml`) with a `[theme]` table overriding any of `theme.rs`'s catppuccin-mocha colors by hex string. `db-studio config` prints the resolved config path and contents, mirroring `loglume config`. Unset keys (or no config file at all) render exactly as before.
+
 ## [0.12.1] - 2026-09-14
 
 ### Fixed
