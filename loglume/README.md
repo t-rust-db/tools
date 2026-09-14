@@ -65,6 +65,18 @@ pane: a highlight bar sits below the filter bar.
 | `?` | Edit the highlight expression (`Enter` to apply, `Esc` to cancel) |
 | `h` | Toggle highlight rendering on/off without clearing the expression |
 
+## Display order (TUI)
+
+By default each pane lists rows oldest-first (top-down), like the file
+itself. Press `R` to flip a pane to newest-first ("[newest-first]" appears
+in its title) — new lines from a live-appended file then arrive at the
+*top* instead of the bottom. `R` toggles per pane and jumps the view to
+the current latest row; `j`/`k` still move down/up the list, which means
+"further back in time" when reversed. This is a TUI-only feature — the
+plain CLI's `--follow` output is a real scrolling terminal stream, which
+can't retroactively insert new lines above older ones, so it stays
+oldest-first regardless.
+
 ## Alerts (standing queries)
 
 `--alert` turns the resolved filter/SQL into a standing query: instead of
