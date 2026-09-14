@@ -1,6 +1,6 @@
 [package]
 name = "loglume"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
@@ -12,6 +12,10 @@ authors = ["Ilja Heitlager <iheitlager@schubergphilis.com>"]
 name = "loglume"
 path = "src/bin/loglume.rs"
 
+[[example]]
+name = "notify_probe"
+path = "tests/spikes/notify_probe.rs"
+
 [lib]
 name = "loglume"
 path = "src/lib.rs"
@@ -19,13 +23,15 @@ path = "src/lib.rs"
 [dependencies]
 db-core = { version = "0.91.0", git = "https://github.com/t-rust-db/db-core", tag = "v0.91.0", default-features = false, features = ["engine-stream", "storage-stream", "vm-stream"] }
 clap = { version = "4", features = ["derive"] }
-notify = "8"
 ratatui = "0.30.2"
 crossterm = "0.29.0"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.6"
 
 [dev-dependencies]
+# Only the tests/spikes/notify_probe.rs spike still uses notify: the live
+# view polls instead (FSEvents misses held-open-fd appends).
+notify = "8"
 assert_cmd = "2"
 predicates = "3"
 

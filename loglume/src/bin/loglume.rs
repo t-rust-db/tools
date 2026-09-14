@@ -241,32 +241,62 @@ fn run_stdin(sql: &str, tail: usize, highlight: Option<&str>) -> io::Result<()> 
     result
 }
 
-fn run_follow(path: &Path, sql: &str, tail: usize, highlight: Option<&str>) -> io::Result<()> {
-    use notify::{RecursiveMode, Watcher};
-    use std::sync::mpsc;
+/// How often `watch_file` stats the log file.
+pub(crate) const WATCH_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// Signal every change to `path`, one `()` per observed change.
+///
+/// This polls the file's size and mtime rather than using filesystem
+/// notifications: on macOS, FSEvents reports *nothing* while a producer
+/// appends through a long-held file descriptor (which is how syslogd,
+/// docker and most application loggers write), so the previous
+/// notify-based watcher only woke up when some other process happened to
+/// close the file -- the "erratic, barely updating" live view. See
+/// `tests/spikes/notify_probe.rs` for the measurements: FSEvents 0
+/// events, notify's mtime polling ~1/s (clock granularity), size polling
+/// every append, for one `stat` per tick.
+///
+/// A shrinking size (truncation/rotation) is a change like any other;
+/// `StreamEngine::refresh` handles the reload.
+pub(crate) fn watch_file(path: &Path) -> std::sync::mpsc::Receiver<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = path.to_path_buf();
+    std::thread::spawn(move || {
+        let stat = |p: &Path| {
+            std::fs::metadata(p)
+                .ok()
+                .map(|m| (m.len(), m.modified().ok()))
+        };
+        let mut last = stat(&path);
+        loop {
+            std::thread::sleep(WATCH_POLL);
+            let now = stat(&path);
+            if now != last {
+                last = now;
+                // A send error means the receiver is gone: stop polling.
+                if tx.send(()).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    rx
+}
+
+fn run_follow(path: &Path, sql: &str, tail: usize, highlight: Option<&str>) -> io::Result<()> {
     let mut engine = open_engine(path)?;
     let predicate = compile_highlight(&engine, highlight)?;
     let result = engine.run_query(sql).map_err(engine_err)?;
     print_result(&result, tail, predicate.as_ref());
     let mut printed = result.rows.len();
 
-    let (tx, rx) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |res| {
-        let _ = tx.send(res);
-    })
-    .map_err(|e| io::Error::other(e.to_string()))?;
-    watcher
-        .watch(path, RecursiveMode::NonRecursive)
-        .map_err(|e| io::Error::other(e.to_string()))?;
-
-    for res in rx {
-        let event = res.map_err(|e| io::Error::other(e.to_string()))?;
-        if !event.kind.is_modify() && !event.kind.is_create() {
+    for () in watch_file(path) {
+        // Only newly appended lines enter the ring here, so the query
+        // below applies the filter to those last lines; rows already
+        // shown are skipped via `printed`.
+        if engine.refresh().map_err(engine_err)? == 0 {
             continue;
         }
-
-        engine.refresh().map_err(engine_err)?;
         let result = engine.run_query(sql).map_err(engine_err)?;
 
         if result.rows.len() < printed {
@@ -342,8 +372,8 @@ fn resolve_emit_mode(op: Option<&str>, threshold: Option<f64>) -> Result<EmitMod
 }
 
 /// Run `sql` as a standing query against `path`, executing `exec` on each
-/// fire. Reuses the same notify-based watcher pattern as `--follow`/the
-/// TUI: on each qualifying filesystem event, `engine.refresh()` then
+/// fire. Reuses the same `watch_file` polling pattern as `--follow`/the
+/// TUI: on each observed file change, `engine.refresh()` then
 /// `standing_query.poll()` -- db-core owns no scheduler, the caller (this
 /// loop) decides when to poll.
 fn run_alert(
@@ -353,9 +383,6 @@ fn run_alert(
     mode: EmitMode,
     exec: &str,
 ) -> io::Result<()> {
-    use notify::{RecursiveMode, Watcher};
-    use std::sync::mpsc;
-
     let mut engine = open_engine(path)?;
     let mut standing_query =
         StandingQuery::new(&engine, sql, mode, window, window).map_err(engine_err)?;
@@ -364,22 +391,10 @@ fn run_alert(
         exec_alert(exec, &event.result)?;
     }
 
-    let (tx, rx) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |res| {
-        let _ = tx.send(res);
-    })
-    .map_err(|e| io::Error::other(e.to_string()))?;
-    watcher
-        .watch(path, RecursiveMode::NonRecursive)
-        .map_err(|e| io::Error::other(e.to_string()))?;
-
-    for res in rx {
-        let event = res.map_err(|e| io::Error::other(e.to_string()))?;
-        if !event.kind.is_modify() && !event.kind.is_create() {
+    for () in watch_file(path) {
+        if engine.refresh().map_err(engine_err)? == 0 {
             continue;
         }
-
-        engine.refresh().map_err(engine_err)?;
         if let Some(event) = standing_query.poll(&mut engine).map_err(engine_err)? {
             exec_alert(exec, &event.result)?;
         }
@@ -1048,7 +1063,7 @@ mod tui {
     use ratatui::Terminal;
     use std::io::{self, Stdout};
     use std::path::{Path, PathBuf};
-    use std::sync::mpsc::{self, TryRecvError};
+    use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
     type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -1121,12 +1136,19 @@ mod tui {
         initial_sql: String,
         theme_cfg: &ThemeConfig,
     ) -> io::Result<()> {
+        let theme = Theme::resolve(theme_cfg);
+        // Open every file *before* touching the terminal: a missing path
+        // used to bail out of `App::new` after EnterAlternateScreen/raw
+        // mode was already on, leaving the shell wedged in the alternate
+        // screen with echo off -- it looked like a hang, not an error.
+        let app = App::new(paths, initial_sql, theme)?;
         install_panic_hook();
         let mut terminal = init_terminal()?;
-        let theme = Theme::resolve(theme_cfg);
-        let result = App::new(paths, initial_sql, theme)?.run(&mut terminal);
-        restore_terminal(&mut terminal)?;
-        result
+        let result = app.run(&mut terminal);
+        // Restore unconditionally, and never let a restore error hide the
+        // run error that caused it.
+        let restored = restore_terminal(&mut terminal);
+        result.and(restored)
     }
 
     fn init_terminal() -> io::Result<Tui> {
@@ -1206,8 +1228,7 @@ mod tui {
         /// make room (#30). Toggled per pane via 'd'.
         detail_open: bool,
         theme: Theme,
-        watch_rx: mpsc::Receiver<notify::Result<notify::Event>>,
-        _watcher: notify::RecommendedWatcher,
+        watch_rx: mpsc::Receiver<()>,
     }
 
     /// Emacs/readline-style line editing shared by the filter and highlight
@@ -1354,19 +1375,10 @@ mod tui {
 
     impl Pane {
         fn new(path: &Path, sql: String, theme: Theme) -> io::Result<Self> {
-            use notify::{RecursiveMode, Watcher};
-
             let mut engine = open_engine(path)?;
             let result = engine.run_query(&sql).map_err(engine_err)?;
 
-            let (tx, rx) = mpsc::channel();
-            let mut watcher = notify::recommended_watcher(move |res| {
-                let _ = tx.send(res);
-            })
-            .map_err(|e| io::Error::other(e.to_string()))?;
-            watcher
-                .watch(path, RecursiveMode::NonRecursive)
-                .map_err(|e| io::Error::other(e.to_string()))?;
+            let rx = super::watch_file(path);
 
             let mut list_state = ListState::default();
             if !result.rows.is_empty() {
@@ -1400,7 +1412,6 @@ mod tui {
                 detail_open: false,
                 theme,
                 watch_rx: rx,
-                _watcher: watcher,
             })
         }
 
@@ -1419,20 +1430,16 @@ mod tui {
         /// a refresh is warranted (coalesces a burst of events into one
         /// requery instead of one per filesystem event).
         fn drain_file_events(&mut self) -> io::Result<bool> {
-            let mut dirty = false;
-            loop {
-                match self.watch_rx.try_recv() {
-                    Ok(Ok(event)) if event.kind.is_modify() || event.kind.is_create() => {
-                        dirty = true;
-                    }
-                    Ok(_) => {}
-                    Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
-                }
+            let mut changed = false;
+            while let Ok(()) = self.watch_rx.try_recv() {
+                changed = true;
             }
-            if dirty {
-                self.engine.refresh().map_err(engine_err)?;
+            if !changed {
+                return Ok(false);
             }
-            Ok(dirty)
+            // Only the appended lines are ingested, so the caller's
+            // requery applies the filter to just those last lines.
+            Ok(self.engine.refresh().map_err(engine_err)? > 0)
         }
 
         /// Re-run this pane's query. `follow_tail` sticks the selection to

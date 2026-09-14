@@ -531,3 +531,19 @@ fn logfmt_service_field_is_queryable() {
         .assert()
         .success();
 }
+
+/// A missing file must fail before the TUI switches the terminal into raw
+/// mode and the alternate screen: bailing out afterwards left the user's
+/// shell wedged (no echo, alternate screen still on) and looked like a
+/// hang rather than an error.
+#[test]
+fn tui_with_a_missing_file_errors_without_entering_the_alternate_screen() {
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["severity >= INFO", "--tui", "tests/logs/does-not-exist.log"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No such file or directory"))
+        // \x1b[?1049h == EnterAlternateScreen.
+        .stdout(predicate::str::contains("[?1049h").not());
+}

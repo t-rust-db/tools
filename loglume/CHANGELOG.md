@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-09-14
+
+### Fixed
+- Live view now updates on every appended line. Filesystem notifications (FSEvents on macOS) report nothing while a producer appends through a long-held file descriptor — how syslogd, docker and most application loggers write — so `--follow`, `--alert` and the TUI only refreshed when some other process happened to close the file. All three now poll the file's size/mtime (`watch_file`), and refresh only ingests the newly appended lines, so the filter is applied to just those last lines.
+- `--tui` with a missing file no longer leaves the terminal in raw mode and the alternate screen: files are opened before the terminal is switched, and the terminal is restored unconditionally.
+
+### Added
+- `tests/logs/producer.py` and `make produce`: a live log producer that appends (and echoes) synthetic syslog lines at a given rate, for exercising the live view.
+- `tests/spikes/notify_probe.rs` and `make spike-notify`: a spike comparing FSEvents, notify's poll watcher and plain size polling against a held-open-fd writer.
+
 ## [0.4.0] - 2026-09-14
 
 ### Added

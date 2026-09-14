@@ -1,2 +1,5 @@
 target/
 AGENTS.md
+tests/logs/live.log
+tests/logs/spike.log
+tests/logs/__pycache__/
