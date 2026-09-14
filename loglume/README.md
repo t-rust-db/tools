@@ -64,3 +64,34 @@ pane: a highlight bar sits below the filter bar.
 |-----|--------|
 | `?` | Edit the highlight expression (`Enter` to apply, `Esc` to cancel) |
 | `h` | Toggle highlight rendering on/off without clearing the expression |
+
+## Alerts (standing queries)
+
+`--alert` turns the resolved filter/SQL into a standing query: instead of
+printing results once, loglume watches the file and runs `--exec <cmd>`
+each time the query fires, piping the fired rows to the command's stdin
+(one formatted line each). Requires exactly one file and `--exec`.
+
+```bash
+# Run a command every time a new WARN-or-worse line shows up
+loglume "severity >= WARN" --alert --exec "mail -s alert ops@example.com" app.log
+```
+
+`--window <duration>` (default `1m`; accepts `s`/`m`/`h`/`d` suffixes, e.g.
+`30s`) sets the poll cadence and, for `Threshold` mode, how long the
+condition must hold before firing.
+
+Two firing modes:
+
+- **`OnChange`** (default): fires whenever the query's result set changes
+  from the last time it fired. Works with any plain `SELECT`.
+- **`Threshold`**: fires once a range-vector query's reduced value crosses
+  a comparison and holds for `--window`. Select it with
+  `--alert-op <op> --alert-threshold <value>` (both required together,
+  e.g. `--alert-op ">=" --alert-threshold 3`). The alert SQL must be a
+  range-vector query for this mode, e.g.:
+
+  ```bash
+  loglume "select count_over_time(message) range 10 seconds from log" \
+    --alert --alert-op ">=" --alert-threshold 3 --exec "notify-send alert" app.log
+  ```

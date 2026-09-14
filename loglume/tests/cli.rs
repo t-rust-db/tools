@@ -331,3 +331,116 @@ fn without_highlight_no_ansi_codes_appear() {
         .success()
         .stdout(predicate::str::contains("\x1b[").not());
 }
+
+#[test]
+fn alert_without_exec_is_rejected() {
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["severity >= WARN", "--alert", SAMPLE_LOG])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--alert requires --exec"));
+}
+
+#[test]
+fn alert_op_without_threshold_is_rejected() {
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args([
+            "severity >= WARN",
+            "--alert",
+            "--exec",
+            "cat",
+            "--alert-op",
+            ">=",
+            SAMPLE_LOG,
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--alert-op and --alert-threshold must be given together",
+        ));
+}
+
+#[test]
+fn alert_invalid_window_is_rejected() {
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args([
+            "severity >= WARN",
+            "--alert",
+            "--exec",
+            "cat",
+            "--window",
+            "bogus",
+            SAMPLE_LOG,
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid duration"));
+}
+
+#[test]
+fn alert_requires_a_file_argument() {
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["severity >= WARN", "--alert", "--exec", "cat"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--alert requires a file argument"));
+}
+
+#[test]
+fn alert_fires_exec_on_a_new_matching_line() {
+    use std::io::Write as _;
+    use std::process::{Command as StdCommand, Stdio};
+    use std::time::Duration;
+
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("loglume-alert-cli-test-{}.log", std::process::id()));
+    let out_path = dir.join(format!("loglume-alert-cli-test-{}.out", std::process::id()));
+    std::fs::write(&path, "<134>Sep 9 08:00:00 host app[1]: normal line\n").unwrap();
+    let _ = std::fs::remove_file(&out_path);
+
+    let bin = assert_cmd::cargo::cargo_bin("loglume");
+    let mut child = StdCommand::new(bin)
+        .args([
+            "severity >= WARN",
+            "--alert",
+            "--window",
+            "1s",
+            "--exec",
+            &format!("cat >> {}", out_path.display()),
+            path.to_str().unwrap(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn loglume --alert");
+
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !out_path.exists() || std::fs::read_to_string(&out_path).unwrap().is_empty(),
+        "must not fire before any WARN+ line exists"
+    );
+
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(f, "<131>Sep 9 08:00:01 host app[1]: something broke").unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(700));
+
+    child.kill().ok();
+    let _ = child.wait_with_output();
+    let fired = std::fs::read_to_string(&out_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&out_path);
+
+    assert!(
+        fired.contains("something broke"),
+        "expected --exec to have received the fired row, got: {fired:?}"
+    );
+}

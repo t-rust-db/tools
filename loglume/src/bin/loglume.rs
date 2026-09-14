@@ -9,8 +9,8 @@
 
 use clap::Parser;
 use loglume::{
-    Cell, CompiledPredicate, Engine, EngineError, Facility, QueryResult, ScopeReport, Severity,
-    StreamEngine,
+    BinaryOp, Cell, CompiledPredicate, EmitMode, Engine, EngineError, Facility, QueryResult,
+    ScopeReport, Severity, StandingQuery, StreamEngine,
 };
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -59,6 +59,34 @@ struct Args {
     /// Accepts loglume's short forms or any db-core boolean expression.
     #[arg(long)]
     highlight: Option<String>,
+
+    /// Run as a standing query on the resolved filter/SQL: fires on a
+    /// transition (or a threshold crossing, with --alert-op/--alert-threshold)
+    /// instead of printing results once. Requires --exec.
+    #[arg(long)]
+    alert: bool,
+
+    /// Poll cadence for --alert (and its threshold hold duration), e.g.
+    /// "1m", "30s", "1h". Default: 1m.
+    #[arg(long, default_value = "1m")]
+    window: String,
+
+    /// Shell command to run when --alert fires; the fired rows are piped
+    /// to its stdin, one per line.
+    #[arg(long)]
+    exec: Option<String>,
+
+    /// Comparison operator for --alert's EmitMode::Threshold (e.g. ">=");
+    /// requires --alert-threshold. Without this pair, --alert uses
+    /// EmitMode::OnChange. Threshold mode requires the alert SQL to be a
+    /// range-vector query (e.g. "... RANGE 10 seconds ...").
+    #[arg(long)]
+    alert_op: Option<String>,
+
+    /// Threshold value for --alert's EmitMode::Threshold; requires
+    /// --alert-op.
+    #[arg(long)]
+    alert_threshold: Option<f64>,
 }
 
 fn main() {
@@ -104,6 +132,32 @@ fn run(args: &Args) -> io::Result<()> {
     }
 
     let highlight = args.highlight.as_deref().map(resolve_highlight_expr);
+
+    if args.alert {
+        let exec = args.exec.as_deref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "--alert requires --exec")
+        })?;
+        let window = parse_duration_str(&args.window)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let mode = resolve_emit_mode(args.alert_op.as_deref(), args.alert_threshold)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let path = match args.files.as_slice() {
+            [path] => path,
+            [] => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--alert requires a file argument (stdin can't be a standing query)",
+                ))
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--alert supports exactly one file",
+                ))
+            }
+        };
+        return run_alert(path, &sql, window, mode, exec);
+    }
 
     if args.tui {
         if args.files.is_empty() {
@@ -231,6 +285,129 @@ fn run_follow(path: &Path, sql: &str, tail: usize, highlight: Option<&str>) -> i
         printed = result.rows.len();
     }
 
+    Ok(())
+}
+
+/// Parse a duration like "1m", "30s", "1h", "2d" (or a bare number of
+/// seconds) -- `std::time::Duration` has no string parser of its own, and
+/// this is a small, dependency-free case rather than pulling in a crate
+/// for four suffixes.
+fn parse_duration_str(s: &str) -> Result<std::time::Duration, String> {
+    let s = s.trim();
+    let (num, unit): (&str, &str) = match s.find(|c: char| !c.is_ascii_digit()) {
+        Some(idx) => s.split_at(idx),
+        None => (s, "s"),
+    };
+    let amount: u64 = num
+        .parse()
+        .map_err(|_| format!("invalid duration '{s}' (expected e.g. '1m', '30s', '1h')"))?;
+    let secs = match unit.trim().to_ascii_lowercase().as_str() {
+        "s" | "sec" | "secs" | "second" | "seconds" => amount,
+        "m" | "min" | "mins" | "minute" | "minutes" => amount.saturating_mul(60),
+        "h" | "hr" | "hrs" | "hour" | "hours" => amount.saturating_mul(3600),
+        "d" | "day" | "days" => amount.saturating_mul(86400),
+        other => return Err(format!("unrecognized duration unit '{other}' in '{s}'")),
+    };
+    Ok(std::time::Duration::from_secs(secs))
+}
+
+/// Parse a comparison operator string into `db_core`'s `BinaryOp`, for
+/// `--alert-op`.
+fn parse_binary_op(s: &str) -> Result<BinaryOp, String> {
+    match s.trim() {
+        ">" => Ok(BinaryOp::Gt),
+        ">=" => Ok(BinaryOp::Ge),
+        "<" => Ok(BinaryOp::Lt),
+        "<=" => Ok(BinaryOp::Le),
+        "=" | "==" => Ok(BinaryOp::Eq),
+        "!=" | "<>" => Ok(BinaryOp::Ne),
+        other => Err(format!(
+            "unrecognized --alert-op '{other}' (expected one of > >= < <= = !=)"
+        )),
+    }
+}
+
+/// Resolve `--alert`'s `EmitMode` from the optional `--alert-op`/
+/// `--alert-threshold` pair: both present selects `Threshold`, both
+/// absent selects `OnChange`, one without the other is an error.
+fn resolve_emit_mode(op: Option<&str>, threshold: Option<f64>) -> Result<EmitMode, String> {
+    match (op, threshold) {
+        (Some(op), Some(threshold)) => Ok(EmitMode::Threshold {
+            op: parse_binary_op(op)?,
+            threshold,
+        }),
+        (None, None) => Ok(EmitMode::OnChange),
+        _ => Err("--alert-op and --alert-threshold must be given together".to_string()),
+    }
+}
+
+/// Run `sql` as a standing query against `path`, executing `exec` on each
+/// fire. Reuses the same notify-based watcher pattern as `--follow`/the
+/// TUI: on each qualifying filesystem event, `engine.refresh()` then
+/// `standing_query.poll()` -- db-core owns no scheduler, the caller (this
+/// loop) decides when to poll.
+fn run_alert(
+    path: &Path,
+    sql: &str,
+    window: std::time::Duration,
+    mode: EmitMode,
+    exec: &str,
+) -> io::Result<()> {
+    use notify::{RecursiveMode, Watcher};
+    use std::sync::mpsc;
+
+    let mut engine = open_engine(path)?;
+    let mut standing_query =
+        StandingQuery::new(&engine, sql, mode, window, window).map_err(engine_err)?;
+
+    if let Some(event) = standing_query.poll(&mut engine).map_err(engine_err)? {
+        exec_alert(exec, &event.result)?;
+    }
+
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |res| {
+        let _ = tx.send(res);
+    })
+    .map_err(|e| io::Error::other(e.to_string()))?;
+    watcher
+        .watch(path, RecursiveMode::NonRecursive)
+        .map_err(|e| io::Error::other(e.to_string()))?;
+
+    for res in rx {
+        let event = res.map_err(|e| io::Error::other(e.to_string()))?;
+        if !event.kind.is_modify() && !event.kind.is_create() {
+            continue;
+        }
+
+        engine.refresh().map_err(engine_err)?;
+        if let Some(event) = standing_query.poll(&mut engine).map_err(engine_err)? {
+            exec_alert(exec, &event.result)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Run `exec` as a shell command, piping `result`'s rows to its stdin
+/// (one formatted line each, reusing `format_row`/`print_rows`'s shape).
+fn exec_alert(exec: &str, result: &QueryResult) -> io::Result<()> {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let raw_idx = result.columns.iter().position(|c| c == "raw");
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(exec)
+        .stdin(Stdio::piped())
+        .spawn()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        for row in &result.rows {
+            let _ = writeln!(stdin, "{}", format_row(row, raw_idx));
+        }
+    }
+
+    child.wait()?;
     Ok(())
 }
 
@@ -1315,6 +1492,7 @@ mod tui {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn format_row_uses_raw_column_when_present() {
@@ -1496,6 +1674,85 @@ mod tests {
         // prefix) -- passed straight to compile_predicate untouched.
         let expr = resolve_highlight_expr("message LIKE '%oom%'");
         assert_eq!(expr, "message LIKE '%oom%'");
+    }
+
+    #[test]
+    fn parse_duration_bare_number_is_seconds() {
+        assert_eq!(parse_duration_str("30").unwrap(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn parse_duration_seconds_suffix() {
+        assert_eq!(parse_duration_str("45s").unwrap(), Duration::from_secs(45));
+    }
+
+    #[test]
+    fn parse_duration_minutes_suffix() {
+        assert_eq!(parse_duration_str("1m").unwrap(), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn parse_duration_hours_suffix() {
+        assert_eq!(parse_duration_str("2h").unwrap(), Duration::from_secs(7200));
+    }
+
+    #[test]
+    fn parse_duration_days_suffix() {
+        assert_eq!(
+            parse_duration_str("1d").unwrap(),
+            Duration::from_secs(86400)
+        );
+    }
+
+    #[test]
+    fn parse_duration_rejects_unknown_unit() {
+        let err = parse_duration_str("5x").unwrap_err();
+        assert!(err.contains('x'));
+    }
+
+    #[test]
+    fn parse_duration_rejects_non_numeric_amount() {
+        assert!(parse_duration_str("abc").is_err());
+    }
+
+    #[test]
+    fn parse_binary_op_recognizes_all_operators() {
+        assert_eq!(parse_binary_op(">").unwrap(), BinaryOp::Gt);
+        assert_eq!(parse_binary_op(">=").unwrap(), BinaryOp::Ge);
+        assert_eq!(parse_binary_op("<").unwrap(), BinaryOp::Lt);
+        assert_eq!(parse_binary_op("<=").unwrap(), BinaryOp::Le);
+        assert_eq!(parse_binary_op("=").unwrap(), BinaryOp::Eq);
+        assert_eq!(parse_binary_op("==").unwrap(), BinaryOp::Eq);
+        assert_eq!(parse_binary_op("!=").unwrap(), BinaryOp::Ne);
+        assert_eq!(parse_binary_op("<>").unwrap(), BinaryOp::Ne);
+    }
+
+    #[test]
+    fn parse_binary_op_rejects_unrecognized() {
+        assert!(parse_binary_op("~=").is_err());
+    }
+
+    #[test]
+    fn resolve_emit_mode_defaults_to_on_change() {
+        assert_eq!(resolve_emit_mode(None, None).unwrap(), EmitMode::OnChange);
+    }
+
+    #[test]
+    fn resolve_emit_mode_builds_threshold_from_pair() {
+        let mode = resolve_emit_mode(Some(">="), Some(3.0)).unwrap();
+        assert_eq!(
+            mode,
+            EmitMode::Threshold {
+                op: BinaryOp::Ge,
+                threshold: 3.0
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_emit_mode_rejects_mismatched_pair() {
+        assert!(resolve_emit_mode(Some(">="), None).is_err());
+        assert!(resolve_emit_mode(None, Some(3.0)).is_err());
     }
 
     #[test]
