@@ -898,6 +898,9 @@ mod tui {
         highlight: Option<CompiledPredicate>,
         highlight_enabled: bool,
         editing_highlight: bool,
+        /// When true, the list displays newest-first (top-down) instead of
+        /// the natural oldest-first order; toggled per pane via 'R'.
+        reverse: bool,
         status: Option<String>,
         watch_rx: mpsc::Receiver<notify::Result<notify::Event>>,
         _watcher: notify::RecommendedWatcher,
@@ -937,10 +940,22 @@ mod tui {
                 highlight: None,
                 highlight_enabled: false,
                 editing_highlight: false,
+                reverse: false,
                 status: None,
                 watch_rx: rx,
                 _watcher: watcher,
             })
+        }
+
+        /// The display position of the newest row, given `len` rows:
+        /// index 0 (top) in reverse mode, `len - 1` (bottom) otherwise.
+        /// `0` for an empty result either way.
+        fn latest_index(&self, len: usize) -> usize {
+            if self.reverse || len == 0 {
+                0
+            } else {
+                len - 1
+            }
         }
 
         /// Non-blocking drain of this pane's file watcher; returns true if
@@ -969,16 +984,17 @@ mod tui {
         fn requery(&mut self, follow_tail: bool) -> io::Result<()> {
             match self.engine.run_query(&self.sql) {
                 Ok(result) => {
-                    let was_at_end = follow_tail
+                    let latest_before = self.latest_index(self.result.rows.len());
+                    let was_at_latest = follow_tail
                         && self
                             .list_state
                             .selected()
-                            .is_none_or(|i| i + 1 >= self.result.rows.len());
+                            .is_none_or(|i| i == latest_before);
                     self.result = result;
                     self.list_state = ListState::default();
                     if !self.result.rows.is_empty() {
-                        let selected = if was_at_end {
-                            self.result.rows.len() - 1
+                        let selected = if was_at_latest {
+                            self.latest_index(self.result.rows.len())
                         } else {
                             0
                         };
@@ -1073,6 +1089,13 @@ mod tui {
                     }
                 }
                 KeyCode::Char('r') => self.requery(true)?,
+                KeyCode::Char('R') => {
+                    self.reverse = !self.reverse;
+                    if !self.result.rows.is_empty() {
+                        let idx = self.latest_index(self.result.rows.len());
+                        self.list_state.select(Some(idx));
+                    }
+                }
                 _ => {}
             }
             Ok(())
@@ -1114,31 +1137,32 @@ mod tui {
                 .bg(Color::Yellow)
                 .fg(Color::Black)
                 .add_modifier(Modifier::BOLD);
-            let items: Vec<ListItem> = self
-                .result
-                .rows
-                .iter()
-                .map(|row| {
-                    let text = format_row(row, raw_idx);
-                    if self.row_is_highlighted(row) {
-                        ListItem::new(text).style(highlight_style)
-                    } else {
-                        ListItem::new(text)
-                    }
-                })
-                .collect();
+            let to_item = |row: &Vec<Cell>| {
+                let text = format_row(row, raw_idx);
+                if self.row_is_highlighted(row) {
+                    ListItem::new(text).style(highlight_style)
+                } else {
+                    ListItem::new(text)
+                }
+            };
+            let items: Vec<ListItem> = if self.reverse {
+                self.result.rows.iter().rev().map(to_item).collect()
+            } else {
+                self.result.rows.iter().map(to_item).collect()
+            };
 
             let name = self
                 .path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| self.path.to_string_lossy().into_owned());
+            let order_tag = if self.reverse { " [newest-first]" } else { "" };
             let title = self
                 .result
                 .scope_report
                 .as_ref()
-                .map(|r| format!("{name} — {}", format_scope_report(r)))
-                .unwrap_or(name);
+                .map(|r| format!("{name}{order_tag} — {}", format_scope_report(r)))
+                .unwrap_or_else(|| format!("{name}{order_tag}"));
 
             let list = List::new(items)
                 .block(
@@ -1153,7 +1177,7 @@ mod tui {
             let filter_title = if self.editing_filter {
                 "filter (Enter to apply, Esc to cancel)"
             } else {
-                "filter (/ edit, j/k move, Tab pane, x close, q quit)"
+                "filter (/ edit, j/k move, R reverse, Tab pane, x close, q quit)"
             };
             let filter_body = self
                 .status
@@ -1393,6 +1417,49 @@ mod tui {
                 app.panes[1].list_state.selected(),
                 other_selected,
                 "unfocused pane's selection must not change"
+            );
+        }
+
+        #[test]
+        fn reverse_toggle_flips_render_order_and_jumps_to_latest() {
+            let mut app = one_pane_app();
+            let len = app.panes[0].result.rows.len();
+            assert!(len > 1, "fixture needs multiple rows for this test");
+            assert_eq!(app.panes[0].list_state.selected(), Some(len - 1));
+
+            assert!(!app.handle_key(KeyCode::Char('R')).unwrap());
+            let pane = &app.panes[0];
+            assert!(pane.reverse);
+            assert_eq!(
+                pane.list_state.selected(),
+                Some(0),
+                "toggling reverse should jump the view to the latest row (index 0 in reverse mode)"
+            );
+
+            // Toggling back returns to non-reverse "latest is the last index".
+            assert!(!app.handle_key(KeyCode::Char('R')).unwrap());
+            let pane = &app.panes[0];
+            assert!(!pane.reverse);
+            assert_eq!(pane.list_state.selected(), Some(len - 1));
+        }
+
+        #[test]
+        fn reverse_mode_keeps_newest_row_at_index_zero_after_follow_tail_requery() {
+            let mut app = one_pane_app();
+            app.panes[0].reverse = true;
+            app.panes[0].list_state.select(Some(0));
+
+            // Simulate a live-append refresh (follow_tail = true) by
+            // re-running the same query; row count doesn't actually change
+            // here (no new data was written), but this exercises the
+            // reverse-aware "was at latest -> stay at latest" path that a
+            // real appended line would hit.
+            app.panes[0].requery(true).unwrap();
+
+            assert_eq!(
+                app.panes[0].list_state.selected(),
+                Some(0),
+                "reverse mode's 'latest' position is index 0, must stay there across a follow-tail requery"
             );
         }
 
