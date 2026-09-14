@@ -1291,6 +1291,13 @@ mod tui {
                 Box::new(self.result.rows.iter())
             };
 
+            // Extra items pushed for the expanded row's fields, if any --
+            // used below as `scroll_padding` so the widget's auto-scroll
+            // (which otherwise only guarantees the *selected* summary line
+            // itself is visible) also pulls the detail lines into view
+            // instead of leaving them clipped off the bottom of the pane.
+            let mut expanded_field_count = 0usize;
+
             let mut items: Vec<ListItem> = Vec::new();
             for (display_idx, row) in rows_in_display_order.enumerate() {
                 let expand = self.detail_open && selected_display_idx == Some(display_idx);
@@ -1304,7 +1311,9 @@ mod tui {
                 items.push(summary_item);
 
                 if expand {
-                    for line in self.field_lines_for(row) {
+                    let field_lines = self.field_lines_for(row);
+                    expanded_field_count = field_lines.len();
+                    for line in field_lines {
                         items.push(ListItem::new(format!("    -+ {line}")).style(detail_style));
                     }
                 }
@@ -1330,7 +1339,8 @@ mod tui {
                         .border_style(border_style)
                         .title(title),
                 )
-                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+                .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+                .scroll_padding(expanded_field_count);
             frame.render_stateful_widget(list, list_area, &mut self.list_state);
 
             let filter_title = if self.editing_filter {
