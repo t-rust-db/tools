@@ -92,7 +92,7 @@ it stays oldest-first regardless.
 Press `d` to expand the currently selected row inline, accordion-style:
 every column/value pair (except the raw line, already shown on the
 row's own summary line) appears directly beneath it as extra dim-styled
-lines prefixed `-+`, and the selected row itself gets a `-` prefix.
+lines prefixed `+-`, and the selected row itself gets a `-` prefix.
 There's no separate panel or border — the list simply grows to fit the
 extra lines. `j`/`k` while it's open moves the selection and the
 expansion follows, updating the shown fields live. Close it with `d`
