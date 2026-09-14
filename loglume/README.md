@@ -77,6 +77,16 @@ plain CLI's `--follow` output is a real scrolling terminal stream, which
 can't retroactively insert new lines above older ones, so it stays
 oldest-first regardless.
 
+## Detail pane (TUI)
+
+Press `d` to open a detail pane for the currently selected row: the full
+raw log line plus every column/value pair (not just what fits on the
+list's one-line rendering), in a panel below the highlight bar. Opening
+it shrinks the list's height rather than covering it — everything stays
+visible. `j`/`k` while it's open moves the selection and updates the
+shown fields live. Close it with `d` again, or `Esc` (which closes the
+detail pane first rather than quitting, even in a single-pane session).
+
 ## Alerts (standing queries)
 
 `--alert` turns the resolved filter/SQL into a standing query: instead of
