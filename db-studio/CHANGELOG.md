@@ -2,6 +2,16 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.12.0] - 2026-09-14
+
+### Added
+
+- **Real `F3` opcode dump for cross-mode queries** (db-core#382/#387/#388, follow-up to #54): db-core now ships `engine::resolve::CrossModeEngine`, a real `Engine` impl for a stream/SQLite join with its own `explain_opcodes` -- `refresh_opcodes` uses it instead of the placeholder "not available for cross-mode joins" message #54 shipped with. `OpcodeSection` also gained a `lane` field (which physical engine executes that section) picked up transparently via the bumped dependency.
+
+### Changed
+
+- Bumped `db-core` to v0.91.0: adds the `ScanSource` opcode (cross-mode joins now compile their build side into the VM's own opcode program rather than materializing it in Rust before execution) and SQLite-as-driving-side support for cross-mode joins (db-core#371) -- not yet wired into db-studio's own routing, which still only triggers cross-mode dispatch when the *active* file is a stream file.
+
 ## [0.11.0] - 2026-09-13
 
 ### Added

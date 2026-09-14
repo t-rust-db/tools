@@ -73,6 +73,7 @@ mod tests {
     fn sample() -> Vec<OpcodeSection> {
         vec![OpcodeSection {
             label: "main".to_string(),
+            lane: "row",
             rows: vec![OpcodeRow {
                 addr: 0,
                 opcode: "Init".to_string(),
