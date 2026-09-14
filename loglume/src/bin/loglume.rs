@@ -9,7 +9,8 @@
 
 use clap::Parser;
 use loglume::{
-    Cell, Engine, EngineError, Facility, QueryResult, ScopeReport, Severity, StreamEngine,
+    Cell, CompiledPredicate, Engine, EngineError, Facility, QueryResult, ScopeReport, Severity,
+    StreamEngine,
 };
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -52,6 +53,12 @@ struct Args {
     /// Save the resolved filter/SQL under this name for later use as "@name"
     #[arg(long)]
     save_filter: Option<String>,
+
+    /// Mark matching lines distinctly (bold/highlighted) without hiding
+    /// non-matching ones -- restrict (--filter) narrows, this annotates.
+    /// Accepts loglume's short forms or any db-core boolean expression.
+    #[arg(long)]
+    highlight: Option<String>,
 }
 
 fn main() {
@@ -96,6 +103,8 @@ fn run(args: &Args) -> io::Result<()> {
         cfg.save()?;
     }
 
+    let highlight = args.highlight.as_deref().map(resolve_highlight_expr);
+
     if args.tui {
         if args.files.is_empty() {
             return Err(io::Error::new(
@@ -114,13 +123,13 @@ fn run(args: &Args) -> io::Result<()> {
                     "--follow requires a file argument (stdin can't be followed)",
                 ));
             }
-            run_stdin(&sql, args.tail)
+            run_stdin(&sql, args.tail, highlight.as_deref())
         }
         [path] => {
             if args.follow {
-                run_follow(path, &sql, args.tail)
+                run_follow(path, &sql, args.tail, highlight.as_deref())
             } else {
-                run_once(path, &sql, args.tail)
+                run_once(path, &sql, args.tail, highlight.as_deref())
             }
         }
         _ => Err(io::Error::new(
@@ -128,6 +137,15 @@ fn run(args: &Args) -> io::Result<()> {
             "multiple files require --tui (side-by-side panes)",
         )),
     }
+}
+
+/// Resolve a `--highlight` expression: try loglume's short-form parser
+/// first (reusing the exact same fragment loglume's own filters use), and
+/// fall back to passing the expression straight to `compile_predicate` as
+/// a raw boolean expression (e.g. referencing `message`/`raw`/tier-3
+/// fields the short forms don't cover) -- db-core validates it either way.
+fn resolve_highlight_expr(expr: &str) -> String {
+    parse_where_clause(expr).unwrap_or_else(|_| expr.to_string())
 }
 
 pub(crate) fn engine_err(e: EngineError) -> io::Error {
@@ -138,14 +156,25 @@ pub(crate) fn open_engine(path: &Path) -> io::Result<StreamEngine> {
     StreamEngine::open(path).map_err(engine_err)
 }
 
-fn run_once(path: &Path, sql: &str, tail: usize) -> io::Result<()> {
+fn compile_highlight(
+    engine: &impl Engine,
+    highlight: Option<&str>,
+) -> io::Result<Option<CompiledPredicate>> {
+    highlight
+        .map(|expr| engine.compile_predicate(expr))
+        .transpose()
+        .map_err(engine_err)
+}
+
+fn run_once(path: &Path, sql: &str, tail: usize, highlight: Option<&str>) -> io::Result<()> {
     let mut engine = open_engine(path)?;
+    let predicate = compile_highlight(&engine, highlight)?;
     let result = engine.run_query(sql).map_err(engine_err)?;
-    print_result(&result, tail);
+    print_result(&result, tail, predicate.as_ref());
     Ok(())
 }
 
-fn run_stdin(sql: &str, tail: usize) -> io::Result<()> {
+fn run_stdin(sql: &str, tail: usize, highlight: Option<&str>) -> io::Result<()> {
     use std::io::Read;
 
     let mut buffer = Vec::new();
@@ -153,18 +182,19 @@ fn run_stdin(sql: &str, tail: usize) -> io::Result<()> {
 
     let tmp_path = std::env::temp_dir().join(format!("loglume-stdin-{}.log", std::process::id()));
     std::fs::write(&tmp_path, &buffer)?;
-    let result = run_once(&tmp_path, sql, tail);
+    let result = run_once(&tmp_path, sql, tail, highlight);
     let _ = std::fs::remove_file(&tmp_path);
     result
 }
 
-fn run_follow(path: &Path, sql: &str, tail: usize) -> io::Result<()> {
+fn run_follow(path: &Path, sql: &str, tail: usize, highlight: Option<&str>) -> io::Result<()> {
     use notify::{RecursiveMode, Watcher};
     use std::sync::mpsc;
 
     let mut engine = open_engine(path)?;
+    let predicate = compile_highlight(&engine, highlight)?;
     let result = engine.run_query(sql).map_err(engine_err)?;
-    print_result(&result, tail);
+    print_result(&result, tail, predicate.as_ref());
     let mut printed = result.rows.len();
 
     let (tx, rx) = mpsc::channel();
@@ -196,7 +226,7 @@ fn run_follow(path: &Path, sql: &str, tail: usize) -> io::Result<()> {
             continue;
         }
 
-        print_rows(&result, printed);
+        print_rows(&result, printed, predicate.as_ref());
         print_footer(&result);
         printed = result.rows.len();
     }
@@ -204,24 +234,37 @@ fn run_follow(path: &Path, sql: &str, tail: usize) -> io::Result<()> {
     Ok(())
 }
 
-fn print_result(result: &QueryResult, tail: usize) {
+fn print_result(result: &QueryResult, tail: usize, highlight: Option<&CompiledPredicate>) {
     let start = if tail > 0 {
         result.rows.len().saturating_sub(tail)
     } else {
         0
     };
-    print_rows(result, start);
+    print_rows(result, start, highlight);
     print_footer(result);
 }
 
+/// ANSI bold + yellow background, and reset. Always emitted when
+/// `--highlight` matches a row -- restrict (`--filter`) narrows what's
+/// shown, this only marks it, same as `grep --color` layered on top.
+const HIGHLIGHT_ON: &str = "\x1b[1;43m";
+const HIGHLIGHT_OFF: &str = "\x1b[0m";
+
 /// Print rows starting at `start`, using the "raw" column if present.
-fn print_rows(result: &QueryResult, start: usize) {
+/// Rows matching `highlight` (if any) are marked, not hidden.
+fn print_rows(result: &QueryResult, start: usize, highlight: Option<&CompiledPredicate>) {
     let raw_idx = result.columns.iter().position(|c| c == "raw");
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
     for row in result.rows.iter().skip(start) {
-        let _ = writeln!(out, "{}", format_row(row, raw_idx));
+        let line = format_row(row, raw_idx);
+        let is_match = highlight.is_some_and(|p| p.eval(row, &result.columns).unwrap_or(false));
+        if is_match {
+            let _ = writeln!(out, "{HIGHLIGHT_ON}{line}{HIGHLIGHT_OFF}");
+        } else {
+            let _ = writeln!(out, "{line}");
+        }
     }
 }
 
@@ -357,9 +400,16 @@ fn parse_single_clause(filter: &str) -> Result<String, String> {
         for op in [">=", ">", "<=", "<", "="] {
             if let Some(level_str) = rest.strip_prefix(op) {
                 let level_str = level_str.trim();
-                Severity::parse(level_str)
+                let level = Severity::parse(level_str)
                     .ok_or_else(|| format!("unrecognized severity level '{level_str}'"))?;
-                return Ok(format!("severity {op} '{}'", level_str.to_uppercase()));
+                // Emit the numeric discriminant, not the quoted name: the
+                // name->number rewrite (`rewrite_severity_literals`) only
+                // runs inside StreamEngine::run_query's own pipeline, not
+                // in the generic compile_predicate path used by
+                // --highlight -- the numeric form works identically in
+                // both, so use it everywhere rather than maintain two
+                // fragment builders.
+                return Ok(format!("severity {op} {}", level as u8));
             }
         }
 
@@ -1094,31 +1144,61 @@ mod tests {
     #[test]
     fn severity_ge_rewrites_to_sql() {
         let sql = rewrite_filter_to_sql("severity >= WARN").expect("valid filter");
-        assert_eq!(sql, "SELECT * FROM log WHERE severity >= 'WARN'");
+        assert_eq!(
+            sql,
+            format!(
+                "SELECT * FROM log WHERE severity >= {}",
+                Severity::Warn as u8
+            )
+        );
     }
 
     #[test]
     fn severity_gt_rewrites_to_sql() {
         let sql = rewrite_filter_to_sql("severity > ERR").expect("valid filter");
-        assert_eq!(sql, "SELECT * FROM log WHERE severity > 'ERR'");
+        assert_eq!(
+            sql,
+            format!(
+                "SELECT * FROM log WHERE severity > {}",
+                Severity::Error as u8
+            )
+        );
     }
 
     #[test]
     fn severity_le_rewrites_to_sql() {
         let sql = rewrite_filter_to_sql("severity <= ERR").expect("valid filter");
-        assert_eq!(sql, "SELECT * FROM log WHERE severity <= 'ERR'");
+        assert_eq!(
+            sql,
+            format!(
+                "SELECT * FROM log WHERE severity <= {}",
+                Severity::Error as u8
+            )
+        );
     }
 
     #[test]
     fn severity_lt_rewrites_to_sql() {
         let sql = rewrite_filter_to_sql("severity < WARN").expect("valid filter");
-        assert_eq!(sql, "SELECT * FROM log WHERE severity < 'WARN'");
+        assert_eq!(
+            sql,
+            format!(
+                "SELECT * FROM log WHERE severity < {}",
+                Severity::Warn as u8
+            )
+        );
     }
 
     #[test]
     fn severity_eq_rewrites_to_sql() {
         let sql = rewrite_filter_to_sql("severity = WARN").expect("valid filter");
-        assert_eq!(sql, "SELECT * FROM log WHERE severity = 'WARN'");
+        assert_eq!(
+            sql,
+            format!(
+                "SELECT * FROM log WHERE severity = {}",
+                Severity::Warn as u8
+            )
+        );
     }
 
     #[test]
@@ -1139,7 +1219,10 @@ mod tests {
             rewrite_filter_to_sql("severity >= WARN AND facility = auth").expect("valid filter");
         assert_eq!(
             sql,
-            "SELECT * FROM log WHERE severity >= 'WARN' AND facility = 'auth'"
+            format!(
+                "SELECT * FROM log WHERE severity >= {} AND facility = 'auth'",
+                Severity::Warn as u8
+            )
         );
     }
 
@@ -1149,7 +1232,10 @@ mod tests {
             rewrite_filter_to_sql("severity >= WARN and facility = auth").expect("valid filter");
         assert_eq!(
             sql,
-            "SELECT * FROM log WHERE severity >= 'WARN' AND facility = 'auth'"
+            format!(
+                "SELECT * FROM log WHERE severity >= {} AND facility = 'auth'",
+                Severity::Warn as u8
+            )
         );
     }
 
@@ -1198,8 +1284,25 @@ mod tests {
         let sql = build_sql("severity >= WARN", Some("1h"), 10).expect("valid");
         assert_eq!(
             sql,
-            "SELECT * FROM log WHERE severity >= 'WARN' SINCE 1h LIMIT 10"
+            format!(
+                "SELECT * FROM log WHERE severity >= {} SINCE 1h LIMIT 10",
+                Severity::Warn as u8
+            )
         );
+    }
+
+    #[test]
+    fn resolve_highlight_expr_uses_short_form_when_recognized() {
+        let expr = resolve_highlight_expr("severity >= ERR");
+        assert_eq!(expr, format!("severity >= {}", Severity::Error as u8));
+    }
+
+    #[test]
+    fn resolve_highlight_expr_passes_through_raw_expression() {
+        // Not one of loglume's short forms (no "severity"/"facility"
+        // prefix) -- passed straight to compile_predicate untouched.
+        let expr = resolve_highlight_expr("message LIKE '%oom%'");
+        assert_eq!(expr, "message LIKE '%oom%'");
     }
 
     #[test]

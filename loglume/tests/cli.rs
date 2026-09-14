@@ -237,7 +237,7 @@ fn save_filter_persists_and_is_reusable_via_at_name() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "myerr = \"SELECT * FROM log WHERE severity >= 'WARN'\"",
+            "myerr = \"SELECT * FROM log WHERE severity >= 13\"",
         ));
 
     let direct = Command::cargo_bin("loglume")
@@ -276,4 +276,58 @@ fn unknown_saved_filter_name_errors_clearly() {
             "no saved filter named 'doesnotexist'",
         ));
     let _ = std::fs::remove_dir_all(&xdg);
+}
+
+#[test]
+fn highlight_marks_matching_lines_without_hiding_others() {
+    // A broad filter (matches nearly everything) with a narrow highlight:
+    // both the highlighted and non-highlighted lines must still appear.
+    let assert = Command::cargo_bin("loglume")
+        .unwrap()
+        .args([
+            "severity >= DEBUG",
+            "--highlight",
+            "severity >= ERR",
+            SAMPLE_LOG,
+        ])
+        .assert()
+        .success();
+    let output = assert.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let total_lines = stdout.lines().count();
+    let highlighted_lines = stdout.lines().filter(|l| l.contains("\x1b[1;43m")).count();
+    assert!(
+        highlighted_lines > 0,
+        "expected at least one highlighted line"
+    );
+    assert!(
+        highlighted_lines < total_lines,
+        "expected some lines to remain unhighlighted (restrict vs. annotate)"
+    );
+}
+
+#[test]
+fn highlight_accepts_a_raw_expression_not_just_short_forms() {
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args([
+            "severity >= DEBUG",
+            "--highlight",
+            "message LIKE '%oom%'",
+            SAMPLE_LOG,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\x1b[1;43m"));
+}
+
+#[test]
+fn without_highlight_no_ansi_codes_appear() {
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["severity >= DEBUG", SAMPLE_LOG])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\x1b[").not());
 }
