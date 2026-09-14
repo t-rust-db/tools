@@ -79,13 +79,15 @@ oldest-first regardless.
 
 ## Detail pane (TUI)
 
-Press `d` to open a detail pane for the currently selected row: the full
-raw log line plus every column/value pair (not just what fits on the
-list's one-line rendering), in a panel below the highlight bar. Opening
-it shrinks the list's height rather than covering it — everything stays
-visible. `j`/`k` while it's open moves the selection and updates the
-shown fields live. Close it with `d` again, or `Esc` (which closes the
-detail pane first rather than quitting, even in a single-pane session).
+Press `d` to expand the currently selected row inline, accordion-style:
+every column/value pair (except the raw line, already shown on the
+row's own summary line) appears directly beneath it as extra dim-styled
+lines prefixed `-+`, and the selected row itself gets a `-` prefix.
+There's no separate panel or border — the list simply grows to fit the
+extra lines. `j`/`k` while it's open moves the selection and the
+expansion follows, updating the shown fields live. Close it with `d`
+again, or `Esc` (which closes the expansion first rather than quitting,
+even in a single-pane session).
 
 ## Alerts (standing queries)
 

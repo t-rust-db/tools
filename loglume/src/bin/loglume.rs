@@ -1132,7 +1132,9 @@ mod tui {
 
         /// The row currently under the selection cursor, accounting for
         /// `reverse` (display index 0 maps to the *last* actual row when
-        /// reversed, not the first).
+        /// reversed, not the first). Test-only: production code always
+        /// has the row in hand already while iterating in `draw`.
+        #[cfg(test)]
         fn selected_row(&self) -> Option<&Vec<Cell>> {
             let display_idx = self.list_state.selected()?;
             let len = self.result.rows.len();
@@ -1144,55 +1146,32 @@ mod tui {
             self.result.rows.get(actual_idx)
         }
 
-        /// One display line per field of the selected row for the detail
-        /// pane (#30): the full raw line first (if a `raw` column exists),
-        /// then every other column name/value pair.
-        fn detail_lines(&self) -> Vec<String> {
-            let Some(row) = self.selected_row() else {
-                return vec!["(no row selected)".to_string()];
-            };
-            let mut lines = Vec::new();
-            if let Some(idx) = self.result.columns.iter().position(|c| c == "raw") {
-                if let Some(cell) = row.get(idx) {
-                    lines.push(format!("raw: {}", format_cell(cell)));
-                }
-            }
-            for (name, cell) in self.result.columns.iter().zip(row.iter()) {
-                if name == "raw" {
-                    continue;
-                }
-                lines.push(format!("{name}: {}", format_cell(cell)));
-            }
-            lines
+        /// One "name: value" line per field of `row`, excluding `raw` --
+        /// the raw text is already shown inline on the row's own summary
+        /// line when expanded (#33), not repeated as a field.
+        fn field_lines_for(&self, row: &[Cell]) -> Vec<String> {
+            self.result
+                .columns
+                .iter()
+                .zip(row.iter())
+                .filter(|(name, _)| name.as_str() != "raw")
+                .map(|(name, cell)| format!("{name}: {}", format_cell(cell)))
+                .collect()
         }
 
         fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, focused: bool) {
-            let mut constraints = vec![
-                Constraint::Min(1),
-                Constraint::Length(3),
-                Constraint::Length(3),
-            ];
-            if self.detail_open {
-                // +2 for the block's own top/bottom border.
-                let height = u16::try_from(self.result.columns.len())
-                    .unwrap_or(u16::MAX)
-                    .saturating_add(2)
-                    .clamp(4, 16);
-                constraints.push(Constraint::Length(height));
-            }
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints(constraints)
+                .constraints([
+                    Constraint::Min(1),
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                ])
                 .split(area);
             let (Some(&list_area), Some(&filter_area), Some(&highlight_area)) =
                 (chunks.first(), chunks.get(1), chunks.get(2))
             else {
                 return;
-            };
-            let detail_area = if self.detail_open {
-                chunks.get(3).copied()
-            } else {
-                None
             };
 
             let border_style = if focused {
@@ -1206,19 +1185,42 @@ mod tui {
                 .bg(Color::Yellow)
                 .fg(Color::Black)
                 .add_modifier(Modifier::BOLD);
-            let to_item = |row: &Vec<Cell>| {
-                let text = format_row(row, raw_idx);
-                if self.row_is_highlighted(row) {
-                    ListItem::new(text).style(highlight_style)
-                } else {
-                    ListItem::new(text)
-                }
-            };
-            let items: Vec<ListItem> = if self.reverse {
-                self.result.rows.iter().rev().map(to_item).collect()
+            // Detail rows (#33) are inline, not a separate bordered panel:
+            // distinct dim coloring plus a "-+" prefix is what sets them
+            // apart from ordinary list rows.
+            let detail_style = Style::default().fg(Color::DarkGray);
+
+            // Only the currently selected row can be expanded (detail
+            // follows the selection cursor, same as before #33's rework),
+            // so injecting its extra field rows right after it can never
+            // shift any *earlier* row's display position -- the selected
+            // row's own index within `items` still matches
+            // `self.list_state.selected()` set by select_relative/etc.
+            let selected_display_idx = self.list_state.selected();
+            let rows_in_display_order: Box<dyn Iterator<Item = &Vec<Cell>>> = if self.reverse {
+                Box::new(self.result.rows.iter().rev())
             } else {
-                self.result.rows.iter().map(to_item).collect()
+                Box::new(self.result.rows.iter())
             };
+
+            let mut items: Vec<ListItem> = Vec::new();
+            for (display_idx, row) in rows_in_display_order.enumerate() {
+                let expand = self.detail_open && selected_display_idx == Some(display_idx);
+                let text = format_row(row, raw_idx);
+                let summary_text = if expand { format!("- {text}") } else { text };
+                let summary_item = if self.row_is_highlighted(row) {
+                    ListItem::new(summary_text).style(highlight_style)
+                } else {
+                    ListItem::new(summary_text)
+                };
+                items.push(summary_item);
+
+                if expand {
+                    for line in self.field_lines_for(row) {
+                        items.push(ListItem::new(format!("    -+ {line}")).style(detail_style));
+                    }
+                }
+            }
 
             let name = self
                 .path
@@ -1282,17 +1284,6 @@ mod tui {
                     .title(highlight_title),
             );
             frame.render_widget(highlight_widget, highlight_area);
-
-            if let Some(area) = detail_area {
-                let text = self.detail_lines().join("\n");
-                let detail_widget = Paragraph::new(text).block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(border_style)
-                        .title("detail (d/Esc to close)"),
-                );
-                frame.render_widget(detail_widget, area);
-            }
         }
 
         /// Whether `row` matches the active highlight predicate, if any is
@@ -1521,18 +1512,18 @@ mod tui {
         }
 
         #[test]
-        fn detail_lines_show_raw_and_every_other_column() {
+        fn field_lines_show_every_column_except_raw() {
             let app = one_pane_app();
             let pane = &app.panes[0];
-            let lines = pane.detail_lines();
+            let row = pane.selected_row().expect("a selected row");
+            let lines = pane.field_lines_for(row);
 
             assert!(
-                lines[0].starts_with("raw: "),
-                "raw line must come first: {lines:?}"
+                lines.iter().all(|l| !l.starts_with("raw: ")),
+                "raw must not be repeated as a field line: {lines:?}"
             );
-            let raw_idx = pane.result.columns.iter().position(|c| c == "raw").unwrap();
-            for (i, name) in pane.result.columns.iter().enumerate() {
-                if i == raw_idx {
+            for name in &pane.result.columns {
+                if name == "raw" {
                     continue;
                 }
                 assert!(
@@ -1543,14 +1534,16 @@ mod tui {
         }
 
         #[test]
-        fn detail_lines_follow_selection_across_j_k() {
+        fn field_lines_follow_selection_across_j_k() {
             let mut app = one_pane_app();
-            let before = app.panes[0].detail_lines();
+            let row_before = app.panes[0].selected_row().unwrap().clone();
+            let before = app.panes[0].field_lines_for(&row_before);
             assert!(!app.handle_key(KeyCode::Char('k')).unwrap());
-            let after = app.panes[0].detail_lines();
+            let row_after = app.panes[0].selected_row().unwrap().clone();
+            let after = app.panes[0].field_lines_for(&row_after);
             assert_ne!(
                 before, after,
-                "moving the selection should change which row's detail is shown"
+                "moving the selection should change which row's fields are shown"
             );
         }
 
