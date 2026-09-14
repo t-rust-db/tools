@@ -48,6 +48,10 @@ struct Args {
     /// Open an interactive TUI viewer instead of printing to stdout
     #[arg(long)]
     tui: bool,
+
+    /// Save the resolved filter/SQL under this name for later use as "@name"
+    #[arg(long)]
+    save_filter: Option<String>,
 }
 
 fn main() {
@@ -62,8 +66,35 @@ fn main() {
 }
 
 fn run(args: &Args) -> io::Result<()> {
-    let sql = build_sql(&args.filter, args.scope.as_deref(), args.max_lines)
+    // "loglume config" (no file args) is special-cased as a subcommand
+    // rather than a real filter -- "config" was never a valid filter
+    // expression before, so this isn't a behavior change for anyone.
+    if args.filter == "config" && args.files.is_empty() {
+        return config::print_resolved();
+    }
+
+    let cfg = config::Config::load()?;
+
+    let filter = if let Some(name) = args.filter.strip_prefix('@') {
+        cfg.filters.get(name).cloned().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("no saved filter named '{name}' (see `loglume config`)"),
+            )
+        })?
+    } else {
+        args.filter.clone()
+    };
+
+    let scope = args.scope.clone().or_else(|| cfg.tui.default_scope.clone());
+    let sql = build_sql(&filter, scope.as_deref(), args.max_lines)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+
+    if let Some(name) = &args.save_filter {
+        let mut cfg = cfg;
+        cfg.filters.insert(name.clone(), sql.clone());
+        cfg.save()?;
+    }
 
     if args.tui {
         if args.files.is_empty() {
@@ -400,6 +431,155 @@ fn facility_keyword(fac: Facility) -> &'static str {
         Facility::Local5 => "local5",
         Facility::Local6 => "local6",
         Facility::Local7 => "local7",
+    }
+}
+
+/// XDG-based configuration (`config.toml`): TUI defaults and saved filters.
+mod config {
+    use serde::{Deserialize, Serialize};
+    use std::collections::BTreeMap;
+    use std::io;
+    use std::path::PathBuf;
+
+    #[derive(Debug, Default, Serialize, Deserialize)]
+    pub(crate) struct Config {
+        #[serde(default)]
+        pub(crate) tui: TuiConfig,
+        /// Saved filter/query name -> resolved SQL, referenced as `@name`.
+        #[serde(default)]
+        pub(crate) filters: BTreeMap<String, String>,
+    }
+
+    #[derive(Debug, Default, Serialize, Deserialize)]
+    pub(crate) struct TuiConfig {
+        /// Fallback for `--scope` when not given on the command line.
+        #[serde(default)]
+        pub(crate) default_scope: Option<String>,
+        /// Reserved for future key-remapping; not yet applied by the TUI.
+        #[serde(default)]
+        pub(crate) keybindings: BTreeMap<String, String>,
+    }
+
+    impl Config {
+        /// Load the config from its resolved path, or defaults if absent.
+        pub(crate) fn load() -> io::Result<Self> {
+            let path = config_path();
+            match std::fs::read_to_string(&path) {
+                Ok(contents) => toml::from_str(&contents)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string())),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
+                Err(e) => Err(e),
+            }
+        }
+
+        pub(crate) fn save(&self) -> io::Result<()> {
+            let path = config_path();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let text = toml::to_string_pretty(self)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+            std::fs::write(path, text)
+        }
+    }
+
+    /// `$XDG_CONFIG_HOME/loglume/config.toml`, falling back to
+    /// `$HOME/.config/loglume/config.toml` per the XDG Base Directory Spec
+    /// (used verbatim, regardless of platform).
+    pub(crate) fn config_path() -> PathBuf {
+        config_dir().join("config.toml")
+    }
+
+    fn config_dir() -> PathBuf {
+        resolve_config_dir(
+            std::env::var("XDG_CONFIG_HOME").ok(),
+            std::env::var("HOME").ok(),
+        )
+    }
+
+    /// Pure XDG Base Directory resolution, taking the two relevant env
+    /// vars as plain arguments instead of reading the process environment
+    /// directly -- keeps this testable without mutating global env state
+    /// (`std::env::set_var` in tests is a known thread-safety hazard when
+    /// tests run in parallel).
+    fn resolve_config_dir(xdg_config_home: Option<String>, home: Option<String>) -> PathBuf {
+        if let Some(dir) = xdg_config_home {
+            if !dir.is_empty() {
+                return PathBuf::from(dir).join("loglume");
+            }
+        }
+        let home = home.unwrap_or_else(|| ".".to_string());
+        PathBuf::from(home).join(".config").join("loglume")
+    }
+
+    /// `loglume config`: print the resolved config path and its contents.
+    pub(crate) fn print_resolved() -> io::Result<()> {
+        let path = config_path();
+        let cfg = Config::load()?;
+        let text = toml::to_string_pretty(&cfg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+        println!("# {}", path.display());
+        print!("{text}");
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn xdg_config_home_wins_when_set() {
+            let dir = resolve_config_dir(
+                Some("/custom/config".to_string()),
+                Some("/home/me".to_string()),
+            );
+            assert_eq!(dir, PathBuf::from("/custom/config/loglume"));
+        }
+
+        #[test]
+        fn falls_back_to_home_dot_config_when_xdg_unset() {
+            let dir = resolve_config_dir(None, Some("/home/me".to_string()));
+            assert_eq!(dir, PathBuf::from("/home/me/.config/loglume"));
+        }
+
+        #[test]
+        fn falls_back_to_home_dot_config_when_xdg_empty() {
+            let dir = resolve_config_dir(Some(String::new()), Some("/home/me".to_string()));
+            assert_eq!(dir, PathBuf::from("/home/me/.config/loglume"));
+        }
+
+        #[test]
+        fn default_config_has_no_filters() {
+            let cfg = Config::default();
+            assert!(cfg.filters.is_empty());
+            assert!(cfg.tui.default_scope.is_none());
+        }
+
+        #[test]
+        fn config_round_trips_through_toml() {
+            let mut cfg = Config::default();
+            cfg.tui.default_scope = Some("1h".to_string());
+            cfg.filters
+                .insert("myerr".to_string(), "SELECT * FROM log".to_string());
+
+            let text = toml::to_string_pretty(&cfg).expect("serialize");
+            let parsed: Config = toml::from_str(&text).expect("deserialize");
+
+            assert_eq!(parsed.tui.default_scope, Some("1h".to_string()));
+            assert_eq!(
+                parsed.filters.get("myerr").map(String::as_str),
+                Some("SELECT * FROM log")
+            );
+        }
+
+        #[test]
+        fn missing_config_file_loads_as_default() {
+            // toml::from_str("") parses to an empty document, which with
+            // #[serde(default)] on every field is equivalent to Config::default().
+            let parsed: Config = toml::from_str("").expect("empty toml is valid");
+            assert!(parsed.filters.is_empty());
+            assert!(parsed.tui.default_scope.is_none());
+        }
     }
 }
 
