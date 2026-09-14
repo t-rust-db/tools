@@ -444,3 +444,90 @@ fn alert_fires_exec_on_a_new_matching_line() {
         "expected --exec to have received the fired row, got: {fired:?}"
     );
 }
+
+// Test corpus generators (#3): gen_access.py, gen_jsonl.py, gen_logfmt.py.
+// These confirm loglume's format auto-detection actually parses each
+// generated fixture correctly, not just that the generator scripts run.
+
+const ACCESS_LOG: &str = "tests/logs/access.log";
+const JSONL_LOG: &str = "tests/logs/sample.jsonl";
+const DOCKER_JSONL_LOG: &str = "tests/logs/docker.jsonl";
+const SPARSE_JSONL_LOG: &str = "tests/logs/sparse.jsonl";
+const LOGFMT_LOG: &str = "tests/logs/sample.logfmt";
+
+#[test]
+fn access_log_fixture_is_auto_detected_and_queryable() {
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["select count(*) from log", ACCESS_LOG])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("200"));
+}
+
+#[test]
+fn access_log_status_column_is_queryable() {
+    // Confirms `status` was typed as an Int column (CLF has no severity,
+    // per db-core's own ADR-0018 amendment -- status is what's queried).
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["select count(*) from log where status >= 500", ACCESS_LOG])
+        .assert()
+        .success();
+}
+
+#[test]
+fn jsonl_fixture_is_auto_detected_and_queryable() {
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["select count(*) from log", JSONL_LOG])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("200"));
+}
+
+#[test]
+fn jsonl_docker_wrapped_fixture_is_queryable() {
+    // The container-unwrap path (#319): each line is a Docker json-file
+    // envelope wrapping a syslog payload, not a plain Pino record.
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["select count(*) from log", DOCKER_JSONL_LOG])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("50"));
+}
+
+#[test]
+fn jsonl_sparse_fixture_is_queryable() {
+    // Heterogeneous per-line key sets (extra random fields on ~30% of
+    // lines) -- exercises FieldStore's schema-on-read handling.
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["select count(*) from log", SPARSE_JSONL_LOG])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("100"));
+}
+
+#[test]
+fn logfmt_fixture_is_auto_detected_and_queryable() {
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["select count(*) from log", LOGFMT_LOG])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("200"));
+}
+
+#[test]
+fn logfmt_service_field_is_queryable() {
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args([
+            "select count(*) from log where service = 'auth'",
+            LOGFMT_LOG,
+        ])
+        .assert()
+        .success();
+}

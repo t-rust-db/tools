@@ -34,6 +34,11 @@ start: ## Start interactive log viewer (alias for run with sample)
 gen-logs: ## Generate test logs: make gen-logs N=1000
 	python3 tests/logs/gen_syslog.py --seed 42 -n $(or $(N),1000) -o tests/logs/sample.log
 	python3 tests/logs/gen_syslog.py --seed 99 -n 200 -o tests/logs/sample2.log
+	python3 tests/logs/gen_access.py --seed 42 -n 200 -o tests/logs/access.log
+	python3 tests/logs/gen_jsonl.py --seed 42 -n 200 -o tests/logs/sample.jsonl
+	python3 tests/logs/gen_jsonl.py --seed 42 -n 50 --docker -o tests/logs/docker.jsonl
+	python3 tests/logs/gen_jsonl.py --seed 42 -n 100 --sparse -o tests/logs/sparse.jsonl
+	python3 tests/logs/gen_logfmt.py --seed 42 -n 200 -o tests/logs/sample.logfmt
 
 version: ## Show version
 	@cargo run -- --version

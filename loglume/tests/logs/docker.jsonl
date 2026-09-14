@@ -1,0 +1,50 @@
+{"log": "<134>Sep 10 08:00:00 web01 app[8296]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:00.000Z"}
+{"log": "<134>Sep 10 08:00:01 web02 nginx[15628]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:01.483Z"}
+{"log": "<134>Sep 10 08:00:02 web01 app[49540]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:02.956Z"}
+{"log": "<134>Sep 10 08:00:04 web01 nginx[2952]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:04.137Z"}
+{"log": "<134>Sep 10 08:00:04 web01 app[40453]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:04.574Z"}
+{"log": "<134>Sep 10 08:00:05 gateway app[43590]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:05.696Z"}
+{"log": "<134>Sep 10 08:00:06 web01 app[19231]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:06.137Z"}
+{"log": "<134>Sep 10 08:00:07 gateway nginx[46753]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:07.655Z"}
+{"log": "<134>Sep 10 08:00:08 worker01 nginx[15110]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:08.335Z"}
+{"log": "<134>Sep 10 08:00:08 worker01 app[7338]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:08.540Z"}
+{"log": "<134>Sep 10 08:00:10 web01 app[18335]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:10.235Z"}
+{"log": "<134>Sep 10 08:00:11 gateway app[9180]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:11.694Z"}
+{"log": "<134>Sep 10 08:00:11 worker01 app[55355]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:11.852Z"}
+{"log": "<134>Sep 10 08:00:13 web01 app[5558]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:13.006Z"}
+{"log": "<134>Sep 10 08:00:14 web02 app[6229]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:14.329Z"}
+{"log": "<134>Sep 10 08:00:16 gateway app[19217]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:16.062Z"}
+{"log": "<134>Sep 10 08:00:17 worker01 app[11659]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:17.333Z"}
+{"log": "<134>Sep 10 08:00:18 web01 app[18496]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:18.044Z"}
+{"log": "<134>Sep 10 08:00:19 web02 nginx[36005]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:19.262Z"}
+{"log": "<134>Sep 10 08:00:19 web02 app[18691]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:19.589Z"}
+{"log": "<134>Sep 10 08:00:20 web01 nginx[16010]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:20.958Z"}
+{"log": "<134>Sep 10 08:00:22 web01 app[18546]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:22.568Z"}
+{"log": "<134>Sep 10 08:00:22 worker01 app[58433]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:22.990Z"}
+{"log": "<134>Sep 10 08:00:23 gateway app[26928]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:23.415Z"}
+{"log": "<134>Sep 10 08:00:23 worker01 nginx[17162]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:23.701Z"}
+{"log": "<134>Sep 10 08:00:25 gateway app[59839]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:25.195Z"}
+{"log": "<134>Sep 10 08:00:25 gateway nginx[34392]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:25.919Z"}
+{"log": "<134>Sep 10 08:00:26 web01 nginx[57433]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:26.101Z"}
+{"log": "<134>Sep 10 08:00:26 gateway nginx[52909]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:26.407Z"}
+{"log": "<134>Sep 10 08:00:27 gateway app[26009]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:27.600Z"}
+{"log": "<134>Sep 10 08:00:28 web01 app[57412]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:28.658Z"}
+{"log": "<134>Sep 10 08:00:30 worker01 nginx[45676]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:30.018Z"}
+{"log": "<134>Sep 10 08:00:31 worker01 app[8310]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:31.556Z"}
+{"log": "<134>Sep 10 08:00:32 worker01 app[1212]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:32.425Z"}
+{"log": "<134>Sep 10 08:00:34 web01 nginx[34271]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:34.369Z"}
+{"log": "<134>Sep 10 08:00:36 web02 app[56159]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:36.110Z"}
+{"log": "<134>Sep 10 08:00:36 web01 nginx[36348]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:36.416Z"}
+{"log": "<134>Sep 10 08:00:37 web01 app[2276]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:37.613Z"}
+{"log": "<134>Sep 10 08:00:39 web01 app[16692]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:39.472Z"}
+{"log": "<134>Sep 10 08:00:39 web01 app[63059]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:39.953Z"}
+{"log": "<134>Sep 10 08:00:40 web01 app[54478]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:40.125Z"}
+{"log": "<134>Sep 10 08:00:42 web02 app[51189]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:42.081Z"}
+{"log": "<134>Sep 10 08:00:42 web02 app[63052]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:42.337Z"}
+{"log": "<134>Sep 10 08:00:42 web02 app[28730]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:42.868Z"}
+{"log": "<134>Sep 10 08:00:44 web02 app[46211]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:44.725Z"}
+{"log": "<134>Sep 10 08:00:46 worker01 app[45019]: worker started\n", "stream": "stdout", "time": "2026-09-10T08:00:46.151Z"}
+{"log": "<134>Sep 10 08:00:47 web01 app[30588]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:47.028Z"}
+{"log": "<134>Sep 10 08:00:47 web01 nginx[23156]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:47.523Z"}
+{"log": "<134>Sep 10 08:00:48 web02 nginx[39564]: GET /api/orders 200\n", "stream": "stdout", "time": "2026-09-10T08:00:48.700Z"}
+{"log": "<134>Sep 10 08:00:48 web01 app[42359]: job failed: connection refused\n", "stream": "stdout", "time": "2026-09-10T08:00:48.714Z"}
