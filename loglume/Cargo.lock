@@ -371,8 +371,8 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.90.0"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.90.0#eba356ee091152303981dd27d75b09071e5b5c7c"
+version = "0.91.0"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.91.0#b638f41593296a71eae5bee279ff38dfd199cc96"
 
 [[package]]
 name = "deltae"

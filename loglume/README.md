@@ -24,7 +24,7 @@ default_scope = "1h"
 
 # Saved filters/queries, referenced on the command line as "@name".
 [filters]
-myerr = "SELECT * FROM log WHERE severity >= 'WARN'"
+myerr = "SELECT * FROM log WHERE severity >= 13"
 ```
 
 ### Saved filters
@@ -41,3 +41,18 @@ Reuse it later with the `@name` syntax in place of a filter expression:
 ```bash
 loglume "@myerr" app.log
 ```
+
+## Highlighting
+
+`--filter` (the positional filter argument) *restricts* what's shown.
+`--highlight <expr>` *annotates* instead: matching lines are marked (bold,
+highlighted background) without hiding the rest — the CLI equivalent of
+`grep --color` layered on top of the existing filter.
+
+```bash
+# Show everything at INFO or above, but make ERROR-or-worse lines stand out
+loglume "severity >= INFO" --highlight "severity >= ERR" app.log
+```
+
+`--highlight` accepts loglume's short forms (`severity`/`facility`) or any
+boolean expression `db-core` understands (e.g. `message LIKE '%oom%'`).
