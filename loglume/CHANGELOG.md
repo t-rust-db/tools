@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-14
+
+### Added
+- Emacs/readline-style line editing in filter (`/`) and highlight (`?`) text boxes (#42)
+- Support for cursor movement: Ctrl-A/E (line start/end), Ctrl-B/F + arrows (char movement), Alt-B/F (word movement)
+- Support for line editing: Ctrl-K (kill to end), Ctrl-U (kill to start), Ctrl-W/Alt-Backspace (delete word), Ctrl-D (delete char)
+- Visible cursor position in filter and highlight bars (reverse-styled character)
+
+### Changed
+- Filter and highlight edit blocks now use a shared line editing helper for consistency
+
 ## [0.2.0] - 2026-09-14
 
 ### Changed
