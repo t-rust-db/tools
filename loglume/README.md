@@ -22,6 +22,15 @@ default_scope = "1h"
 # Reserved for future key-remapping support; not yet applied by the TUI.
 [tui.keybindings]
 
+# TUI color overrides. Every key is optional -- unset keys fall back to
+# the built-in Catppuccin Mocha defaults shown below.
+[tui.theme]
+border_focused = "#89b4fa"  # focused pane's border (blue)
+highlight_bg   = "#f9e2af"  # --highlight match background (yellow)
+highlight_fg   = "#1e1e2e"  # --highlight match text (base)
+detail_dim     = "#6c7086"  # expanded detail field lines (overlay1)
+status_error   = "#f38ba8"  # filter/highlight compile-error text (red)
+
 # Saved filters/queries, referenced on the command line as "@name".
 [filters]
 myerr = "SELECT * FROM log WHERE severity >= 13"
