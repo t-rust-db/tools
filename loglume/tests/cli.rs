@@ -189,3 +189,91 @@ fn sample2_fixture_has_distinct_content_from_sample() {
         .count();
     assert_ne!(sample_lines, sample2_lines);
 }
+
+/// A tempdir to use as an isolated XDG_CONFIG_HOME, so these tests never
+/// touch the real user's config. Set via `.env(...)` on the child process
+/// only -- never `std::env::set_var` on this test process itself, which
+/// would be a thread-safety hazard under parallel test execution.
+fn isolated_xdg_config_home(test_name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "loglume-xdg-test-{test_name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+#[test]
+fn config_subcommand_prints_resolved_path_and_defaults() {
+    let xdg = isolated_xdg_config_home("print-defaults");
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["config"])
+        .env("XDG_CONFIG_HOME", &xdg)
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains(xdg.to_str().unwrap())
+                .and(predicate::str::contains("[filters]")),
+        );
+    let _ = std::fs::remove_dir_all(&xdg);
+}
+
+#[test]
+fn save_filter_persists_and_is_reusable_via_at_name() {
+    let xdg = isolated_xdg_config_home("save-and-reuse");
+
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["severity >= WARN", "--save-filter", "myerr", SAMPLE_LOG])
+        .env("XDG_CONFIG_HOME", &xdg)
+        .assert()
+        .success();
+
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["config"])
+        .env("XDG_CONFIG_HOME", &xdg)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "myerr = \"SELECT * FROM log WHERE severity >= 'WARN'\"",
+        ));
+
+    let direct = Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["severity >= WARN", SAMPLE_LOG])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let via_saved = Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["@myerr", SAMPLE_LOG])
+        .env("XDG_CONFIG_HOME", &xdg)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert_eq!(direct, via_saved);
+    let _ = std::fs::remove_dir_all(&xdg);
+}
+
+#[test]
+fn unknown_saved_filter_name_errors_clearly() {
+    let xdg = isolated_xdg_config_home("unknown-name");
+    Command::cargo_bin("loglume")
+        .unwrap()
+        .args(["@doesnotexist", SAMPLE_LOG])
+        .env("XDG_CONFIG_HOME", &xdg)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "no saved filter named 'doesnotexist'",
+        ));
+    let _ = std::fs::remove_dir_all(&xdg);
+}
