@@ -461,7 +461,7 @@ pub(crate) fn format_row(row: &[Cell], raw_idx: Option<usize>) -> String {
     }
 }
 
-fn format_cell(cell: &Cell) -> String {
+pub(crate) fn format_cell(cell: &Cell) -> String {
     match cell {
         Cell::Null => String::new(),
         Cell::Int(i) => i.to_string(),
@@ -818,8 +818,8 @@ mod config {
 /// understands loglume's filter syntax.
 mod tui {
     use super::{
-        engine_err, format_row, format_scope_report, open_engine, resolve_highlight_expr,
-        rewrite_filter_to_sql,
+        engine_err, format_cell, format_row, format_scope_report, open_engine,
+        resolve_highlight_expr, rewrite_filter_to_sql,
     };
     use crossterm::event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
@@ -909,6 +909,10 @@ mod tui {
         filter_status: Option<String>,
         /// Highlight-compile error, shown in the highlight bar.
         highlight_status: Option<String>,
+        /// When true, a detail pane shows the full raw line and every
+        /// column/value pair for the selected row, shrinking the list to
+        /// make room (#30). Toggled per pane via 'd'.
+        detail_open: bool,
         watch_rx: mpsc::Receiver<notify::Result<notify::Event>>,
         _watcher: notify::RecommendedWatcher,
     }
@@ -950,6 +954,7 @@ mod tui {
                 reverse: false,
                 filter_status: None,
                 highlight_status: None,
+                detail_open: false,
                 watch_rx: rx,
                 _watcher: watcher,
             })
@@ -1108,6 +1113,8 @@ mod tui {
                         self.list_state.select(Some(idx));
                     }
                 }
+                KeyCode::Char('d') => self.detail_open = !self.detail_open,
+                KeyCode::Esc if self.detail_open => self.detail_open = false,
                 _ => {}
             }
             Ok(())
@@ -1123,19 +1130,69 @@ mod tui {
             self.list_state.select(Some(next as usize));
         }
 
+        /// The row currently under the selection cursor, accounting for
+        /// `reverse` (display index 0 maps to the *last* actual row when
+        /// reversed, not the first).
+        fn selected_row(&self) -> Option<&Vec<Cell>> {
+            let display_idx = self.list_state.selected()?;
+            let len = self.result.rows.len();
+            let actual_idx = if self.reverse {
+                len.checked_sub(1)?.checked_sub(display_idx)?
+            } else {
+                display_idx
+            };
+            self.result.rows.get(actual_idx)
+        }
+
+        /// One display line per field of the selected row for the detail
+        /// pane (#30): the full raw line first (if a `raw` column exists),
+        /// then every other column name/value pair.
+        fn detail_lines(&self) -> Vec<String> {
+            let Some(row) = self.selected_row() else {
+                return vec!["(no row selected)".to_string()];
+            };
+            let mut lines = Vec::new();
+            if let Some(idx) = self.result.columns.iter().position(|c| c == "raw") {
+                if let Some(cell) = row.get(idx) {
+                    lines.push(format!("raw: {}", format_cell(cell)));
+                }
+            }
+            for (name, cell) in self.result.columns.iter().zip(row.iter()) {
+                if name == "raw" {
+                    continue;
+                }
+                lines.push(format!("{name}: {}", format_cell(cell)));
+            }
+            lines
+        }
+
         fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, focused: bool) {
+            let mut constraints = vec![
+                Constraint::Min(1),
+                Constraint::Length(3),
+                Constraint::Length(3),
+            ];
+            if self.detail_open {
+                // +2 for the block's own top/bottom border.
+                let height = u16::try_from(self.result.columns.len())
+                    .unwrap_or(u16::MAX)
+                    .saturating_add(2)
+                    .clamp(4, 16);
+                constraints.push(Constraint::Length(height));
+            }
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(1),
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                ])
+                .constraints(constraints)
                 .split(area);
             let (Some(&list_area), Some(&filter_area), Some(&highlight_area)) =
                 (chunks.first(), chunks.get(1), chunks.get(2))
             else {
                 return;
+            };
+            let detail_area = if self.detail_open {
+                chunks.get(3).copied()
+            } else {
+                None
             };
 
             let border_style = if focused {
@@ -1189,7 +1246,7 @@ mod tui {
             let filter_title = if self.editing_filter {
                 "filter (Enter to apply, Esc to cancel)"
             } else {
-                "filter (/ edit, j/k move, R reverse, Tab pane, x close, q quit)"
+                "filter (/ edit, j/k move, d detail, R reverse, Tab pane, x close, q quit)"
             };
             let filter_body = self
                 .filter_status
@@ -1225,6 +1282,17 @@ mod tui {
                     .title(highlight_title),
             );
             frame.render_widget(highlight_widget, highlight_area);
+
+            if let Some(area) = detail_area {
+                let text = self.detail_lines().join("\n");
+                let detail_widget = Paragraph::new(text).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border_style)
+                        .title("detail (d/Esc to close)"),
+                );
+                frame.render_widget(detail_widget, area);
+            }
         }
 
         /// Whether `row` matches the active highlight predicate, if any is
@@ -1284,6 +1352,7 @@ mod tui {
                 .panes
                 .get(self.focused)
                 .is_some_and(|p| p.editing_filter || p.editing_highlight);
+            let detail_open = self.panes.get(self.focused).is_some_and(|p| p.detail_open);
 
             // Pane-management keys are only intercepted outside of filter/
             // highlight editing, so '/'- or '?'-mode can still type
@@ -1294,7 +1363,10 @@ mod tui {
                     // With a single pane, Esc quits (matches the original
                     // single-pane behavior); with multiple panes it's a no-op
                     // here since closing/quitting has dedicated keys below.
-                    KeyCode::Esc if self.panes.len() == 1 => return Ok(true),
+                    // Detail pane open takes priority: Esc closes it first
+                    // (via the fall-through to pane.handle_key below)
+                    // rather than quitting/no-op-ing.
+                    KeyCode::Esc if self.panes.len() == 1 && !detail_open => return Ok(true),
                     KeyCode::Tab if self.panes.len() > 1 => {
                         self.focused = (self.focused + 1) % self.panes.len();
                         return Ok(false);
@@ -1420,6 +1492,66 @@ mod tui {
 
             let mut single = one_pane_app();
             assert!(single.handle_key(KeyCode::Esc).unwrap());
+        }
+
+        #[test]
+        fn d_toggles_detail_pane() {
+            let mut app = one_pane_app();
+            assert!(!app.panes[0].detail_open);
+            assert!(!app.handle_key(KeyCode::Char('d')).unwrap());
+            assert!(app.panes[0].detail_open);
+            assert!(!app.handle_key(KeyCode::Char('d')).unwrap());
+            assert!(!app.panes[0].detail_open);
+        }
+
+        #[test]
+        fn esc_closes_detail_pane_instead_of_quitting_single_pane_app() {
+            let mut app = one_pane_app();
+            app.handle_key(KeyCode::Char('d')).unwrap();
+            assert!(app.panes[0].detail_open);
+
+            // With detail open, Esc must close it, not quit the app -- even
+            // though a single pane would normally quit on Esc.
+            assert!(!app.handle_key(KeyCode::Esc).unwrap());
+            assert!(!app.panes[0].detail_open);
+
+            // Detail now closed: Esc goes back to its normal single-pane
+            // quit behavior.
+            assert!(app.handle_key(KeyCode::Esc).unwrap());
+        }
+
+        #[test]
+        fn detail_lines_show_raw_and_every_other_column() {
+            let app = one_pane_app();
+            let pane = &app.panes[0];
+            let lines = pane.detail_lines();
+
+            assert!(
+                lines[0].starts_with("raw: "),
+                "raw line must come first: {lines:?}"
+            );
+            let raw_idx = pane.result.columns.iter().position(|c| c == "raw").unwrap();
+            for (i, name) in pane.result.columns.iter().enumerate() {
+                if i == raw_idx {
+                    continue;
+                }
+                assert!(
+                    lines.iter().any(|l| l.starts_with(&format!("{name}: "))),
+                    "expected a line for column '{name}', got: {lines:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn detail_lines_follow_selection_across_j_k() {
+            let mut app = one_pane_app();
+            let before = app.panes[0].detail_lines();
+            assert!(!app.handle_key(KeyCode::Char('k')).unwrap());
+            let after = app.panes[0].detail_lines();
+            assert_ne!(
+                before, after,
+                "moving the selection should change which row's detail is shown"
+            );
         }
 
         #[test]
