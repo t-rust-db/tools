@@ -901,7 +901,14 @@ mod tui {
         /// When true, the list displays newest-first (top-down) instead of
         /// the natural oldest-first order; toggled per pane via 'R'.
         reverse: bool,
-        status: Option<String>,
+        /// Query/filter error, shown in the filter bar (never the
+        /// highlight bar -- keeping these separate is the whole point:
+        /// mixing them up made a highlight-compile error render in the
+        /// filter bar while the highlight bar looked like nothing
+        /// happened).
+        filter_status: Option<String>,
+        /// Highlight-compile error, shown in the highlight bar.
+        highlight_status: Option<String>,
         watch_rx: mpsc::Receiver<notify::Result<notify::Event>>,
         _watcher: notify::RecommendedWatcher,
     }
@@ -941,7 +948,8 @@ mod tui {
                 highlight_enabled: false,
                 editing_highlight: false,
                 reverse: false,
-                status: None,
+                filter_status: None,
+                highlight_status: None,
                 watch_rx: rx,
                 _watcher: watcher,
             })
@@ -1000,10 +1008,10 @@ mod tui {
                         };
                         self.list_state.select(Some(selected));
                     }
-                    self.status = None;
+                    self.filter_status = None;
                 }
                 Err(e) => {
-                    self.status = Some(format!("query error: {e}"));
+                    self.filter_status = Some(format!("query error: {e}"));
                 }
             }
             Ok(())
@@ -1023,7 +1031,7 @@ mod tui {
                                 self.sql = sql;
                                 self.requery(false)?;
                             }
-                            Err(e) => self.status = Some(format!("filter error: {e}")),
+                            Err(e) => self.filter_status = Some(format!("filter error: {e}")),
                         }
                     }
                     KeyCode::Esc => {
@@ -1046,16 +1054,20 @@ mod tui {
                         if self.highlight_text.trim().is_empty() {
                             self.highlight = None;
                             self.highlight_enabled = false;
-                            self.status = None;
+                            self.highlight_status = None;
                         } else {
                             let expr = resolve_highlight_expr(&self.highlight_text);
                             match self.engine.compile_predicate(&expr).map_err(engine_err) {
                                 Ok(predicate) => {
                                     self.highlight = Some(predicate);
                                     self.highlight_enabled = true;
-                                    self.status = None;
+                                    self.highlight_status = None;
                                 }
-                                Err(e) => self.status = Some(format!("highlight error: {e}")),
+                                Err(e) => {
+                                    self.highlight = None;
+                                    self.highlight_enabled = false;
+                                    self.highlight_status = Some(format!("highlight error: {e}"));
+                                }
                             }
                         }
                     }
@@ -1180,7 +1192,7 @@ mod tui {
                 "filter (/ edit, j/k move, R reverse, Tab pane, x close, q quit)"
             };
             let filter_body = self
-                .status
+                .filter_status
                 .clone()
                 .unwrap_or_else(|| self.filter_text.clone());
             let input = Paragraph::new(filter_body).block(
@@ -1198,6 +1210,8 @@ mod tui {
             };
             let highlight_body = if self.editing_highlight {
                 self.highlight_text.clone()
+            } else if let Some(err) = &self.highlight_status {
+                err.clone()
             } else if self.highlight_text.is_empty() {
                 "(none)".to_string()
             } else {
@@ -1481,9 +1495,9 @@ mod tui {
             assert!(pane.highlight.is_some());
             assert!(pane.highlight_enabled);
             assert!(
-                pane.status.is_none(),
+                pane.highlight_status.is_none(),
                 "no error expected: {:?}",
-                pane.status
+                pane.highlight_status
             );
 
             let has_match = pane
@@ -1534,9 +1548,54 @@ mod tui {
             let pane = &app.panes[0];
             assert!(pane.highlight.is_none());
             assert!(pane
-                .status
+                .highlight_status
                 .as_deref()
                 .is_some_and(|s| s.contains("highlight error")));
+        }
+
+        #[test]
+        fn invalid_highlight_expression_does_not_pollute_the_filter_bar() {
+            // Regression test: a highlight compile error must show in the
+            // highlight bar's own status, never overwrite the filter bar's
+            // display of the active filter/SQL.
+            let mut app = one_pane_app();
+            let original_filter_text = app.panes[0].filter_text.clone();
+
+            app.handle_key(KeyCode::Char('?')).unwrap();
+            type_str(&mut app, "not a valid expression at all");
+            app.handle_key(KeyCode::Enter).unwrap();
+
+            let pane = &app.panes[0];
+            assert!(
+                pane.filter_status.is_none(),
+                "filter bar must be unaffected"
+            );
+            assert_eq!(pane.filter_text, original_filter_text);
+        }
+
+        #[test]
+        fn invalid_highlight_expression_clears_any_previously_compiled_highlight() {
+            let mut app = one_pane_app();
+            app.handle_key(KeyCode::Char('?')).unwrap();
+            type_str(&mut app, "severity >= ERR");
+            app.handle_key(KeyCode::Enter).unwrap();
+            assert!(app.panes[0].highlight.is_some());
+
+            // Now overwrite with a broken expression -- the stale compiled
+            // predicate from the previous valid one must not linger.
+            app.handle_key(KeyCode::Char('?')).unwrap();
+            for _ in 0.."severity >= ERR".len() {
+                app.handle_key(KeyCode::Backspace).unwrap();
+            }
+            type_str(&mut app, "not valid");
+            app.handle_key(KeyCode::Enter).unwrap();
+
+            let pane = &app.panes[0];
+            assert!(
+                pane.highlight.is_none(),
+                "stale predicate must be cleared on a new compile error"
+            );
+            assert!(!pane.highlight_enabled);
         }
 
         #[test]
