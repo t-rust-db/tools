@@ -843,9 +843,7 @@ mod tui {
         engine_err, format_cell, format_row, format_scope_report, open_engine,
         resolve_highlight_expr, rewrite_filter_to_sql,
     };
-    use crossterm::event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
-    };
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind};
     use crossterm::execute;
     use crossterm::terminal::{
         disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -942,17 +940,16 @@ mod tui {
     fn init_terminal() -> io::Result<Tui> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        // No EnableMouseCapture: the TUI has no mouse handling at all, and
+        // capturing mouse events disables the terminal's native click-drag
+        // text selection/copy for no benefit (#38).
+        execute!(stdout, EnterAlternateScreen)?;
         Terminal::new(CrosstermBackend::new(stdout))
     }
 
     fn restore_terminal(terminal: &mut Tui) -> io::Result<()> {
         disable_raw_mode()?;
-        execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        )?;
+        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         terminal.show_cursor()
     }
 
@@ -963,7 +960,7 @@ mod tui {
         let original = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let _ = disable_raw_mode();
-            let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+            let _ = execute!(io::stdout(), LeaveAlternateScreen);
             original(info);
         }));
     }
