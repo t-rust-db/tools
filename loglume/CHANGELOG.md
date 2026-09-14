@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-14
+
+### Added
+- Per-field history for filter (`/`) and highlight (`?`) expressions, persisted across sessions under `$XDG_CACHE_HOME/loglume/` (or `$HOME/.cache/loglume/`) (#43)
+- `Up`/`Down` while editing cycle backward/forward through that field's history, restoring the in-progress draft when paging back past the newest entry
+
 ## [0.3.0] - 2026-09-14
 
 ### Added

@@ -831,6 +831,196 @@ mod config {
     }
 }
 
+/// XDG-based cache: per-field filter/highlight expression history (#43).
+/// Separate from `config` above -- history is regenerable/non-essential
+/// state, not configuration, so it lives under the cache base dir per the
+/// XDG Base Directory Spec rather than alongside `config.toml`.
+mod cache {
+    use std::collections::HashSet;
+    use std::io;
+    use std::path::{Path, PathBuf};
+
+    const MAX_HISTORY_ENTRIES: usize = 200;
+
+    /// Most-recent-first, deduplicated history of past filter/highlight
+    /// expressions for one field, persisted as one entry per line (oldest
+    /// first) at a resolved path.
+    #[derive(Debug, Default, Clone)]
+    pub(crate) struct History {
+        entries: Vec<String>,
+    }
+
+    impl History {
+        /// Loads history from `path`, or an empty history if absent.
+        pub(crate) fn load(path: &Path) -> Self {
+            let raw = std::fs::read_to_string(path).unwrap_or_default();
+            let mut seen = HashSet::new();
+            let entries = raw
+                .lines()
+                .rev()
+                .map(str::to_string)
+                .filter(|line| seen.insert(line.clone()))
+                .collect();
+            Self { entries }
+        }
+
+        pub(crate) fn get(&self, pos: usize) -> Option<&str> {
+            self.entries.get(pos).map(String::as_str)
+        }
+
+        pub(crate) fn len(&self) -> usize {
+            self.entries.len()
+        }
+
+        pub(crate) fn is_empty(&self) -> bool {
+            self.entries.is_empty()
+        }
+
+        /// Appends `entry` as the most recent, if non-empty and different
+        /// from the current most-recent entry, then persists to `path`.
+        pub(crate) fn append(&mut self, path: &Path, entry: &str) -> io::Result<()> {
+            if entry.is_empty() || self.entries.first().map(String::as_str) == Some(entry) {
+                return Ok(());
+            }
+            self.entries.retain(|e| e != entry);
+            self.entries.insert(0, entry.to_string());
+            self.entries.truncate(MAX_HISTORY_ENTRIES);
+
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let text: String = self
+                .entries
+                .iter()
+                .rev()
+                .map(|e| format!("{e}\n"))
+                .collect();
+            std::fs::write(path, text)
+        }
+    }
+
+    /// `$XDG_CACHE_HOME/loglume/filter_history`, falling back to
+    /// `$HOME/.cache/loglume/filter_history` per the XDG Base Directory
+    /// Spec (used verbatim, regardless of platform).
+    pub(crate) fn filter_history_path() -> PathBuf {
+        cache_dir().join("filter_history")
+    }
+
+    /// Same resolution as [`filter_history_path`], for `?`-highlight
+    /// expressions instead of `/`-filter expressions.
+    pub(crate) fn highlight_history_path() -> PathBuf {
+        cache_dir().join("highlight_history")
+    }
+
+    fn cache_dir() -> PathBuf {
+        resolve_cache_dir(
+            std::env::var("XDG_CACHE_HOME").ok(),
+            std::env::var("HOME").ok(),
+        )
+    }
+
+    /// Pure XDG Base Directory resolution, mirroring
+    /// `config::resolve_config_dir` but for the *cache* base dir.
+    fn resolve_cache_dir(xdg_cache_home: Option<String>, home: Option<String>) -> PathBuf {
+        if let Some(dir) = xdg_cache_home {
+            if !dir.is_empty() {
+                return PathBuf::from(dir).join("loglume");
+            }
+        }
+        let home = home.unwrap_or_else(|| ".".to_string());
+        PathBuf::from(home).join(".cache").join("loglume")
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn xdg_cache_home_wins_when_set() {
+            let dir = resolve_cache_dir(
+                Some("/custom/cache".to_string()),
+                Some("/home/me".to_string()),
+            );
+            assert_eq!(dir, PathBuf::from("/custom/cache/loglume"));
+        }
+
+        #[test]
+        fn falls_back_to_home_dot_cache_when_xdg_unset() {
+            let dir = resolve_cache_dir(None, Some("/home/me".to_string()));
+            assert_eq!(dir, PathBuf::from("/home/me/.cache/loglume"));
+        }
+
+        #[test]
+        fn falls_back_to_home_dot_cache_when_xdg_empty() {
+            let dir = resolve_cache_dir(Some(String::new()), Some("/home/me".to_string()));
+            assert_eq!(dir, PathBuf::from("/home/me/.cache/loglume"));
+        }
+
+        fn temp_history_path(tag: &str) -> PathBuf {
+            std::env::temp_dir().join(format!(
+                "loglume-history-test-{tag}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or_default()
+            ))
+        }
+
+        #[test]
+        fn history_load_of_missing_file_is_empty() {
+            let path = temp_history_path("missing");
+            let history = History::load(&path);
+            assert!(history.is_empty());
+        }
+
+        #[test]
+        fn history_append_orders_most_recent_first_and_dedupes() {
+            let path = temp_history_path("append");
+            let mut history = History::load(&path);
+            history.append(&path, "a").unwrap();
+            history.append(&path, "b").unwrap();
+            history.append(&path, "a").unwrap(); // re-promote "a"
+
+            assert_eq!(history.len(), 2);
+            assert_eq!(history.get(0), Some("a"));
+            assert_eq!(history.get(1), Some("b"));
+
+            let reloaded = History::load(&path);
+            assert_eq!(reloaded.get(0), Some("a"));
+            assert_eq!(reloaded.get(1), Some("b"));
+            std::fs::remove_file(&path).ok();
+        }
+
+        #[test]
+        fn history_append_ignores_empty_and_immediate_repeat() {
+            let path = temp_history_path("repeat");
+            let mut history = History::load(&path);
+            history.append(&path, "").unwrap();
+            assert!(history.is_empty());
+            history.append(&path, "x").unwrap();
+            history.append(&path, "x").unwrap();
+            assert_eq!(history.len(), 1);
+            std::fs::remove_file(&path).ok();
+        }
+
+        #[test]
+        fn history_append_caps_entry_count() {
+            let path = temp_history_path("cap");
+            let mut history = History::load(&path);
+            for i in 0..(MAX_HISTORY_ENTRIES + 10) {
+                history.append(&path, &i.to_string()).unwrap();
+            }
+            assert_eq!(history.len(), MAX_HISTORY_ENTRIES);
+            assert_eq!(
+                history.get(0),
+                Some((MAX_HISTORY_ENTRIES + 9).to_string().as_str())
+            );
+            std::fs::remove_file(&path).ok();
+        }
+    }
+}
+
 /// Interactive TUI viewer (`--tui`).
 ///
 /// Reuses the same `StreamEngine`/SQL query path as the plain CLI: the
@@ -838,6 +1028,7 @@ mod config {
 /// function `--filter` uses, so there is exactly one place that
 /// understands loglume's filter syntax.
 mod tui {
+    use super::cache::{self, History};
     use super::config::ThemeConfig;
     use super::{
         engine_err, format_cell, format_row, format_scope_report, open_engine,
@@ -978,6 +1169,15 @@ mod tui {
         /// Cursor position within `filter_text`, in chars (not bytes).
         filter_cursor: usize,
         editing_filter: bool,
+        /// Applied filter expressions, most-recent-first, persisted under
+        /// the XDG cache dir (#43). Recalled via `Up`/`Down` while editing.
+        filter_history: History,
+        /// Position within `filter_history` while navigating (`None` when
+        /// not navigating, i.e. showing the in-progress `filter_draft`).
+        filter_history_pos: Option<usize>,
+        /// `filter_text` as it was before history navigation started, so
+        /// paging back past the newest entry restores it.
+        filter_draft: String,
         /// Restrict-vs-highlight (#4/#14): narrows via `sql`/`filter_text`
         /// above; this only marks matches, never hides anything.
         highlight_text: String,
@@ -986,6 +1186,10 @@ mod tui {
         highlight: Option<CompiledPredicate>,
         highlight_enabled: bool,
         editing_highlight: bool,
+        /// Same role as `filter_history`, for `?`-highlight expressions.
+        highlight_history: History,
+        highlight_history_pos: Option<usize>,
+        highlight_draft: String,
         /// When true, the list displays newest-first (top-down) instead of
         /// the natural oldest-first order; toggled per pane via 'R'.
         reverse: bool,
@@ -1057,6 +1261,38 @@ mod tui {
 
         *text = chars.into_iter().collect();
         true
+    }
+
+    /// Shell-style history recall while editing (#43): `direction` of `1`
+    /// (`Up`) moves toward older entries, `-1` (`Down`) toward newer ones.
+    /// `pos` is `None` while showing `*draft` (the in-progress text before
+    /// navigation started); moving `Down` past the newest entry restores it.
+    fn recall_history(
+        history: &History,
+        pos: &mut Option<usize>,
+        draft: &mut String,
+        text: &mut String,
+        cursor: &mut usize,
+        direction: isize,
+    ) {
+        let next_pos = match (*pos, direction) {
+            (None, 1) if !history.is_empty() => {
+                *draft = text.clone();
+                Some(0)
+            }
+            (None, _) => return, // no-op: not navigating, nothing to recall
+            (Some(p), 1) if p + 1 < history.len() => Some(p + 1),
+            (Some(p), -1) if p > 0 => Some(p - 1),
+            (Some(_), -1) => None,
+            (Some(p), _) => Some(p),
+        };
+
+        *pos = next_pos;
+        *text = match next_pos {
+            Some(p) => history.get(p).unwrap_or_default().to_string(),
+            None => draft.clone(),
+        };
+        *cursor = text.chars().count();
     }
 
     /// The cursor position after moving backward one word from `cursor`:
@@ -1147,11 +1383,17 @@ mod tui {
                 filter_text,
                 filter_cursor: 0,
                 editing_filter: false,
+                filter_history: History::load(&cache::filter_history_path()),
+                filter_history_pos: None,
+                filter_draft: String::new(),
                 highlight_text: String::new(),
                 highlight_cursor: 0,
                 highlight: None,
                 highlight_enabled: false,
                 editing_highlight: false,
+                highlight_history: History::load(&cache::highlight_history_path()),
+                highlight_history_pos: None,
+                highlight_draft: String::new(),
                 reverse: true,
                 filter_status: None,
                 highlight_status: None,
@@ -1233,6 +1475,9 @@ mod tui {
                 match code {
                     KeyCode::Enter => {
                         self.editing_filter = false;
+                        self.filter_history_pos = None;
+                        self.filter_history
+                            .append(&cache::filter_history_path(), self.filter_text.trim())?;
                         match rewrite_filter_to_sql(&self.filter_text) {
                             Ok(sql) => {
                                 self.sql = sql;
@@ -1243,7 +1488,28 @@ mod tui {
                     }
                     KeyCode::Esc => {
                         self.editing_filter = false;
+                        self.filter_history_pos = None;
                         self.filter_text = self.sql.clone();
+                    }
+                    KeyCode::Up => {
+                        recall_history(
+                            &self.filter_history,
+                            &mut self.filter_history_pos,
+                            &mut self.filter_draft,
+                            &mut self.filter_text,
+                            &mut self.filter_cursor,
+                            1,
+                        );
+                    }
+                    KeyCode::Down => {
+                        recall_history(
+                            &self.filter_history,
+                            &mut self.filter_history_pos,
+                            &mut self.filter_draft,
+                            &mut self.filter_text,
+                            &mut self.filter_cursor,
+                            -1,
+                        );
                     }
                     _ => {
                         edit_line(&mut self.filter_text, &mut self.filter_cursor, code, mods);
@@ -1256,6 +1522,9 @@ mod tui {
                 match code {
                     KeyCode::Enter => {
                         self.editing_highlight = false;
+                        self.highlight_history_pos = None;
+                        self.highlight_history
+                            .append(&cache::highlight_history_path(), self.highlight_text.trim())?;
                         if self.highlight_text.trim().is_empty() {
                             self.highlight = None;
                             self.highlight_enabled = false;
@@ -1276,7 +1545,30 @@ mod tui {
                             }
                         }
                     }
-                    KeyCode::Esc => self.editing_highlight = false,
+                    KeyCode::Esc => {
+                        self.editing_highlight = false;
+                        self.highlight_history_pos = None;
+                    }
+                    KeyCode::Up => {
+                        recall_history(
+                            &self.highlight_history,
+                            &mut self.highlight_history_pos,
+                            &mut self.highlight_draft,
+                            &mut self.highlight_text,
+                            &mut self.highlight_cursor,
+                            1,
+                        );
+                    }
+                    KeyCode::Down => {
+                        recall_history(
+                            &self.highlight_history,
+                            &mut self.highlight_history_pos,
+                            &mut self.highlight_draft,
+                            &mut self.highlight_text,
+                            &mut self.highlight_cursor,
+                            -1,
+                        );
+                    }
                     _ => {
                         edit_line(
                             &mut self.highlight_text,
@@ -2214,6 +2506,86 @@ mod tui {
             ));
             assert_eq!(text, "abc");
             assert_eq!(cursor, 1);
+        }
+
+        /// Builds a `History` with `entries` as most-recent-first, without
+        /// touching the real XDG cache dir: writes them oldest-first to a
+        /// throwaway temp file, then loads (which reverses the order).
+        fn history_of(entries: &[&str]) -> History {
+            let path = std::env::temp_dir().join(format!(
+                "loglume-recall-test-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or_default()
+            ));
+            let oldest_first = entries.iter().rev().copied().collect::<Vec<_>>().join("\n");
+            std::fs::write(&path, oldest_first + "\n").unwrap();
+            let history = History::load(&path);
+            std::fs::remove_file(&path).ok();
+            history
+        }
+
+        #[test]
+        fn recall_history_up_walks_toward_older_entries_saving_draft() {
+            let history = history_of(&["c", "b", "a"]);
+            let mut pos = None;
+            let mut draft = String::new();
+            let mut text = "typing".to_string();
+            let mut cursor = text.chars().count();
+
+            recall_history(&history, &mut pos, &mut draft, &mut text, &mut cursor, 1);
+            assert_eq!(text, "c");
+            assert_eq!(draft, "typing");
+            assert_eq!(cursor, 1);
+
+            recall_history(&history, &mut pos, &mut draft, &mut text, &mut cursor, 1);
+            assert_eq!(text, "b");
+
+            recall_history(&history, &mut pos, &mut draft, &mut text, &mut cursor, 1);
+            assert_eq!(text, "a");
+
+            // At the oldest entry, another Up is a no-op.
+            recall_history(&history, &mut pos, &mut draft, &mut text, &mut cursor, 1);
+            assert_eq!(text, "a");
+        }
+
+        #[test]
+        fn recall_history_down_walks_back_to_draft() {
+            let history = history_of(&["c", "b"]);
+            let mut pos = None;
+            let mut draft = String::new();
+            let mut text = "typing".to_string();
+            let mut cursor = text.chars().count();
+
+            recall_history(&history, &mut pos, &mut draft, &mut text, &mut cursor, 1);
+            recall_history(&history, &mut pos, &mut draft, &mut text, &mut cursor, 1);
+            assert_eq!(text, "b");
+
+            recall_history(&history, &mut pos, &mut draft, &mut text, &mut cursor, -1);
+            assert_eq!(text, "c");
+
+            recall_history(&history, &mut pos, &mut draft, &mut text, &mut cursor, -1);
+            assert_eq!(text, "typing");
+            assert_eq!(pos, None);
+
+            // Down with nothing to return to (not navigating) is a no-op.
+            recall_history(&history, &mut pos, &mut draft, &mut text, &mut cursor, -1);
+            assert_eq!(text, "typing");
+        }
+
+        #[test]
+        fn recall_history_up_is_a_no_op_with_empty_history() {
+            let history = History::default();
+            let mut pos = None;
+            let mut draft = String::new();
+            let mut text = "typing".to_string();
+            let mut cursor = text.chars().count();
+
+            recall_history(&history, &mut pos, &mut draft, &mut text, &mut cursor, 1);
+            assert_eq!(text, "typing");
+            assert_eq!(pos, None);
         }
 
         #[test]
