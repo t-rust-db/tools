@@ -199,7 +199,47 @@ fn run(args: &Args) -> io::Result<()> {
 /// a raw boolean expression (e.g. referencing `message`/`raw`/tier-3
 /// fields the short forms don't cover) -- db-core validates it either way.
 fn resolve_highlight_expr(expr: &str) -> String {
-    parse_where_clause(expr).unwrap_or_else(|_| expr.to_string())
+    parse_where_clause(expr).unwrap_or_else(|_| normalize_double_quoted_literals(expr))
+}
+
+/// Rewrites `"..."` spans in `expr` to `'...'` (#39). db-core's SQL grammar
+/// parses double quotes as a quoted *identifier* reference, not a string
+/// literal, which is a common footgun since most users expect `"..."` to
+/// mean a string literal (as it does in most other languages, JSON
+/// included) -- `tag = "kernel"` is silently read as "column `tag` equals
+/// column `kernel`", failing with a confusing "unknown column" error.
+/// Existing single-quoted spans are copied through untouched.
+fn normalize_double_quoted_literals(expr: &str) -> String {
+    let mut out = String::with_capacity(expr.len());
+    let mut chars = expr.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                out.push('\'');
+                for inner in chars.by_ref() {
+                    out.push(inner);
+                    if inner == '\'' {
+                        break;
+                    }
+                }
+            }
+            '"' => {
+                out.push('\'');
+                for inner in chars.by_ref() {
+                    if inner == '"' {
+                        break;
+                    }
+                    if inner == '\'' {
+                        out.push('\''); // escape embedded ' for SQL ('' inside '...')
+                    }
+                    out.push(inner);
+                }
+                out.push('\'');
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 pub(crate) fn engine_err(e: EngineError) -> io::Error {
@@ -558,7 +598,7 @@ fn build_sql(filter: &str, scope: Option<&str>, max_lines: usize) -> Result<Stri
 pub(crate) fn rewrite_filter_to_sql(filter: &str) -> Result<String, String> {
     let trimmed = filter.trim();
     if trimmed.len() >= 6 && trimmed[..6].eq_ignore_ascii_case("select") {
-        return Ok(trimmed.to_string());
+        return Ok(normalize_double_quoted_literals(trimmed));
     }
 
     let where_clause = parse_where_clause(trimmed)?;
@@ -3080,6 +3120,32 @@ mod tests {
     }
 
     #[test]
+    fn raw_sql_double_quoted_string_literal_is_normalized_to_single_quoted() {
+        // #39: db-core parses "..." as a quoted identifier, not a string
+        // literal -- normalize to the single-quoted form so it compiles
+        // as the string literal most users expect.
+        let sql = rewrite_filter_to_sql(r#"select * from log where tag = "kernel""#)
+            .expect("valid filter");
+        assert_eq!(sql, "select * from log where tag = 'kernel'");
+    }
+
+    #[test]
+    fn normalize_double_quoted_literals_preserves_single_quoted_spans() {
+        assert_eq!(
+            normalize_double_quoted_literals("tag = 'kernel'"),
+            "tag = 'kernel'"
+        );
+    }
+
+    #[test]
+    fn normalize_double_quoted_literals_escapes_embedded_single_quote() {
+        assert_eq!(
+            normalize_double_quoted_literals(r#"tag = "o'brien""#),
+            "tag = 'o''brien'"
+        );
+    }
+
+    #[test]
     fn unrecognized_severity_level_is_an_error() {
         let err = match rewrite_filter_to_sql("severity >= BOGUS") {
             Err(e) => e,
@@ -3130,6 +3196,17 @@ mod tests {
         // prefix) -- passed straight to compile_predicate untouched.
         let expr = resolve_highlight_expr("message LIKE '%oom%'");
         assert_eq!(expr, "message LIKE '%oom%'");
+    }
+
+    #[test]
+    fn resolve_highlight_expr_normalizes_double_quoted_literal_to_single_quoted() {
+        // #39: `tag = "kernel"` and `tag = 'kernel'` must resolve to the
+        // same compiled expression, not the confusing "unknown column"
+        // error double quotes trigger as an identifier reference.
+        let double = resolve_highlight_expr(r#"tag = "kernel""#);
+        let single = resolve_highlight_expr("tag = 'kernel'");
+        assert_eq!(double, single);
+        assert_eq!(double, "tag = 'kernel'");
     }
 
     #[test]
