@@ -2,6 +2,12 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.12.1] - 2026-09-14
+
+### Fixed
+
+- **Completion popup bleed-through**: reported from hands-on testing as the popup being "transparent" and "leaking underlying characters" -- `Block`/`List` only repaint *style* (colors) over their own area, not the glyphs already there, so whatever the schema tree pane drew earlier in the same frame at the popup's screen coordinates survived underneath the popup's own text, recolored to match it (e.g. a candidate like `FOR` fused with a stale `timestamp (INTEGER)` from the tree behind it into `FOR timestamp (INTEGER)`). `render_popup` now clears its own footprint (`ratatui::widgets::Clear`) before drawing anything, and gives every list item an explicit background so a short candidate's row is fully repainted, not just the cells its own text touches.
+
 ## [0.12.0] - 2026-09-14
 
 ### Added
