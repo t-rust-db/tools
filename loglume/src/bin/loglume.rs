@@ -843,7 +843,7 @@ mod tui {
         engine_err, format_cell, format_row, format_scope_report, open_engine,
         resolve_highlight_expr, rewrite_filter_to_sql,
     };
-    use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
     use crossterm::execute;
     use crossterm::terminal::{
         disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -852,6 +852,7 @@ mod tui {
     use ratatui::backend::CrosstermBackend;
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
     use ratatui::Terminal;
     use std::io::{self, Stdout};
@@ -974,10 +975,14 @@ mod tui {
         result: QueryResult,
         list_state: ListState,
         filter_text: String,
+        /// Cursor position within `filter_text`, in chars (not bytes).
+        filter_cursor: usize,
         editing_filter: bool,
         /// Restrict-vs-highlight (#4/#14): narrows via `sql`/`filter_text`
         /// above; this only marks matches, never hides anything.
         highlight_text: String,
+        /// Cursor position within `highlight_text`, in chars (not bytes).
+        highlight_cursor: usize,
         highlight: Option<CompiledPredicate>,
         highlight_enabled: bool,
         editing_highlight: bool,
@@ -999,6 +1004,116 @@ mod tui {
         theme: Theme,
         watch_rx: mpsc::Receiver<notify::Result<notify::Event>>,
         _watcher: notify::RecommendedWatcher,
+    }
+
+    /// Emacs/readline-style line editing shared by the filter and highlight
+    /// text boxes (#42). `cursor` is a char index (not byte), so multi-byte
+    /// UTF-8 input stays correct. Returns `true` if `code`/`mods` was
+    /// recognized as a line-editing key; `false` if the caller should
+    /// handle it itself (e.g. `Enter`/`Esc`, already matched by callers
+    /// before falling through here).
+    fn edit_line(text: &mut String, cursor: &mut usize, code: KeyCode, mods: KeyModifiers) -> bool {
+        let ctrl = mods.contains(KeyModifiers::CONTROL);
+        let alt = mods.contains(KeyModifiers::ALT);
+        let mut chars: Vec<char> = text.chars().collect();
+        let len = chars.len();
+        *cursor = (*cursor).min(len);
+
+        match code {
+            KeyCode::Char('a') if ctrl => *cursor = 0,
+            KeyCode::Char('e') if ctrl => *cursor = len,
+            KeyCode::Char('b') if ctrl => *cursor = cursor.saturating_sub(1),
+            KeyCode::Left => *cursor = cursor.saturating_sub(1),
+            KeyCode::Char('f') if ctrl => *cursor = (*cursor + 1).min(len),
+            KeyCode::Right => *cursor = (*cursor + 1).min(len),
+            KeyCode::Char('k') if ctrl => {
+                chars.truncate(*cursor);
+            }
+            KeyCode::Char('u') if ctrl => {
+                chars.drain(0..*cursor);
+                *cursor = 0;
+            }
+            KeyCode::Char('w') if ctrl => delete_word_backward(&mut chars, cursor),
+            KeyCode::Backspace if alt => delete_word_backward(&mut chars, cursor),
+            KeyCode::Char('b') if alt => *cursor = word_backward(&chars, *cursor),
+            KeyCode::Char('f') if alt => *cursor = word_forward(&chars, *cursor),
+            KeyCode::Char('d') if ctrl => {
+                if *cursor < chars.len() {
+                    chars.remove(*cursor);
+                }
+            }
+            KeyCode::Backspace => {
+                if *cursor > 0 {
+                    chars.remove(*cursor - 1);
+                    *cursor -= 1;
+                }
+            }
+            KeyCode::Char(c) if !ctrl && !alt => {
+                chars.insert(*cursor, c);
+                *cursor += 1;
+            }
+            _ => return false,
+        }
+
+        *text = chars.into_iter().collect();
+        true
+    }
+
+    /// The cursor position after moving backward one word from `cursor`:
+    /// skip trailing whitespace, then skip the word itself.
+    #[allow(clippy::indexing_slicing)]
+    fn word_backward(chars: &[char], mut cursor: usize) -> usize {
+        while cursor > 0 && chars[cursor - 1].is_whitespace() {
+            cursor -= 1;
+        }
+        while cursor > 0 && !chars[cursor - 1].is_whitespace() {
+            cursor -= 1;
+        }
+        cursor
+    }
+
+    /// The cursor position after moving forward one word from `cursor`:
+    /// skip leading whitespace, then skip the word itself.
+    #[allow(clippy::indexing_slicing)]
+    fn word_forward(chars: &[char], mut cursor: usize) -> usize {
+        let len = chars.len();
+        while cursor < len && chars[cursor].is_whitespace() {
+            cursor += 1;
+        }
+        while cursor < len && !chars[cursor].is_whitespace() {
+            cursor += 1;
+        }
+        cursor
+    }
+
+    /// Deletes the word immediately before `cursor` (`Ctrl-W`/`Alt-Backspace`).
+    fn delete_word_backward(chars: &mut Vec<char>, cursor: &mut usize) {
+        let start = word_backward(chars, *cursor);
+        chars.drain(start..*cursor);
+        *cursor = start;
+    }
+
+    /// Renders `text` as a `Line` with the character at `cursor` reverse-
+    /// styled to simulate a text-cursor -- a trailing styled space stands
+    /// in for the cursor when it sits past the last character.
+    #[allow(clippy::indexing_slicing)]
+    fn render_cursor_line(text: &str, cursor: usize) -> Line<'static> {
+        let chars: Vec<char> = text.chars().collect();
+        let cursor = cursor.min(chars.len());
+        let before: String = chars[..cursor].iter().collect();
+        let (at, after): (String, String) = if cursor < chars.len() {
+            (
+                chars[cursor].to_string(),
+                chars[cursor + 1..].iter().collect(),
+            )
+        } else {
+            (" ".to_string(), String::new())
+        };
+        Line::from(vec![
+            Span::raw(before),
+            Span::styled(at, Style::default().add_modifier(Modifier::REVERSED)),
+            Span::raw(after),
+        ])
     }
 
     impl Pane {
@@ -1030,8 +1145,10 @@ mod tui {
                 result,
                 list_state,
                 filter_text,
+                filter_cursor: 0,
                 editing_filter: false,
                 highlight_text: String::new(),
+                highlight_cursor: 0,
                 highlight: None,
                 highlight_enabled: false,
                 editing_highlight: false,
@@ -1111,7 +1228,7 @@ mod tui {
         /// (quit/close-pane/cycle-focus) are intercepted by `App` before
         /// reaching here, except while editing the filter text, where they
         /// must fall through to ordinary text input instead.
-        fn handle_key(&mut self, code: KeyCode) -> io::Result<()> {
+        fn handle_key(&mut self, code: KeyCode, mods: KeyModifiers) -> io::Result<()> {
             if self.editing_filter {
                 match code {
                     KeyCode::Enter => {
@@ -1128,11 +1245,9 @@ mod tui {
                         self.editing_filter = false;
                         self.filter_text = self.sql.clone();
                     }
-                    KeyCode::Backspace => {
-                        self.filter_text.pop();
+                    _ => {
+                        edit_line(&mut self.filter_text, &mut self.filter_cursor, code, mods);
                     }
-                    KeyCode::Char(c) => self.filter_text.push(c),
-                    _ => {}
                 }
                 return Ok(());
             }
@@ -1162,11 +1277,14 @@ mod tui {
                         }
                     }
                     KeyCode::Esc => self.editing_highlight = false,
-                    KeyCode::Backspace => {
-                        self.highlight_text.pop();
+                    _ => {
+                        edit_line(
+                            &mut self.highlight_text,
+                            &mut self.highlight_cursor,
+                            code,
+                            mods,
+                        );
                     }
-                    KeyCode::Char(c) => self.highlight_text.push(c),
-                    _ => {}
                 }
                 return Ok(());
             }
@@ -1179,9 +1297,11 @@ mod tui {
                 KeyCode::Char('/') | KeyCode::Char(':') => {
                     self.editing_filter = true;
                     self.filter_text = self.sql.clone();
+                    self.filter_cursor = self.filter_text.chars().count();
                 }
                 KeyCode::Char('?') => {
                     self.editing_highlight = true;
+                    self.highlight_cursor = self.highlight_text.chars().count();
                 }
                 KeyCode::Char('h') => {
                     // Toggle rendering on/off without clearing the
@@ -1345,16 +1465,21 @@ mod tui {
             } else {
                 "filter (/ edit, j/k move, d detail, R reverse, Tab pane, x close, q quit)"
             };
-            let filter_body = self
-                .filter_status
-                .clone()
-                .unwrap_or_else(|| self.filter_text.clone());
             let filter_body_style = if self.filter_status.is_some() {
                 Style::default().fg(self.theme.status_error)
             } else {
                 Style::default()
             };
-            let input = Paragraph::new(filter_body).style(filter_body_style).block(
+            let filter_line = if self.editing_filter {
+                render_cursor_line(&self.filter_text, self.filter_cursor)
+            } else {
+                Line::from(
+                    self.filter_status
+                        .clone()
+                        .unwrap_or_else(|| self.filter_text.clone()),
+                )
+            };
+            let input = Paragraph::new(filter_line).style(filter_body_style).block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(border_style)
@@ -1367,22 +1492,22 @@ mod tui {
             } else {
                 "highlight (? edit, h toggle on/off)"
             };
-            let highlight_body = if self.editing_highlight {
-                self.highlight_text.clone()
+            let highlight_line = if self.editing_highlight {
+                render_cursor_line(&self.highlight_text, self.highlight_cursor)
             } else if let Some(err) = &self.highlight_status {
-                err.clone()
+                Line::from(err.clone())
             } else if self.highlight_text.is_empty() {
-                "(none)".to_string()
+                Line::from("(none)")
             } else {
                 let state = if self.highlight_enabled { "on" } else { "off" };
-                format!("{} [{state}]", self.highlight_text)
+                Line::from(format!("{} [{state}]", self.highlight_text))
             };
             let highlight_body_style = if self.highlight_status.is_some() {
                 Style::default().fg(self.theme.status_error)
             } else {
                 Style::default()
             };
-            let highlight_widget = Paragraph::new(highlight_body)
+            let highlight_widget = Paragraph::new(highlight_line)
                 .style(highlight_body_style)
                 .block(
                     Block::default()
@@ -1433,7 +1558,9 @@ mod tui {
                 let timeout = TICK_RATE.saturating_sub(last_tick.elapsed());
                 if event::poll(timeout)? {
                     if let Event::Key(key) = event::read()? {
-                        if key.kind == KeyEventKind::Press && self.handle_key(key.code)? {
+                        if key.kind == KeyEventKind::Press
+                            && self.handle_key(key.code, key.modifiers)?
+                        {
                             return Ok(());
                         }
                     }
@@ -1445,7 +1572,7 @@ mod tui {
         }
 
         /// Returns true if the whole app should quit.
-        fn handle_key(&mut self, code: KeyCode) -> io::Result<bool> {
+        fn handle_key(&mut self, code: KeyCode, mods: KeyModifiers) -> io::Result<bool> {
             let editing = self
                 .panes
                 .get(self.focused)
@@ -1484,7 +1611,7 @@ mod tui {
             }
 
             if let Some(pane) = self.panes.get_mut(self.focused) {
-                pane.handle_key(code)?;
+                pane.handle_key(code, mods)?;
             }
             Ok(false)
         }
@@ -1540,9 +1667,9 @@ mod tui {
         fn tab_cycles_focus_across_panes() {
             let mut app = two_pane_app();
             assert_eq!(app.focused, 0);
-            assert!(!app.handle_key(KeyCode::Tab).unwrap());
+            assert!(!app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap());
             assert_eq!(app.focused, 1);
-            assert!(!app.handle_key(KeyCode::Tab).unwrap());
+            assert!(!app.handle_key(KeyCode::Tab, KeyModifiers::NONE).unwrap());
             assert_eq!(app.focused, 0);
         }
 
@@ -1553,7 +1680,9 @@ mod tui {
 
             // focused starts at 0 (SAMPLE_LOG), so closing it should leave
             // pane 1 (SAMPLE_LOG_2) behind, untouched.
-            assert!(!app.handle_key(KeyCode::Char('x')).unwrap());
+            assert!(!app
+                .handle_key(KeyCode::Char('x'), KeyModifiers::NONE)
+                .unwrap());
             assert_eq!(app.panes.len(), 1);
             assert_eq!(app.focused, 0);
             assert_eq!(app.panes[0].path, PathBuf::from(SAMPLE_LOG_2));
@@ -1576,48 +1705,57 @@ mod tui {
         #[test]
         fn closing_the_last_pane_quits() {
             let mut app = one_pane_app();
-            assert!(app.handle_key(KeyCode::Char('x')).unwrap());
+            assert!(app
+                .handle_key(KeyCode::Char('x'), KeyModifiers::NONE)
+                .unwrap());
         }
 
         #[test]
         fn q_quits_regardless_of_pane_count() {
             let mut app = two_pane_app();
-            assert!(app.handle_key(KeyCode::Char('q')).unwrap());
+            assert!(app
+                .handle_key(KeyCode::Char('q'), KeyModifiers::NONE)
+                .unwrap());
         }
 
         #[test]
         fn esc_quits_single_pane_but_not_multi_pane() {
             let mut multi = two_pane_app();
-            assert!(!multi.handle_key(KeyCode::Esc).unwrap());
+            assert!(!multi.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap());
 
             let mut single = one_pane_app();
-            assert!(single.handle_key(KeyCode::Esc).unwrap());
+            assert!(single.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap());
         }
 
         #[test]
         fn d_toggles_detail_pane() {
             let mut app = one_pane_app();
             assert!(!app.panes[0].detail_open);
-            assert!(!app.handle_key(KeyCode::Char('d')).unwrap());
+            assert!(!app
+                .handle_key(KeyCode::Char('d'), KeyModifiers::NONE)
+                .unwrap());
             assert!(app.panes[0].detail_open);
-            assert!(!app.handle_key(KeyCode::Char('d')).unwrap());
+            assert!(!app
+                .handle_key(KeyCode::Char('d'), KeyModifiers::NONE)
+                .unwrap());
             assert!(!app.panes[0].detail_open);
         }
 
         #[test]
         fn esc_closes_detail_pane_instead_of_quitting_single_pane_app() {
             let mut app = one_pane_app();
-            app.handle_key(KeyCode::Char('d')).unwrap();
+            app.handle_key(KeyCode::Char('d'), KeyModifiers::NONE)
+                .unwrap();
             assert!(app.panes[0].detail_open);
 
             // With detail open, Esc must close it, not quit the app -- even
             // though a single pane would normally quit on Esc.
-            assert!(!app.handle_key(KeyCode::Esc).unwrap());
+            assert!(!app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap());
             assert!(!app.panes[0].detail_open);
 
             // Detail now closed: Esc goes back to its normal single-pane
             // quit behavior.
-            assert!(app.handle_key(KeyCode::Esc).unwrap());
+            assert!(app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap());
         }
 
         #[test]
@@ -1647,7 +1785,9 @@ mod tui {
             let mut app = one_pane_app();
             let row_before = app.panes[0].selected_row().unwrap().clone();
             let before = app.panes[0].field_lines_for(&row_before);
-            assert!(!app.handle_key(KeyCode::Char('j')).unwrap());
+            assert!(!app
+                .handle_key(KeyCode::Char('j'), KeyModifiers::NONE)
+                .unwrap());
             let row_after = app.panes[0].selected_row().unwrap().clone();
             let after = app.panes[0].field_lines_for(&row_after);
             assert_ne!(
@@ -1660,7 +1800,9 @@ mod tui {
         fn navigation_key_reaches_focused_pane_only() {
             let mut app = two_pane_app();
             let other_selected = app.panes[1].list_state.selected();
-            assert!(!app.handle_key(KeyCode::Char('k')).unwrap());
+            assert!(!app
+                .handle_key(KeyCode::Char('k'), KeyModifiers::NONE)
+                .unwrap());
             assert_eq!(
                 app.panes[1].list_state.selected(),
                 other_selected,
@@ -1689,13 +1831,17 @@ mod tui {
             assert_eq!(app.panes[0].list_state.selected(), Some(0));
 
             // Toggling flips to non-reverse and jumps to "latest is the last index".
-            assert!(!app.handle_key(KeyCode::Char('R')).unwrap());
+            assert!(!app
+                .handle_key(KeyCode::Char('R'), KeyModifiers::NONE)
+                .unwrap());
             let pane = &app.panes[0];
             assert!(!pane.reverse);
             assert_eq!(pane.list_state.selected(), Some(len - 1));
 
             // Toggling back returns to reverse mode, latest at index 0.
-            assert!(!app.handle_key(KeyCode::Char('R')).unwrap());
+            assert!(!app
+                .handle_key(KeyCode::Char('R'), KeyModifiers::NONE)
+                .unwrap());
             let pane = &app.panes[0];
             assert!(pane.reverse);
             assert_eq!(
@@ -1728,16 +1874,20 @@ mod tui {
         /// Type each char of `s` as a `KeyCode::Char` key press.
         fn type_str(app: &mut App, s: &str) {
             for c in s.chars() {
-                assert!(!app.handle_key(KeyCode::Char(c)).unwrap());
+                assert!(!app
+                    .handle_key(KeyCode::Char(c), KeyModifiers::NONE)
+                    .unwrap());
             }
         }
 
         #[test]
         fn highlight_expression_compiles_and_marks_matching_rows() {
             let mut app = one_pane_app();
-            assert!(!app.handle_key(KeyCode::Char('?')).unwrap());
+            assert!(!app
+                .handle_key(KeyCode::Char('?'), KeyModifiers::NONE)
+                .unwrap());
             type_str(&mut app, "severity >= ERR");
-            assert!(!app.handle_key(KeyCode::Enter).unwrap());
+            assert!(!app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap());
 
             let pane = &app.panes[0];
             assert!(pane.highlight.is_some());
@@ -1762,11 +1912,14 @@ mod tui {
         #[test]
         fn highlight_toggle_disables_without_clearing_expression() {
             let mut app = one_pane_app();
-            app.handle_key(KeyCode::Char('?')).unwrap();
+            app.handle_key(KeyCode::Char('?'), KeyModifiers::NONE)
+                .unwrap();
             type_str(&mut app, "severity >= ERR");
-            app.handle_key(KeyCode::Enter).unwrap();
+            app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
 
-            assert!(!app.handle_key(KeyCode::Char('h')).unwrap());
+            assert!(!app
+                .handle_key(KeyCode::Char('h'), KeyModifiers::NONE)
+                .unwrap());
             let pane = &app.panes[0];
             assert!(!pane.highlight_enabled);
             assert_eq!(pane.highlight_text, "severity >= ERR");
@@ -1775,23 +1928,28 @@ mod tui {
                 "compiled predicate is retained, not cleared"
             );
 
-            assert!(!app.handle_key(KeyCode::Char('h')).unwrap());
+            assert!(!app
+                .handle_key(KeyCode::Char('h'), KeyModifiers::NONE)
+                .unwrap());
             assert!(app.panes[0].highlight_enabled);
         }
 
         #[test]
         fn highlight_toggle_is_a_no_op_with_no_expression_set() {
             let mut app = one_pane_app();
-            assert!(!app.handle_key(KeyCode::Char('h')).unwrap());
+            assert!(!app
+                .handle_key(KeyCode::Char('h'), KeyModifiers::NONE)
+                .unwrap());
             assert!(!app.panes[0].highlight_enabled);
         }
 
         #[test]
         fn invalid_highlight_expression_reports_an_error_without_crashing() {
             let mut app = one_pane_app();
-            app.handle_key(KeyCode::Char('?')).unwrap();
+            app.handle_key(KeyCode::Char('?'), KeyModifiers::NONE)
+                .unwrap();
             type_str(&mut app, "not a valid expression at all");
-            assert!(!app.handle_key(KeyCode::Enter).unwrap());
+            assert!(!app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap());
 
             let pane = &app.panes[0];
             assert!(pane.highlight.is_none());
@@ -1809,9 +1967,10 @@ mod tui {
             let mut app = one_pane_app();
             let original_filter_text = app.panes[0].filter_text.clone();
 
-            app.handle_key(KeyCode::Char('?')).unwrap();
+            app.handle_key(KeyCode::Char('?'), KeyModifiers::NONE)
+                .unwrap();
             type_str(&mut app, "not a valid expression at all");
-            app.handle_key(KeyCode::Enter).unwrap();
+            app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
 
             let pane = &app.panes[0];
             assert!(
@@ -1824,19 +1983,22 @@ mod tui {
         #[test]
         fn invalid_highlight_expression_clears_any_previously_compiled_highlight() {
             let mut app = one_pane_app();
-            app.handle_key(KeyCode::Char('?')).unwrap();
+            app.handle_key(KeyCode::Char('?'), KeyModifiers::NONE)
+                .unwrap();
             type_str(&mut app, "severity >= ERR");
-            app.handle_key(KeyCode::Enter).unwrap();
+            app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
             assert!(app.panes[0].highlight.is_some());
 
             // Now overwrite with a broken expression -- the stale compiled
             // predicate from the previous valid one must not linger.
-            app.handle_key(KeyCode::Char('?')).unwrap();
+            app.handle_key(KeyCode::Char('?'), KeyModifiers::NONE)
+                .unwrap();
             for _ in 0.."severity >= ERR".len() {
-                app.handle_key(KeyCode::Backspace).unwrap();
+                app.handle_key(KeyCode::Backspace, KeyModifiers::NONE)
+                    .unwrap();
             }
             type_str(&mut app, "not valid");
-            app.handle_key(KeyCode::Enter).unwrap();
+            app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
 
             let pane = &app.panes[0];
             assert!(
@@ -1849,9 +2011,10 @@ mod tui {
         #[test]
         fn esc_cancels_highlight_edit_without_applying() {
             let mut app = one_pane_app();
-            app.handle_key(KeyCode::Char('?')).unwrap();
+            app.handle_key(KeyCode::Char('?'), KeyModifiers::NONE)
+                .unwrap();
             type_str(&mut app, "severity >= ERR");
-            assert!(!app.handle_key(KeyCode::Esc).unwrap());
+            assert!(!app.handle_key(KeyCode::Esc, KeyModifiers::NONE).unwrap());
 
             let pane = &app.panes[0];
             assert!(!pane.editing_highlight);
@@ -1859,6 +2022,224 @@ mod tui {
                 pane.highlight.is_none(),
                 "Esc must not apply the typed expression"
             );
+        }
+
+        #[test]
+        fn edit_line_ctrl_a_and_ctrl_e_jump_to_start_and_end() {
+            let mut text = "hello world".to_string();
+            let mut cursor = 5;
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Char('a'),
+                KeyModifiers::CONTROL
+            ));
+            assert_eq!(cursor, 0);
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Char('e'),
+                KeyModifiers::CONTROL
+            ));
+            assert_eq!(cursor, 11);
+            assert_eq!(text, "hello world");
+        }
+
+        #[test]
+        fn edit_line_ctrl_b_ctrl_f_and_arrows_move_one_char() {
+            let mut text = "abc".to_string();
+            let mut cursor = 1;
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Char('f'),
+                KeyModifiers::CONTROL
+            ));
+            assert_eq!(cursor, 2);
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Char('b'),
+                KeyModifiers::CONTROL
+            ));
+            assert_eq!(cursor, 1);
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Right,
+                KeyModifiers::NONE
+            ));
+            assert_eq!(cursor, 2);
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Left,
+                KeyModifiers::NONE
+            ));
+            assert_eq!(cursor, 1);
+
+            // Clamped at both ends.
+            cursor = 0;
+            edit_line(&mut text, &mut cursor, KeyCode::Left, KeyModifiers::NONE);
+            assert_eq!(cursor, 0);
+            cursor = 3;
+            edit_line(&mut text, &mut cursor, KeyCode::Right, KeyModifiers::NONE);
+            assert_eq!(cursor, 3);
+        }
+
+        #[test]
+        fn edit_line_ctrl_k_kills_to_end_of_line() {
+            let mut text = "hello world".to_string();
+            let mut cursor = 5;
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Char('k'),
+                KeyModifiers::CONTROL
+            ));
+            assert_eq!(text, "hello");
+            assert_eq!(cursor, 5);
+        }
+
+        #[test]
+        fn edit_line_ctrl_u_kills_to_start_of_line() {
+            let mut text = "hello world".to_string();
+            let mut cursor = 6;
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Char('u'),
+                KeyModifiers::CONTROL
+            ));
+            assert_eq!(text, "world");
+            assert_eq!(cursor, 0);
+        }
+
+        #[test]
+        fn edit_line_ctrl_w_and_alt_backspace_delete_word_before_cursor() {
+            let mut text = "hello brave world".to_string();
+            let mut cursor = 11; // just after "brave"
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Char('w'),
+                KeyModifiers::CONTROL
+            ));
+            assert_eq!(text, "hello  world");
+            assert_eq!(cursor, 6);
+
+            let mut text2 = "hello brave world".to_string();
+            let mut cursor2 = 11;
+            assert!(edit_line(
+                &mut text2,
+                &mut cursor2,
+                KeyCode::Backspace,
+                KeyModifiers::ALT
+            ));
+            assert_eq!(text2, "hello  world");
+            assert_eq!(cursor2, 6);
+        }
+
+        #[test]
+        fn edit_line_alt_b_and_alt_f_move_one_word() {
+            let mut text = "hello brave world".to_string();
+            let mut cursor = 11; // just after "brave"
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Char('b'),
+                KeyModifiers::ALT
+            ));
+            assert_eq!(cursor, 6, "should land at start of 'brave'");
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Char('f'),
+                KeyModifiers::ALT
+            ));
+            assert_eq!(cursor, 11, "should land at end of 'brave'");
+        }
+
+        #[test]
+        fn edit_line_ctrl_d_deletes_char_under_cursor() {
+            let mut text = "hello".to_string();
+            let mut cursor = 1;
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL
+            ));
+            assert_eq!(text, "hllo");
+            assert_eq!(cursor, 1);
+        }
+
+        #[test]
+        fn edit_line_backspace_deletes_char_before_cursor_not_always_last() {
+            let mut text = "hello".to_string();
+            let mut cursor = 2;
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Backspace,
+                KeyModifiers::NONE
+            ));
+            assert_eq!(text, "hllo");
+            assert_eq!(cursor, 1);
+        }
+
+        #[test]
+        fn edit_line_plain_char_inserts_at_cursor_not_only_at_end() {
+            let mut text = "helo".to_string();
+            let mut cursor = 3;
+            assert!(edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Char('l'),
+                KeyModifiers::NONE
+            ));
+            assert_eq!(text, "hello");
+            assert_eq!(cursor, 4);
+        }
+
+        #[test]
+        fn edit_line_ignores_unrecognized_key() {
+            let mut text = "abc".to_string();
+            let mut cursor = 1;
+            assert!(!edit_line(
+                &mut text,
+                &mut cursor,
+                KeyCode::Tab,
+                KeyModifiers::NONE
+            ));
+            assert_eq!(text, "abc");
+            assert_eq!(cursor, 1);
+        }
+
+        #[test]
+        fn filter_edit_supports_mid_line_cursor_movement_and_editing() {
+            let mut app = one_pane_app();
+            app.handle_key(KeyCode::Char('/'), KeyModifiers::NONE)
+                .unwrap();
+            app.panes[0].filter_text.clear();
+            app.panes[0].filter_cursor = 0;
+            type_str(&mut app, "hello world");
+            assert_eq!(app.panes[0].filter_cursor, 11);
+
+            // Ctrl-A to start, Ctrl-F x6 to land right after "hello ".
+            app.handle_key(KeyCode::Char('a'), KeyModifiers::CONTROL)
+                .unwrap();
+            for _ in 0..6 {
+                app.handle_key(KeyCode::Char('f'), KeyModifiers::CONTROL)
+                    .unwrap();
+            }
+            assert_eq!(app.panes[0].filter_cursor, 6);
+
+            // Ctrl-K kills "world" from here.
+            app.handle_key(KeyCode::Char('k'), KeyModifiers::CONTROL)
+                .unwrap();
+            assert_eq!(app.panes[0].filter_text, "hello ");
+            assert_eq!(app.panes[0].filter_cursor, 6);
         }
 
         #[test]
