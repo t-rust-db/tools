@@ -21,7 +21,7 @@ name = "loglume"
 path = "src/lib.rs"
 
 [dependencies]
-db-core = { version = "0.91.0", git = "https://github.com/t-rust-db/db-core", tag = "v0.91.0", default-features = false, features = ["engine-stream", "storage-stream", "vm-stream"] }
+db-core = { version = "0.101.0", git = "https://github.com/t-rust-db/db-core", tag = "v0.101.0", default-features = false, features = ["engine-stream", "storage-stream", "vm-stream"] }
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30.2"
 crossterm = "0.29.0"
