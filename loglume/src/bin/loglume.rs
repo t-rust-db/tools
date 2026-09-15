@@ -1762,7 +1762,7 @@ mod tui {
             let filter_title = if self.editing_filter {
                 "filter (Enter to apply, Esc to cancel)"
             } else {
-                "filter (/ edit, j/k move, d detail, R reverse, Tab pane, x close, q quit)"
+                "filter (/ edit, j/k move, d detail, R reverse, Tab pane, v view, x close, q quit)"
             };
             let filter_body_style = if self.filter_status.is_some() {
                 Style::default().fg(self.theme.status_error)
@@ -1832,6 +1832,11 @@ mod tui {
     struct App {
         panes: Vec<Pane>,
         focused: usize,
+        /// True: only the focused pane is drawn, full-area (stacked/tabbed).
+        /// False: all panes are drawn side-by-side, as columns. Background
+        /// panes keep processing file events/requeries either way (`run`
+        /// drains every pane each tick regardless of what's drawn).
+        stacked: bool,
     }
 
     impl App {
@@ -1840,7 +1845,11 @@ mod tui {
                 .iter()
                 .map(|path| Pane::new(path, sql.clone(), theme))
                 .collect::<io::Result<Vec<_>>>()?;
-            Ok(Self { panes, focused: 0 })
+            Ok(Self {
+                panes,
+                focused: 0,
+                stacked: true,
+            })
         }
 
         fn run(mut self, terminal: &mut Tui) -> io::Result<()> {
@@ -1895,6 +1904,10 @@ mod tui {
                         self.focused = (self.focused + 1) % self.panes.len();
                         return Ok(false);
                     }
+                    KeyCode::Char('v') if self.panes.len() > 1 => {
+                        self.stacked = !self.stacked;
+                        return Ok(false);
+                    }
                     KeyCode::Char('x') => {
                         if self.panes.len() <= 1 {
                             return Ok(true);
@@ -1916,6 +1929,16 @@ mod tui {
         }
 
         fn draw(&mut self, frame: &mut ratatui::Frame) {
+            let focused = self.focused;
+
+            if self.stacked {
+                let area = frame.area();
+                if let Some(pane) = self.panes.get_mut(focused) {
+                    pane.draw(frame, area, true);
+                }
+                return;
+            }
+
             let n = self.panes.len().max(1);
             #[allow(clippy::cast_possible_truncation)]
             let constraints: Vec<Constraint> =
@@ -1925,7 +1948,6 @@ mod tui {
                 .constraints(constraints)
                 .split(frame.area());
 
-            let focused = self.focused;
             for (i, pane) in self.panes.iter_mut().enumerate() {
                 if let Some(&area) = columns.get(i) {
                     pane.draw(frame, area, i == focused);
@@ -1960,6 +1982,88 @@ mod tui {
                 Theme::default(),
             )
             .expect("open one pane")
+        }
+
+        #[test]
+        fn defaults_to_stacked_layout() {
+            let app = two_pane_app();
+            assert!(app.stacked, "issue #50: stacked/tabbed is the default");
+        }
+
+        #[test]
+        fn v_toggles_layout_mode() {
+            let mut app = two_pane_app();
+            assert!(app.stacked);
+            assert!(!app
+                .handle_key(KeyCode::Char('v'), KeyModifiers::NONE)
+                .unwrap());
+            assert!(!app.stacked);
+            assert!(!app
+                .handle_key(KeyCode::Char('v'), KeyModifiers::NONE)
+                .unwrap());
+            assert!(app.stacked);
+        }
+
+        #[test]
+        fn v_is_a_noop_with_a_single_pane() {
+            let mut app = one_pane_app();
+            assert!(app.stacked);
+            assert!(!app
+                .handle_key(KeyCode::Char('v'), KeyModifiers::NONE)
+                .unwrap());
+            assert!(app.stacked, "toggling with one pane should be a no-op");
+        }
+
+        #[test]
+        fn background_pane_still_processes_file_events_in_stacked_mode() {
+            use std::io::Write;
+
+            let dir = std::env::temp_dir().join(format!(
+                "loglume-test-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path0 = dir.join("a.log");
+            let path1 = dir.join("b.log");
+            std::fs::write(&path0, "<7>Sep 15 10:00:00 host proc: hello\n").unwrap();
+            std::fs::write(&path1, "<7>Sep 15 10:00:00 host proc: hello\n").unwrap();
+
+            let mut app = App::new(
+                &[path0.clone(), path1.clone()],
+                "SELECT * FROM log WHERE severity >= 'DEBUG'".to_string(),
+                Theme::default(),
+            )
+            .expect("open two panes");
+            app.focused = 0; // pane 1 (path1) is the background, non-drawn pane
+            app.stacked = true;
+
+            let rows_before = app.panes[1].result.rows.len();
+
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path1)
+                .unwrap();
+            writeln!(f, "<7>Sep 15 10:00:01 host proc: world").unwrap();
+            drop(f);
+
+            // Poll the watcher, mirroring App::run's loop, until it notices
+            // the append (or we give up after a generous timeout).
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                if app.panes[1].drain_file_events().unwrap() {
+                    app.panes[1].requery(true).unwrap();
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+
+            assert!(
+                app.panes[1].result.rows.len() > rows_before,
+                "background pane (not drawn in stacked mode) should still ingest new lines"
+            );
+
+            let _ = std::fs::remove_dir_all(&dir);
         }
 
         #[test]
