@@ -721,6 +721,8 @@ mod config {
         pub(crate) detail_dim: Option<String>,
         #[serde(default)]
         pub(crate) status_error: Option<String>,
+        #[serde(default)]
+        pub(crate) zebra_bg: Option<String>,
     }
 
     impl Config {
@@ -1080,6 +1082,7 @@ mod tui {
         highlight_fg: Color,
         detail_dim: Color,
         status_error: Color,
+        zebra_bg: Color,
     }
 
     impl Default for Theme {
@@ -1090,6 +1093,7 @@ mod tui {
                 highlight_fg: Color::Rgb(0x1e, 0x1e, 0x2e),   // base
                 detail_dim: Color::Rgb(0x6c, 0x70, 0x86),     // overlay1
                 status_error: Color::Rgb(0xf3, 0x8b, 0xa8),   // red
+                zebra_bg: Color::Rgb(0x31, 0x32, 0x44),       // surface0
             }
         }
     }
@@ -1112,6 +1116,7 @@ mod tui {
                     .unwrap_or(defaults.detail_dim),
                 status_error: parse_hex_color(cfg.status_error.as_deref())
                     .unwrap_or(defaults.status_error),
+                zebra_bg: parse_hex_color(cfg.zebra_bg.as_deref()).unwrap_or(defaults.zebra_bg),
             }
         }
     }
@@ -1721,6 +1726,8 @@ mod tui {
                 let summary_text = if expand { format!("- {text}") } else { text };
                 let summary_item = if self.row_is_highlighted(row) {
                     ListItem::new(summary_text).style(highlight_style)
+                } else if display_idx % 2 == 1 {
+                    ListItem::new(summary_text).style(Style::default().bg(self.theme.zebra_bg))
                 } else {
                     ListItem::new(summary_text)
                 };

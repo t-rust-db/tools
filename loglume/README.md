@@ -30,6 +30,7 @@ highlight_bg   = "#f9e2af"  # --highlight match background (yellow)
 highlight_fg   = "#1e1e2e"  # --highlight match text (base)
 detail_dim     = "#6c7086"  # expanded detail field lines (overlay1)
 status_error   = "#f38ba8"  # filter/highlight compile-error text (red)
+zebra_bg       = "#313244"  # alternating row background (surface0)
 
 # Saved filters/queries, referenced on the command line as "@name".
 [filters]
