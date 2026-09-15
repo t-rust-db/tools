@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-15
+
+### Added
+- Multi-file TUI now defaults to stacked/tabbed layout: only the focused pane draws at full area, improving readability in narrow terminals. Press `v` to toggle back to side-by-side column layout (#50).
+- `make run` and `make start` now launch the TUI with both sample logs and a default filter for easy testing.
+
+### Changed
+- `Makefile` `run` and `start` targets now use `--tui` with sample logs instead of non-interactive output mode.
+
 ## [0.4.1] - 2026-09-14
 
 ### Fixed
