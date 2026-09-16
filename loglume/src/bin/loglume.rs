@@ -986,6 +986,70 @@ mod cache {
         cache_dir().join("filter_history")
     }
 
+    /// A pane's last-applied filter/highlight, keyed by file path (#72).
+    /// Restored on the next TUI open of the same file, mirroring how
+    /// `TuiState` restores the layout choice: overwritten in place per
+    /// path, not a growing history.
+    #[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+    pub(crate) struct PaneEntry {
+        pub(crate) filter: String,
+        #[serde(default)]
+        pub(crate) highlight: String,
+        #[serde(default)]
+        pub(crate) highlight_enabled: bool,
+    }
+
+    type PaneStateMap = std::collections::HashMap<String, PaneEntry>;
+
+    /// `$XDG_CACHE_HOME/loglume/pane_state`, falling back to
+    /// `$HOME/.cache/loglume/pane_state` -- same resolution as
+    /// [`filter_history_path`].
+    pub(crate) fn pane_state_path() -> PathBuf {
+        cache_dir().join("pane_state")
+    }
+
+    /// Canonicalizes `path` for use as a stable map key, falling back to
+    /// the path as given if canonicalization fails (e.g. a relative path
+    /// resolved from a different cwd should still usually match, but a
+    /// failure here must never block startup).
+    pub(crate) fn pane_state_key(path: &Path) -> String {
+        path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn load_pane_state_map(path: &Path) -> PaneStateMap {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| toml::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    /// Loads the persisted entry for `key`, or `None` if absent, the file
+    /// is missing, or the file is unparsable -- a corrupt or stale cache
+    /// file must never block startup.
+    pub(crate) fn load_pane_state(cache_path: &Path, key: &str) -> Option<PaneEntry> {
+        load_pane_state_map(cache_path).remove(key)
+    }
+
+    /// Overwrites `key`'s entry in `cache_path`, leaving every other
+    /// path's entry untouched.
+    pub(crate) fn save_pane_state(
+        cache_path: &Path,
+        key: &str,
+        entry: PaneEntry,
+    ) -> io::Result<()> {
+        let mut map = load_pane_state_map(cache_path);
+        map.insert(key.to_string(), entry);
+        if let Some(parent) = cache_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let text = toml::to_string_pretty(&map)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+        std::fs::write(cache_path, text)
+    }
+
     /// The latest TUI view settings (e.g. stacked/side-by-side layout),
     /// persisted as a single overwritten snapshot rather than a history
     /// (#56) -- unlike `History` above, there's only ever one "latest".
@@ -1365,7 +1429,13 @@ mod tui {
         // used to bail out of `App::new` after EnterAlternateScreen/raw
         // mode was already on, leaving the shell wedged in the alternate
         // screen with echo off -- it looked like a hang, not an error.
-        let app = App::new(paths, initial_sql, theme, color_rules_cfg)?;
+        let app = App::new(
+            paths,
+            initial_sql,
+            theme,
+            color_rules_cfg,
+            &cache::pane_state_path(),
+        )?;
         install_panic_hook();
         let mut terminal = init_terminal()?;
         let result = app.run(&mut terminal);
@@ -1466,6 +1536,11 @@ mod tui {
         /// own engine at construction (#55).
         color_rules: Vec<ColorRule>,
         watch_rx: mpsc::Receiver<()>,
+        /// Where this pane's filter/highlight are persisted for restore on
+        /// the next TUI open of the same file (#72) -- a field rather than
+        /// always `cache::pane_state_path()` so tests can point it at an
+        /// isolated temp file instead of the real XDG cache dir.
+        pane_state_cache_path: PathBuf,
     }
 
     /// Emacs/readline-style line editing shared by the filter and highlight
@@ -1616,8 +1691,23 @@ mod tui {
             sql: String,
             theme: Theme,
             color_rules_cfg: &[ColorRuleConfig],
+            pane_state_cache_path: &Path,
         ) -> io::Result<Self> {
             let mut engine = open_engine(path)?;
+
+            // Restore this file's last-applied filter/highlight, if any
+            // (#72). A persisted entry that no longer compiles/runs
+            // against this file (e.g. it changed shape) is silently
+            // ignored rather than blocking startup.
+            let restored =
+                cache::load_pane_state(pane_state_cache_path, &cache::pane_state_key(path));
+
+            let sql = restored
+                .as_ref()
+                .filter(|entry| !entry.filter.is_empty() && engine.run_query(&entry.filter).is_ok())
+                .map(|entry| entry.filter.clone())
+                .unwrap_or(sql);
+
             let result = engine.run_query(&sql).map_err(engine_err)?;
             let color_rules = compile_color_rules(&engine, color_rules_cfg);
 
@@ -1629,6 +1719,22 @@ mod tui {
             }
 
             let filter_text = sql.clone();
+
+            let (highlight_text, highlight, highlight_enabled) = match restored.as_ref() {
+                Some(entry) if !entry.highlight.trim().is_empty() => {
+                    let expr = resolve_highlight_expr(&entry.highlight);
+                    match engine.compile_predicate(&expr) {
+                        Ok(predicate) => (
+                            entry.highlight.clone(),
+                            Some(predicate),
+                            entry.highlight_enabled,
+                        ),
+                        Err(_) => (String::new(), None, false),
+                    }
+                }
+                _ => (String::new(), None, false),
+            };
+
             Ok(Self {
                 path: path.to_path_buf(),
                 engine,
@@ -1641,10 +1747,10 @@ mod tui {
                 filter_history: History::load(&cache::filter_history_path()),
                 filter_history_pos: None,
                 filter_draft: String::new(),
-                highlight_text: String::new(),
+                highlight_text,
                 highlight_cursor: 0,
-                highlight: None,
-                highlight_enabled: false,
+                highlight,
+                highlight_enabled,
                 editing_highlight: false,
                 highlight_history: History::load(&cache::highlight_history_path()),
                 highlight_history_pos: None,
@@ -1658,7 +1764,22 @@ mod tui {
                 theme,
                 color_rules,
                 watch_rx: rx,
+                pane_state_cache_path: pane_state_cache_path.to_path_buf(),
             })
+        }
+
+        /// Persists this pane's current filter/highlight so the next TUI
+        /// open of the same file restores it (#72).
+        fn save_pane_state(&self) -> io::Result<()> {
+            cache::save_pane_state(
+                &self.pane_state_cache_path,
+                &cache::pane_state_key(&self.path),
+                cache::PaneEntry {
+                    filter: self.sql.clone(),
+                    highlight: self.highlight_text.clone(),
+                    highlight_enabled: self.highlight_enabled,
+                },
+            )
         }
 
         /// The display position of the newest row, given `len` rows:
@@ -1735,6 +1856,7 @@ mod tui {
                             Ok(sql) => {
                                 self.sql = sql;
                                 self.requery(false)?;
+                                self.save_pane_state()?;
                             }
                             Err(e) => self.filter_status = Some(format!("filter error: {e}")),
                         }
@@ -1797,6 +1919,7 @@ mod tui {
                                 }
                             }
                         }
+                        self.save_pane_state()?;
                     }
                     KeyCode::Esc => {
                         self.editing_highlight = false;
@@ -1856,6 +1979,7 @@ mod tui {
                     // expression (explicit requirement of #14).
                     if self.highlight.is_some() {
                         self.highlight_enabled = !self.highlight_enabled;
+                        self.save_pane_state()?;
                     }
                 }
                 KeyCode::Char('f') => {
@@ -2156,10 +2280,19 @@ mod tui {
             sql: String,
             theme: Theme,
             color_rules_cfg: &[ColorRuleConfig],
+            pane_state_cache_path: &Path,
         ) -> io::Result<Self> {
             let panes = paths
                 .iter()
-                .map(|path| Pane::new(path, sql.clone(), theme, color_rules_cfg))
+                .map(|path| {
+                    Pane::new(
+                        path,
+                        sql.clone(),
+                        theme,
+                        color_rules_cfg,
+                        pane_state_cache_path,
+                    )
+                })
                 .collect::<io::Result<Vec<_>>>()?;
             Ok(Self {
                 panes,
@@ -2283,6 +2416,20 @@ mod tui {
         const SAMPLE_LOG: &str = "tests/logs/sample.log";
         const SAMPLE_LOG_2: &str = "tests/logs/sample2.log";
 
+        /// A fresh, never-before-used path per call -- so tests never read
+        /// or write the real XDG cache, nor collide with each other when
+        /// run in parallel (#72).
+        fn temp_pane_state_path() -> PathBuf {
+            std::env::temp_dir().join(format!(
+                "loglume-pane-state-test-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or_default()
+            ))
+        }
+
         /// Two *distinct* fixtures (different seed/line count), so pane
         /// isolation is exercised with genuinely different data per pane
         /// rather than the same file opened twice.
@@ -2292,6 +2439,7 @@ mod tui {
                 "SELECT * FROM log WHERE severity >= 'DEBUG'".to_string(),
                 Theme::default(),
                 &[],
+                &temp_pane_state_path(),
             )
             .expect("open two panes")
         }
@@ -2302,6 +2450,18 @@ mod tui {
                 "SELECT * FROM log WHERE severity >= 'DEBUG'".to_string(),
                 Theme::default(),
                 &[],
+                &temp_pane_state_path(),
+            )
+            .expect("open one pane")
+        }
+
+        fn one_pane_app_with_cache(cache_path: &Path) -> App {
+            App::new(
+                &[PathBuf::from(SAMPLE_LOG)],
+                "SELECT * FROM log WHERE severity >= 'DEBUG'".to_string(),
+                Theme::default(),
+                &[],
+                cache_path,
             )
             .expect("open one pane")
         }
@@ -2334,6 +2494,102 @@ mod tui {
                 .handle_key(KeyCode::Char('v'), KeyModifiers::NONE)
                 .unwrap());
             assert!(app.stacked, "toggling with one pane should be a no-op");
+        }
+
+        #[test]
+        fn filter_and_highlight_restore_on_next_open_of_same_file() {
+            let cache_path = temp_pane_state_path();
+            let mut app = one_pane_app_with_cache(&cache_path);
+
+            app.handle_key(KeyCode::Char('/'), KeyModifiers::NONE)
+                .unwrap();
+            app.handle_key(KeyCode::Char('u'), KeyModifiers::CONTROL)
+                .unwrap();
+            type_str(&mut app, "severity >= ERR");
+            app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+
+            app.handle_key(KeyCode::Char('?'), KeyModifiers::NONE)
+                .unwrap();
+            type_str(&mut app, "facility = 'auth'");
+            app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+
+            let expected_sql = app.panes[0].sql.clone();
+            let expected_highlight_text = app.panes[0].highlight_text.clone();
+            assert!(app.panes[0].highlight_enabled);
+
+            // A fresh App/Pane pointed at the same file and cache path
+            // should pick up right where the last session left off.
+            let reopened = one_pane_app_with_cache(&cache_path);
+            let pane = &reopened.panes[0];
+            assert_eq!(pane.sql, expected_sql);
+            assert_eq!(pane.filter_text, expected_sql);
+            assert_eq!(pane.highlight_text, expected_highlight_text);
+            assert!(pane.highlight_enabled);
+            assert!(pane.highlight.is_some());
+        }
+
+        #[test]
+        fn h_toggle_persists_the_enabled_flag() {
+            let cache_path = temp_pane_state_path();
+            let mut app = one_pane_app_with_cache(&cache_path);
+            app.handle_key(KeyCode::Char('?'), KeyModifiers::NONE)
+                .unwrap();
+            type_str(&mut app, "severity >= ERR");
+            app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+            assert!(app.panes[0].highlight_enabled);
+
+            app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE)
+                .unwrap();
+            assert!(!app.panes[0].highlight_enabled);
+
+            let reopened = one_pane_app_with_cache(&cache_path);
+            assert!(
+                !reopened.panes[0].highlight_enabled,
+                "the disabled state from 'h' should carry over, not just the expression"
+            );
+        }
+
+        #[test]
+        fn no_persisted_state_leaves_the_default_filter_untouched() {
+            let app = one_pane_app_with_cache(&temp_pane_state_path());
+            assert_eq!(
+                app.panes[0].sql,
+                "SELECT * FROM log WHERE severity >= 'DEBUG'"
+            );
+            assert!(app.panes[0].highlight_text.is_empty());
+            assert!(!app.panes[0].highlight_enabled);
+        }
+
+        #[test]
+        fn corrupt_pane_state_file_falls_back_to_the_cli_default() {
+            let cache_path = temp_pane_state_path();
+            std::fs::write(&cache_path, "not valid toml {{{").unwrap();
+            let app = one_pane_app_with_cache(&cache_path);
+            assert_eq!(
+                app.panes[0].sql,
+                "SELECT * FROM log WHERE severity >= 'DEBUG'"
+            );
+        }
+
+        #[test]
+        fn persisted_filter_that_no_longer_runs_is_ignored() {
+            let cache_path = temp_pane_state_path();
+            cache::save_pane_state(
+                &cache_path,
+                &cache::pane_state_key(Path::new(SAMPLE_LOG)),
+                cache::PaneEntry {
+                    filter: "SELECT * FROM log WHERE nonexistent_column = 1".to_string(),
+                    highlight: String::new(),
+                    highlight_enabled: false,
+                },
+            )
+            .unwrap();
+
+            let app = one_pane_app_with_cache(&cache_path);
+            assert_eq!(
+                app.panes[0].sql, "SELECT * FROM log WHERE severity >= 'DEBUG'",
+                "an unusable persisted filter must fall back to the CLI-provided default"
+            );
         }
 
         #[test]

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-09-16
+
+### Added
+- Filter and highlight expressions (plus whether highlight is enabled) now auto-persist per file path in `$XDG_CACHE_HOME/loglume/pane_state` (or `$HOME/.cache/loglume/pane_state`), saved whenever they're applied and restored the next time that file is opened in the TUI. A persisted filter/highlight that no longer compiles or runs against the file is silently ignored, falling back to the CLI-provided default (#72).
+
 ## [0.11.0] - 2026-09-16
 
 ### Added
