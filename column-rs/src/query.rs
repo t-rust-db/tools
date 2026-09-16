@@ -16,8 +16,8 @@ use db_core::codegen::batch::{self as planner, PlanError, TableStats};
 use db_core::parser::ast::{Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
 use db_core::storage::column::parquet::footer::PhysicalType;
 use db_core::storage::{ParquetFile, Vfs, VfsFile};
-use db_core::vm::batch::VmError;
-use db_core::vm::engine::{self, InMemorySegment};
+use db_core::vm::batch::{ScanSource, VmError};
+use db_core::vm::engine::{self, InMemorySegment, NoResolver};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -354,12 +354,17 @@ pub fn execute_joined(
     right_file: &ParquetFile,
     query: &Select,
 ) -> Result<Vec<Vec<Value>>> {
-    let plan = planner::compile_join(query)?;
+    let plan = planner::compile_join(query, planner::BuildSourceKind::InMemory)?;
     let left_columns = resolve_columns(&leaf_columns(left_file), &plan.left_columns)?;
     let right_columns = resolve_columns(&leaf_columns(right_file), &plan.right_columns)?;
     let left = row_group_segments(left_file, &left_columns);
     let right = read_whole_table(right_file, &right_columns)?;
-    Ok(engine::run_join_segments(left, &right, &plan)?)
+    Ok(engine::run_join_segments(
+        left,
+        ScanSource::InMemory(right),
+        &plan,
+        &NoResolver,
+    )?)
 }
 
 /// Execute a query whose entire `WHERE` clause is `col IN (SELECT ...)`
