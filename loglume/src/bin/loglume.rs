@@ -1390,6 +1390,11 @@ mod tui {
         /// column/value pair for the selected row, shrinking the list to
         /// make room (#30). Toggled per pane via 'd'.
         detail_open: bool,
+        /// When true, the filter and highlight bars are collapsed so the
+        /// list can use the full pane height (#58). Toggled via 'b'; forced
+        /// back to `false` when entering filter/highlight edit, since you
+        /// can't type into a box you can't see.
+        bars_hidden: bool,
         theme: Theme,
         watch_rx: mpsc::Receiver<()>,
     }
@@ -1573,6 +1578,7 @@ mod tui {
                 filter_status: None,
                 highlight_status: None,
                 detail_open: false,
+                bars_hidden: false,
                 theme,
                 watch_rx: rx,
             })
@@ -1758,13 +1764,16 @@ mod tui {
                 KeyCode::PageUp => self.select_relative(-10),
                 KeyCode::Char('/') | KeyCode::Char(':') => {
                     self.editing_filter = true;
+                    self.bars_hidden = false;
                     self.filter_text = self.sql.clone();
                     self.filter_cursor = self.filter_text.chars().count();
                 }
                 KeyCode::Char('?') => {
                     self.editing_highlight = true;
+                    self.bars_hidden = false;
                     self.highlight_cursor = self.highlight_text.chars().count();
                 }
+                KeyCode::Char('b') => self.bars_hidden = !self.bars_hidden,
                 KeyCode::Char('h') => {
                     // Toggle rendering on/off without clearing the
                     // expression (explicit requirement of #14).
@@ -1826,21 +1835,15 @@ mod tui {
                 .collect()
         }
 
-        fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, focused: bool) {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(1),
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                ])
-                .split(area);
-            let (Some(&list_area), Some(&filter_area), Some(&highlight_area)) =
-                (chunks.first(), chunks.get(1), chunks.get(2))
-            else {
-                return;
-            };
-
+        /// Renders just the log list into `area` -- shared by `draw`'s
+        /// normal (list + filter/highlight bars) and `bars_hidden`
+        /// (list only, full pane height) layouts.
+        fn draw_list(
+            &mut self,
+            frame: &mut ratatui::Frame,
+            list_area: ratatui::layout::Rect,
+            focused: bool,
+        ) {
             let border_style = if focused {
                 Style::default().fg(self.theme.border_focused)
             } else {
@@ -1919,12 +1922,17 @@ mod tui {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| self.path.to_string_lossy().into_owned());
             let order_tag = if self.reverse { "" } else { " [oldest-first]" };
+            let bars_tag = if self.bars_hidden {
+                " [bars hidden]"
+            } else {
+                ""
+            };
             let title = self
                 .result
                 .scope_report
                 .as_ref()
-                .map(|r| format!("{name}{order_tag} — {}", format_scope_report(r)))
-                .unwrap_or_else(|| format!("{name}{order_tag}"));
+                .map(|r| format!("{name}{order_tag}{bars_tag} — {}", format_scope_report(r)))
+                .unwrap_or_else(|| format!("{name}{order_tag}{bars_tag}"));
 
             let list = List::new(items)
                 .block(
@@ -1936,11 +1944,40 @@ mod tui {
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .scroll_padding(expanded_field_count);
             frame.render_stateful_widget(list, list_area, &mut self.list_state);
+        }
+
+        fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, focused: bool) {
+            if self.bars_hidden {
+                self.draw_list(frame, area, focused);
+                return;
+            }
+
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(1),
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                ])
+                .split(area);
+            let (Some(&list_area), Some(&filter_area), Some(&highlight_area)) =
+                (chunks.first(), chunks.get(1), chunks.get(2))
+            else {
+                return;
+            };
+
+            self.draw_list(frame, list_area, focused);
+
+            let border_style = if focused {
+                Style::default().fg(self.theme.border_focused)
+            } else {
+                Style::default()
+            };
 
             let filter_title = if self.editing_filter {
                 "filter (Enter to apply, Esc to cancel)"
             } else {
-                "filter (/ edit, j/k move, d detail, R reverse, Tab pane, v view, x close, q quit)"
+                "filter (/ edit, j/k move, d detail, R reverse, Tab pane, v view, b bars, x close, q quit)"
             };
             let filter_body_style = if self.filter_status.is_some() {
                 Style::default().fg(self.theme.status_error)
@@ -2301,6 +2338,52 @@ mod tui {
                 .handle_key(KeyCode::Char('d'), KeyModifiers::NONE)
                 .unwrap());
             assert!(!app.panes[0].detail_open);
+        }
+
+        #[test]
+        fn b_toggles_bars_hidden() {
+            let mut app = one_pane_app();
+            assert!(!app.panes[0].bars_hidden);
+            assert!(!app
+                .handle_key(KeyCode::Char('b'), KeyModifiers::NONE)
+                .unwrap());
+            assert!(app.panes[0].bars_hidden);
+            assert!(!app
+                .handle_key(KeyCode::Char('b'), KeyModifiers::NONE)
+                .unwrap());
+            assert!(!app.panes[0].bars_hidden);
+        }
+
+        #[test]
+        fn entering_filter_edit_unhides_bars() {
+            let mut app = one_pane_app();
+            app.handle_key(KeyCode::Char('b'), KeyModifiers::NONE)
+                .unwrap();
+            assert!(app.panes[0].bars_hidden);
+
+            app.handle_key(KeyCode::Char('/'), KeyModifiers::NONE)
+                .unwrap();
+            assert!(app.panes[0].editing_filter);
+            assert!(
+                !app.panes[0].bars_hidden,
+                "entering filter edit should unhide bars so the typed filter is visible"
+            );
+        }
+
+        #[test]
+        fn entering_highlight_edit_unhides_bars() {
+            let mut app = one_pane_app();
+            app.handle_key(KeyCode::Char('b'), KeyModifiers::NONE)
+                .unwrap();
+            assert!(app.panes[0].bars_hidden);
+
+            app.handle_key(KeyCode::Char('?'), KeyModifiers::NONE)
+                .unwrap();
+            assert!(app.panes[0].editing_highlight);
+            assert!(
+                !app.panes[0].bars_hidden,
+                "entering highlight edit should unhide bars so the typed expression is visible"
+            );
         }
 
         #[test]
