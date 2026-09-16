@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use column_rs::query::QueryEngine;
 use db_cli::{history_path, run_repl, OutputMode, ReplOptions};
 use handler::{ColumnHandler, Output};
-use stream_output::print_rows_streaming;
+use stream_output::print_result_streaming;
 
 const USAGE: &str = "[--version] [--help] [-c \"<SQL>\"] <file.parquet> [more.parquet ...]";
 
@@ -90,7 +90,7 @@ fn run_query(paths: &[PathBuf], sql: &str) -> ExitCode {
         // query where materializing every cell as a padded, bordered
         // string is most of the wall-clock and peak memory.
         Ok(Output::Rows(result)) => {
-            print_rows_streaming(&result.columns, result.rows.into_iter());
+            print_result_streaming(&result);
             ExitCode::SUCCESS
         }
         Ok(output @ (Output::Plan(_) | Output::Opcodes(_))) => {

@@ -16,7 +16,7 @@ use db_core::codegen::batch::{self as planner, PlanError, TableStats};
 use db_core::parser::ast::{Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
 use db_core::storage::column::parquet::footer::PhysicalType;
 use db_core::storage::{ParquetFile, Vfs, VfsFile};
-use db_core::vm::batch::{ScanSource, VmError};
+use db_core::vm::batch::{QueryOutput, ScanSource, VmError};
 use db_core::vm::engine::{self, InMemorySegment, NoResolver};
 use std::collections::HashMap;
 use std::fmt;
@@ -325,18 +325,18 @@ fn is_window_column(column: &ResultColumn) -> bool {
     }
 }
 
-pub fn run_program(file: &ParquetFile, program: &[Opcode]) -> Result<Vec<Vec<Value>>> {
+pub fn run_program(file: &ParquetFile, program: &[Opcode]) -> Result<QueryOutput> {
     run(file, &Program::from_opcodes(program.iter().cloned()))
 }
 
-fn run(file: &ParquetFile, program: &Program) -> Result<Vec<Vec<Value>>> {
+fn run(file: &ParquetFile, program: &Program) -> Result<QueryOutput> {
     let columns = resolve_columns(&leaf_columns(file), &program.columns_to_load())?;
     let segments = row_group_segments(file, &columns);
     Ok(engine::run(&segments, program)?)
 }
 
 /// Execute a single-table `query` against `file`.
-pub fn execute(file: &ParquetFile, query: &Select) -> Result<Vec<Vec<Value>>> {
+pub fn execute(file: &ParquetFile, query: &Select) -> Result<QueryOutput> {
     run(file, &planner::compile(query)?)
 }
 
@@ -353,7 +353,7 @@ pub fn execute_joined(
     left_file: &ParquetFile,
     right_file: &ParquetFile,
     query: &Select,
-) -> Result<Vec<Vec<Value>>> {
+) -> Result<QueryOutput> {
     let plan = planner::compile_join(query, planner::BuildSourceKind::InMemory)?;
     let left_columns = resolve_columns(&leaf_columns(left_file), &plan.left_columns)?;
     let right_columns = resolve_columns(&leaf_columns(right_file), &plan.right_columns)?;
@@ -375,17 +375,17 @@ pub fn execute_semi_join(
     main_file: &ParquetFile,
     sub_file: &ParquetFile,
     query: &Select,
-) -> Result<Vec<Vec<Value>>> {
+) -> Result<QueryOutput> {
     let plan = planner::compile_semi_join(query)?;
 
     let sub_rows = execute(sub_file, &plan.subquery)?;
-    if sub_rows.first().is_some_and(|row| row.len() != 1) {
+    if !sub_rows.is_empty() && sub_rows.num_columns() != 1 {
         return Err(QueryError::UnsupportedSemiJoin(
             "IN subquery must select exactly one column".to_string(),
         ));
     }
     let allowed: std::collections::HashSet<String> =
-        sub_rows.into_iter().map(|row| row[0].to_string()).collect();
+        sub_rows.rows().map(|row| row[0].to_string()).collect();
 
     let mut needed = plan.body.columns_to_load();
     if !needed.contains(&plan.key_column) {
@@ -402,7 +402,7 @@ pub fn execute_semi_join(
 /// Execute a query whose `SELECT` list contains window functions: the
 /// whole table is materialized (partitioning/sorting need every row) and
 /// the planned window program runs over it as a single segment.
-pub fn execute_windowed(file: &ParquetFile, query: &Select) -> Result<Vec<Vec<Value>>> {
+pub fn execute_windowed(file: &ParquetFile, query: &Select) -> Result<QueryOutput> {
     let program = planner::compile_window(query)?;
     let columns = resolve_columns(&leaf_columns(file), &program.columns_to_load())?;
     let batch = read_whole_table(file, &columns)?;
@@ -413,7 +413,21 @@ pub fn execute_windowed(file: &ParquetFile, query: &Select) -> Result<Vec<Vec<Va
 /// Query result with column names.
 pub struct QueryResult {
     pub columns: Vec<String>,
-    pub rows: Vec<Vec<Value>>,
+    /// The result as db-core's chunked column-major `QueryOutput`
+    /// (db-core#436): one chunk per row group, never concatenated, no
+    /// per-row allocation. Consume it column by column via
+    /// `output.chunks()`, or row by row via [`QueryResult::rows`].
+    pub output: QueryOutput,
+}
+
+impl QueryResult {
+    /// Rows, one at a time, across every chunk -- a transient `Vec<Value>`
+    /// per yielded row, no materialized row table. The way a row-oriented
+    /// consumer (a printer) should read a large result; use
+    /// `output.into_rows()` only when every row is really needed at once.
+    pub fn rows(&self) -> impl Iterator<Item = Vec<Value>> + '_ {
+        self.output.rows()
+    }
 }
 
 /// One loaded table: its file, memory-mapped (re-opened as a fresh
@@ -552,7 +566,7 @@ impl QueryEngine {
 
         Ok(QueryResult {
             columns: planner::output_column_names(&query),
-            rows,
+            output: rows,
         })
     }
 
