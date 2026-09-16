@@ -601,7 +601,24 @@ pub(crate) fn rewrite_filter_to_sql(filter: &str) -> Result<String, String> {
         return Ok(normalize_double_quoted_literals(trimmed));
     }
 
-    let where_clause = parse_where_clause(trimmed)?;
+    // Same fallback as `resolve_highlight_expr`: try loglume's short-form
+    // parser first, and if the expression isn't one of loglume's short
+    // forms at all (e.g. it references `tag`/`message`/other fields the
+    // short forms don't cover), pass it straight through as a raw boolean
+    // expression -- db-core validates it either way. Without this,
+    // `--filter`/the TUI's `/` accepted strictly less than
+    // `--highlight`/`?` for the exact same grammar, a confusing
+    // inconsistency (#74). A recognized-but-malformed short form (e.g.
+    // `severity >= BOGUS`) still reports its specific error rather than
+    // being silently swallowed by the fallback -- only
+    // `parse_single_clause`'s generic catch-all triggers it.
+    let where_clause = match parse_where_clause(trimmed) {
+        Ok(clause) => clause,
+        Err(e) if e.contains("unrecognized filter expression") => {
+            normalize_double_quoted_literals(trimmed)
+        }
+        Err(e) => return Err(e),
+    };
     Ok(format!("SELECT * FROM log WHERE {where_clause}"))
 }
 
@@ -3745,12 +3762,20 @@ mod tests {
     }
 
     #[test]
-    fn unrecognized_filter_expression_is_an_error() {
-        let err = match rewrite_filter_to_sql("bogus filter") {
-            Err(e) => e,
-            Ok(_) => panic!("expected error"),
-        };
-        assert!(err.contains("bogus filter"));
+    fn filter_falls_back_to_a_raw_expression_when_not_a_short_form() {
+        // #74: `--filter`/the TUI's `/` used to reject anything that
+        // wasn't a "severity"/"facility" short form or a full SELECT,
+        // even a plain db-core boolean expression like `tag = 'systemd'`
+        // -- an inconsistency with `--highlight`, which already accepted
+        // it via the same fallback in `resolve_highlight_expr`.
+        let sql = rewrite_filter_to_sql("tag = 'systemd'").expect("valid filter");
+        assert_eq!(sql, "SELECT * FROM log WHERE tag = 'systemd'");
+    }
+
+    #[test]
+    fn filter_raw_expression_fallback_normalizes_double_quoted_literals() {
+        let sql = rewrite_filter_to_sql(r#"tag = "systemd""#).expect("valid filter");
+        assert_eq!(sql, "SELECT * FROM log WHERE tag = 'systemd'");
     }
 
     #[test]
