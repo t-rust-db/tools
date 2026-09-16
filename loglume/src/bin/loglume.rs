@@ -1760,12 +1760,13 @@ mod tui {
                 let summary_item = if self.row_is_highlighted(row) {
                     ListItem::new(summary_text).style(highlight_style)
                 } else {
-                    let severity = severity_idx.and_then(|idx| row.get(idx)).and_then(|cell| {
-                        match cell {
-                            Cell::Int(i) => Some(*i),
-                            _ => None,
-                        }
-                    });
+                    let severity =
+                        severity_idx
+                            .and_then(|idx| row.get(idx))
+                            .and_then(|cell| match cell {
+                                Cell::Int(i) => Some(*i),
+                                _ => None,
+                            });
                     let mut style = Style::default();
                     if display_idx % 2 == 1 {
                         style = style.bg(self.theme.zebra_bg);
