@@ -723,6 +723,12 @@ mod config {
         pub(crate) status_error: Option<String>,
         #[serde(default)]
         pub(crate) zebra_bg: Option<String>,
+        #[serde(default)]
+        pub(crate) severity_error: Option<String>,
+        #[serde(default)]
+        pub(crate) severity_warn: Option<String>,
+        #[serde(default)]
+        pub(crate) severity_dim: Option<String>,
     }
 
     impl Config {
@@ -1056,7 +1062,7 @@ mod tui {
     use crossterm::terminal::{
         disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
     };
-    use loglume::{Cell, CompiledPredicate, Engine, QueryResult};
+    use loglume::{Cell, CompiledPredicate, Engine, QueryResult, Severity};
     use ratatui::backend::CrosstermBackend;
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::style::{Color, Modifier, Style};
@@ -1083,6 +1089,9 @@ mod tui {
         detail_dim: Color,
         status_error: Color,
         zebra_bg: Color,
+        severity_error: Color,
+        severity_warn: Color,
+        severity_dim: Color,
     }
 
     impl Default for Theme {
@@ -1094,6 +1103,9 @@ mod tui {
                 detail_dim: Color::Rgb(0x6c, 0x70, 0x86),     // overlay1
                 status_error: Color::Rgb(0xf3, 0x8b, 0xa8),   // red
                 zebra_bg: Color::Rgb(0x31, 0x32, 0x44),       // surface0
+                severity_error: Color::Rgb(0xf3, 0x8b, 0xa8), // red (Error/Fatal)
+                severity_warn: Color::Rgb(0xfa, 0xb3, 0x87),  // peach (Warn)
+                severity_dim: Color::Rgb(0x6c, 0x70, 0x86),   // overlay1 (Info/Debug/Trace)
             }
         }
     }
@@ -1117,7 +1129,27 @@ mod tui {
                 status_error: parse_hex_color(cfg.status_error.as_deref())
                     .unwrap_or(defaults.status_error),
                 zebra_bg: parse_hex_color(cfg.zebra_bg.as_deref()).unwrap_or(defaults.zebra_bg),
+                severity_error: parse_hex_color(cfg.severity_error.as_deref())
+                    .unwrap_or(defaults.severity_error),
+                severity_warn: parse_hex_color(cfg.severity_warn.as_deref())
+                    .unwrap_or(defaults.severity_warn),
+                severity_dim: parse_hex_color(cfg.severity_dim.as_deref())
+                    .unwrap_or(defaults.severity_dim),
             }
+        }
+    }
+
+    /// Foreground color for a row based on its `severity` column: red for
+    /// Error/Fatal, peach for Warn, dim for Info/Debug/Trace. `None` only
+    /// when the row has no `severity` column at all (#54).
+    fn severity_color(theme: &Theme, severity: Option<i64>) -> Option<Color> {
+        let severity = severity?;
+        if severity >= Severity::Error as u8 as i64 {
+            Some(theme.severity_error)
+        } else if severity >= Severity::Warn as u8 as i64 {
+            Some(theme.severity_warn)
+        } else {
+            Some(theme.severity_dim)
         }
     }
 
@@ -1690,6 +1722,7 @@ mod tui {
             };
 
             let raw_idx = self.result.columns.iter().position(|c| c == "raw");
+            let severity_idx = self.result.columns.iter().position(|c| c == "severity");
             let highlight_style = Style::default()
                 .bg(self.theme.highlight_bg)
                 .fg(self.theme.highlight_fg)
@@ -1726,10 +1759,22 @@ mod tui {
                 let summary_text = if expand { format!("- {text}") } else { text };
                 let summary_item = if self.row_is_highlighted(row) {
                     ListItem::new(summary_text).style(highlight_style)
-                } else if display_idx % 2 == 1 {
-                    ListItem::new(summary_text).style(Style::default().bg(self.theme.zebra_bg))
                 } else {
-                    ListItem::new(summary_text)
+                    let severity =
+                        severity_idx
+                            .and_then(|idx| row.get(idx))
+                            .and_then(|cell| match cell {
+                                Cell::Int(i) => Some(*i),
+                                _ => None,
+                            });
+                    let mut style = Style::default();
+                    if display_idx % 2 == 1 {
+                        style = style.bg(self.theme.zebra_bg);
+                    }
+                    if let Some(fg) = severity_color(&self.theme, severity) {
+                        style = style.fg(fg);
+                    }
+                    ListItem::new(summary_text).style(style)
                 };
                 items.push(summary_item);
 
@@ -2717,6 +2762,10 @@ mod tui {
             assert_eq!(theme.highlight_fg, Color::Rgb(0x1e, 0x1e, 0x2e));
             assert_eq!(theme.detail_dim, Color::Rgb(0x6c, 0x70, 0x86));
             assert_eq!(theme.status_error, Color::Rgb(0xf3, 0x8b, 0xa8));
+            assert_eq!(theme.zebra_bg, Color::Rgb(0x31, 0x32, 0x44));
+            assert_eq!(theme.severity_error, Color::Rgb(0xf3, 0x8b, 0xa8));
+            assert_eq!(theme.severity_warn, Color::Rgb(0xfa, 0xb3, 0x87));
+            assert_eq!(theme.severity_dim, Color::Rgb(0x6c, 0x70, 0x86));
         }
 
         #[test]
@@ -2749,6 +2798,40 @@ mod tui {
                 Theme::default().border_focused,
                 "an unparsable hex value must fall back to the default, not panic or leave a garbage color"
             );
+        }
+
+        #[test]
+        fn severity_color_maps_bands_to_theme_colors() {
+            let theme = Theme::default();
+            assert_eq!(
+                severity_color(&theme, Some(Severity::Fatal as u8 as i64)),
+                Some(theme.severity_error)
+            );
+            assert_eq!(
+                severity_color(&theme, Some(Severity::Error as u8 as i64)),
+                Some(theme.severity_error)
+            );
+            assert_eq!(
+                severity_color(&theme, Some(Severity::Warn as u8 as i64)),
+                Some(theme.severity_warn)
+            );
+            assert_eq!(
+                severity_color(&theme, Some(Severity::Info as u8 as i64)),
+                Some(theme.severity_dim)
+            );
+            assert_eq!(
+                severity_color(&theme, Some(Severity::Debug as u8 as i64)),
+                Some(theme.severity_dim)
+            );
+            assert_eq!(
+                severity_color(&theme, Some(Severity::Trace as u8 as i64)),
+                Some(theme.severity_dim)
+            );
+        }
+
+        #[test]
+        fn severity_color_is_none_without_a_severity_column() {
+            assert_eq!(severity_color(&Theme::default(), None), None);
         }
 
         #[test]
