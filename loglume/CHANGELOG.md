@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-09-16
+
+### Fixed
+- `--filter` (CLI argument and TUI `/` edit) now accepts raw db-core boolean expressions like `tag='systemd'`, matching `--highlight` behavior. Previously only loglume's `severity`/`facility` short forms and full `SELECT` statements were accepted, a confusing inconsistency (#74).
+
 ## [0.12.0] - 2026-09-16
 
 ### Added
