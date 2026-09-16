@@ -1436,6 +1436,11 @@ mod tui {
         highlight_history: History,
         highlight_history_pos: Option<usize>,
         highlight_draft: String,
+        /// The filter `sql` that was active before 'f' promoted the
+        /// highlight expression into the filter (#70). `Some` means the
+        /// view is currently narrowed to highlighted lines; pressing 'f'
+        /// again restores this and clears it back to `None`.
+        promoted_filter_prev_sql: Option<String>,
         /// When true, the list displays newest-first (top-down) instead of
         /// the natural oldest-first order; toggled per pane via 'R'.
         reverse: bool,
@@ -1644,6 +1649,7 @@ mod tui {
                 highlight_history: History::load(&cache::highlight_history_path()),
                 highlight_history_pos: None,
                 highlight_draft: String::new(),
+                promoted_filter_prev_sql: None,
                 reverse: true,
                 filter_status: None,
                 highlight_status: None,
@@ -1850,6 +1856,23 @@ mod tui {
                     // expression (explicit requirement of #14).
                     if self.highlight.is_some() {
                         self.highlight_enabled = !self.highlight_enabled;
+                    }
+                }
+                KeyCode::Char('f') => {
+                    if let Some(prev_sql) = self.promoted_filter_prev_sql.take() {
+                        self.sql = prev_sql;
+                        self.filter_text = self.sql.clone();
+                        self.requery(false)?;
+                    } else if self.highlight.is_some() {
+                        match rewrite_filter_to_sql(&self.highlight_text) {
+                            Ok(sql) => {
+                                self.promoted_filter_prev_sql = Some(self.sql.clone());
+                                self.sql = sql;
+                                self.filter_text = self.sql.clone();
+                                self.requery(false)?;
+                            }
+                            Err(e) => self.filter_status = Some(format!("filter error: {e}")),
+                        }
                     }
                 }
                 KeyCode::Char('r') => self.requery(true)?,
@@ -2077,7 +2100,7 @@ mod tui {
             let highlight_title = if self.editing_highlight {
                 "highlight (Enter to apply, Esc to cancel)"
             } else {
-                "highlight (? edit, h toggle on/off)"
+                "highlight (? edit, h toggle on/off, f filter to matches)"
             };
             let highlight_line = if self.editing_highlight {
                 render_cursor_line(&self.highlight_text, self.highlight_cursor)
@@ -2666,6 +2689,60 @@ mod tui {
                 .handle_key(KeyCode::Char('h'), KeyModifiers::NONE)
                 .unwrap());
             assert!(!app.panes[0].highlight_enabled);
+        }
+
+        #[test]
+        fn f_promotes_highlight_to_filter_and_toggles_back() {
+            let mut app = one_pane_app();
+            app.handle_key(KeyCode::Char('?'), KeyModifiers::NONE)
+                .unwrap();
+            type_str(&mut app, "severity >= ERR");
+            app.handle_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+
+            let original_sql = app.panes[0].sql.clone();
+            let unfiltered_rows = app.panes[0].result.rows.len();
+
+            assert!(!app
+                .handle_key(KeyCode::Char('f'), KeyModifiers::NONE)
+                .unwrap());
+            let pane = &app.panes[0];
+            assert!(pane.promoted_filter_prev_sql.is_some());
+            assert_ne!(pane.sql, original_sql);
+            assert!(
+                pane.result.rows.len() < unfiltered_rows,
+                "expected the view to narrow to just the highlighted rows"
+            );
+            assert!(
+                pane.result
+                    .rows
+                    .iter()
+                    .all(|row| pane.row_is_highlighted(row)),
+                "every remaining row should be a highlight match"
+            );
+
+            // Pressing 'f' again restores the prior filter and row count.
+            assert!(!app
+                .handle_key(KeyCode::Char('f'), KeyModifiers::NONE)
+                .unwrap());
+            let pane = &app.panes[0];
+            assert!(pane.promoted_filter_prev_sql.is_none());
+            assert_eq!(pane.sql, original_sql);
+            assert_eq!(pane.result.rows.len(), unfiltered_rows);
+        }
+
+        #[test]
+        fn f_is_a_noop_with_no_highlight_expression() {
+            let mut app = one_pane_app();
+            let original_sql = app.panes[0].sql.clone();
+            let original_rows = app.panes[0].result.rows.len();
+
+            assert!(!app
+                .handle_key(KeyCode::Char('f'), KeyModifiers::NONE)
+                .unwrap());
+            let pane = &app.panes[0];
+            assert!(pane.promoted_filter_prev_sql.is_none());
+            assert_eq!(pane.sql, original_sql);
+            assert_eq!(pane.result.rows.len(), original_rows);
         }
 
         #[test]
