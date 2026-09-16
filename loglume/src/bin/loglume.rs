@@ -166,7 +166,7 @@ fn run(args: &Args) -> io::Result<()> {
                 "--tui requires at least one file argument (stdin isn't supported)",
             ));
         }
-        return tui::run(&args.files, sql, &cfg.tui.theme);
+        return tui::run(&args.files, sql, &cfg.tui.theme, &cfg.tui.color_rules);
     }
 
     match args.files.as_slice() {
@@ -744,6 +744,21 @@ mod config {
         /// built-in Catppuccin Mocha defaults.
         #[serde(default)]
         pub(crate) theme: ThemeConfig,
+        /// Ordered `(expression, color)` rules (#55): the first whose
+        /// expression matches a row colors its text, falling through to
+        /// severity-color/default if none match. Uses the same boolean-
+        /// expression engine as `--filter`/`--highlight`.
+        #[serde(default)]
+        pub(crate) color_rules: Vec<ColorRuleConfig>,
+    }
+
+    /// One `[[tui.color_rules]]` entry: a boolean expression (loglume
+    /// short-form or raw db-core SQL, same grammar `--highlight` accepts)
+    /// paired with the hex color to apply when it matches.
+    #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+    pub(crate) struct ColorRuleConfig {
+        pub(crate) expr: String,
+        pub(crate) color: String,
     }
 
     /// `[tui.theme]`: hex-string (`"#rrggbb"`) overrides for the TUI's
@@ -1178,7 +1193,7 @@ mod cache {
 /// understands loglume's filter syntax.
 mod tui {
     use super::cache::{self, History};
-    use super::config::ThemeConfig;
+    use super::config::{ColorRuleConfig, ThemeConfig};
     use super::{
         engine_err, format_cell, format_row, format_scope_report, open_engine,
         resolve_highlight_expr, rewrite_filter_to_sql,
@@ -1279,6 +1294,42 @@ mod tui {
         }
     }
 
+    /// One compiled `[[tui.color_rules]]` entry (#55): a predicate paired
+    /// with the color to apply when it matches. Compiled once per `Pane`
+    /// at construction, not per row/frame -- the same cost model as the
+    /// existing `highlight` predicate.
+    struct ColorRule {
+        predicate: CompiledPredicate,
+        color: Color,
+    }
+
+    /// Compiles each configured rule against `engine`, silently dropping
+    /// any entry with an unparsable expression or invalid color -- a typo
+    /// in one rule must not prevent the TUI from starting, matching
+    /// `Theme::resolve`'s tolerance for a bad hex value (#55).
+    fn compile_color_rules(engine: &impl Engine, rules: &[ColorRuleConfig]) -> Vec<ColorRule> {
+        rules
+            .iter()
+            .filter_map(|rule| {
+                let predicate = engine
+                    .compile_predicate(&resolve_highlight_expr(&rule.expr))
+                    .ok()?;
+                let color = parse_hex_color(Some(&rule.color))?;
+                Some(ColorRule { predicate, color })
+            })
+            .collect()
+    }
+
+    /// Foreground color from the first matching rule in `rules`, in order
+    /// -- first match wins (#55). Eval errors are treated as non-match,
+    /// same as `Pane::row_is_highlighted`.
+    fn color_rule_fg(rules: &[ColorRule], row: &[Cell], columns: &[String]) -> Option<Color> {
+        rules
+            .iter()
+            .find(|rule| rule.predicate.eval(row, columns).unwrap_or(false))
+            .map(|rule| rule.color)
+    }
+
     /// Parse a `"#rrggbb"` (or `"rrggbb"`) hex string into a `Color::Rgb`.
     /// Returns `None` for anything absent or malformed.
     fn parse_hex_color(hex: Option<&str>) -> Option<Color> {
@@ -1298,13 +1349,14 @@ mod tui {
         paths: &[PathBuf],
         initial_sql: String,
         theme_cfg: &ThemeConfig,
+        color_rules_cfg: &[ColorRuleConfig],
     ) -> io::Result<()> {
         let theme = Theme::resolve(theme_cfg);
         // Open every file *before* touching the terminal: a missing path
         // used to bail out of `App::new` after EnterAlternateScreen/raw
         // mode was already on, leaving the shell wedged in the alternate
         // screen with echo off -- it looked like a hang, not an error.
-        let app = App::new(paths, initial_sql, theme)?;
+        let app = App::new(paths, initial_sql, theme, color_rules_cfg)?;
         install_panic_hook();
         let mut terminal = init_terminal()?;
         let result = app.run(&mut terminal);
@@ -1396,6 +1448,9 @@ mod tui {
         /// can't type into a box you can't see.
         bars_hidden: bool,
         theme: Theme,
+        /// Ordered `[tui.color_rules]`, compiled once against this pane's
+        /// own engine at construction (#55).
+        color_rules: Vec<ColorRule>,
         watch_rx: mpsc::Receiver<()>,
     }
 
@@ -1542,9 +1597,15 @@ mod tui {
     }
 
     impl Pane {
-        fn new(path: &Path, sql: String, theme: Theme) -> io::Result<Self> {
+        fn new(
+            path: &Path,
+            sql: String,
+            theme: Theme,
+            color_rules_cfg: &[ColorRuleConfig],
+        ) -> io::Result<Self> {
             let mut engine = open_engine(path)?;
             let result = engine.run_query(&sql).map_err(engine_err)?;
+            let color_rules = compile_color_rules(&engine, color_rules_cfg);
 
             let rx = super::watch_file(path);
 
@@ -1580,6 +1641,7 @@ mod tui {
                 detail_open: false,
                 bars_hidden: false,
                 theme,
+                color_rules,
                 watch_rx: rx,
             })
         }
@@ -1900,7 +1962,9 @@ mod tui {
                     if display_idx % 2 == 1 {
                         style = style.bg(self.theme.zebra_bg);
                     }
-                    if let Some(fg) = severity_color(&self.theme, severity) {
+                    let fg = color_rule_fg(&self.color_rules, row, &self.result.columns)
+                        .or_else(|| severity_color(&self.theme, severity));
+                    if let Some(fg) = fg {
                         style = style.fg(fg);
                     }
                     ListItem::new(summary_text).style(style)
@@ -2055,10 +2119,15 @@ mod tui {
     }
 
     impl App {
-        fn new(paths: &[PathBuf], sql: String, theme: Theme) -> io::Result<Self> {
+        fn new(
+            paths: &[PathBuf],
+            sql: String,
+            theme: Theme,
+            color_rules_cfg: &[ColorRuleConfig],
+        ) -> io::Result<Self> {
             let panes = paths
                 .iter()
-                .map(|path| Pane::new(path, sql.clone(), theme))
+                .map(|path| Pane::new(path, sql.clone(), theme, color_rules_cfg))
                 .collect::<io::Result<Vec<_>>>()?;
             Ok(Self {
                 panes,
@@ -2190,6 +2259,7 @@ mod tui {
                 &[PathBuf::from(SAMPLE_LOG), PathBuf::from(SAMPLE_LOG_2)],
                 "SELECT * FROM log WHERE severity >= 'DEBUG'".to_string(),
                 Theme::default(),
+                &[],
             )
             .expect("open two panes")
         }
@@ -2199,6 +2269,7 @@ mod tui {
                 &[PathBuf::from(SAMPLE_LOG)],
                 "SELECT * FROM log WHERE severity >= 'DEBUG'".to_string(),
                 Theme::default(),
+                &[],
             )
             .expect("open one pane")
         }
@@ -3045,6 +3116,86 @@ mod tui {
         #[test]
         fn severity_color_is_none_without_a_severity_column() {
             assert_eq!(severity_color(&Theme::default(), None), None);
+        }
+
+        #[test]
+        fn compile_color_rules_skips_invalid_expression() {
+            let engine = open_engine(Path::new(SAMPLE_LOG)).unwrap();
+            let rules = compile_color_rules(
+                &engine,
+                &[ColorRuleConfig {
+                    expr: "not a valid expr !!!".to_string(),
+                    color: "#ff0000".to_string(),
+                }],
+            );
+            assert!(rules.is_empty());
+        }
+
+        #[test]
+        fn compile_color_rules_skips_invalid_color() {
+            let engine = open_engine(Path::new(SAMPLE_LOG)).unwrap();
+            let rules = compile_color_rules(
+                &engine,
+                &[ColorRuleConfig {
+                    expr: "severity >= WARN".to_string(),
+                    color: "not-a-color".to_string(),
+                }],
+            );
+            assert!(rules.is_empty());
+        }
+
+        #[test]
+        fn compile_color_rules_compiles_valid_entries() {
+            let engine = open_engine(Path::new(SAMPLE_LOG)).unwrap();
+            let rules = compile_color_rules(
+                &engine,
+                &[ColorRuleConfig {
+                    expr: "severity >= WARN".to_string(),
+                    color: "#ff0000".to_string(),
+                }],
+            );
+            assert_eq!(rules.len(), 1);
+            assert_eq!(rules[0].color, Color::Rgb(0xff, 0x00, 0x00));
+        }
+
+        #[test]
+        fn color_rule_fg_returns_first_match_in_order() {
+            let engine = open_engine(Path::new(SAMPLE_LOG)).unwrap();
+            let rules = compile_color_rules(
+                &engine,
+                &[
+                    ColorRuleConfig {
+                        expr: "severity >= WARN".to_string(),
+                        color: "#ff0000".to_string(),
+                    },
+                    ColorRuleConfig {
+                        expr: "severity >= INFO".to_string(),
+                        color: "#00ff00".to_string(),
+                    },
+                ],
+            );
+            let columns = vec!["severity".to_string()];
+            // Error severity matches both rules; the first in order wins.
+            let row = vec![Cell::Int(Severity::Error as u8 as i64)];
+            assert_eq!(
+                color_rule_fg(&rules, &row, &columns),
+                Some(Color::Rgb(0xff, 0x00, 0x00))
+            );
+        }
+
+        #[test]
+        fn color_rule_fg_is_none_when_nothing_matches() {
+            let engine = open_engine(Path::new(SAMPLE_LOG)).unwrap();
+            let rules = compile_color_rules(
+                &engine,
+                &[ColorRuleConfig {
+                    expr: "severity >= WARN".to_string(),
+                    color: "#ff0000".to_string(),
+                }],
+            );
+            let columns = vec!["severity".to_string()];
+            let row = vec![Cell::Int(Severity::Info as u8 as i64)];
+            assert_eq!(color_rule_fg(&rules, &row, &columns), None);
         }
 
         #[test]

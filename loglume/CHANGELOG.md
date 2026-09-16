@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-16
+
+### Added
+- Custom row-coloring rules via `[[tui.color_rules]]`: an ordered list of `{ expr, color }` entries using the same expression grammar as `--filter`/`--highlight`. The first matching rule colors a row's text, falling through to severity-color (#54) or default. A malformed rule is skipped rather than blocking startup (#55).
+
 ## [0.9.0] - 2026-09-16
 
 ### Added
