@@ -371,8 +371,8 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.101.0"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.101.0#d35c04108857707075831f7a9d7c66724668bd8c"
+version = "0.101.6"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.101.6#e8ff1a4b864e9c4252057be16fa6383ecd2bbfb3"
 
 [[package]]
 name = "deltae"
@@ -801,7 +801,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "loglume"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "assert_cmd",
  "clap",
