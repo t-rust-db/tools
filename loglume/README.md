@@ -92,6 +92,15 @@ pane: a highlight bar sits below the filter bar.
 |-----|--------|
 | `?` | Edit the highlight expression (`Enter` to apply, `Esc` to cancel) |
 | `h` | Toggle highlight rendering on/off without clearing the expression |
+| `f` | Toggle: narrow the view to just the highlighted lines, or restore the prior filter |
+
+Applying a filter or highlight (`Enter`, or toggling `h`) is remembered per
+file in `$XDG_CACHE_HOME/loglume/pane_state` (falling back to
+`$HOME/.cache/loglume/pane_state`) and restored the next time that file is
+opened in the TUI -- only the latest state per file is kept, not a history
+(#72). A saved state that no longer compiles or runs against the file (e.g.
+its shape changed) is silently ignored, falling back to the filter given on
+the command line.
 
 ## Display order (TUI)
 
