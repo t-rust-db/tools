@@ -16,7 +16,7 @@ use db_core::codegen::batch::{self as planner, PlanError, TableStats};
 use db_core::parser::ast::{Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
 use db_core::storage::column::parquet::footer::PhysicalType;
 use db_core::storage::{ParquetFile, Vfs, VfsFile};
-use db_core::vm::batch::{QueryOutput, ScanSource, VmError};
+use db_core::vm::batch::{Chunk, QueryOutput, ScanSource, VmError};
 use db_core::vm::engine::{self, InMemorySegment, NoResolver};
 use std::collections::HashMap;
 use std::fmt;
@@ -51,6 +51,15 @@ pub enum QueryError {
     /// has no `.log` files, so this only fires on a query that
     /// deliberately (or mistakenly) uses stream-only syntax.
     ScopeClauseUnsupported,
+    /// [`QueryEngine::execute_streaming`] (db-core#456) was given a query
+    /// shape it never even hands to `vm::engine::run_streaming` -- a
+    /// `JOIN`, an `IN (SELECT ...)` semi-join, or a window function, each
+    /// of which needs its build/probe or partition step to see every row
+    /// first. [`VmError::NotStreamable`] (arriving as [`QueryError::Vm`])
+    /// is the other half of this: everything `run_streaming` itself
+    /// refuses (aggregates, `DISTINCT`, `ORDER BY`, `LIMIT`). Callers
+    /// treat both the same way -- fall back to [`QueryEngine::execute`].
+    NotStreamable(String),
 }
 
 impl fmt::Display for QueryError {
@@ -82,6 +91,7 @@ impl fmt::Display for QueryError {
                     "SINCE/UNTIL is a stream-only clause, not supported over Parquet"
                 )
             }
+            QueryError::NotStreamable(reason) => write!(f, "cannot stream this query: {reason}"),
         }
     }
 }
@@ -116,6 +126,14 @@ impl From<PlanError> for QueryError {
 }
 
 pub type Result<T> = std::result::Result<T, QueryError>;
+
+/// One callback of [`QueryEngine::execute_streaming`] (db-core#456): the
+/// output column names (always first, always exactly once), then each
+/// chunk of the result as it becomes ready.
+pub enum StreamEvent {
+    Columns(Vec<String>),
+    Chunk(Chunk),
+}
 
 /// One row group of a Parquet file as a lazily-loaded [`Segment`]: decodes
 /// exactly the listed leaf columns into a [`Batch`] on `load()`.
@@ -340,6 +358,32 @@ pub fn execute(file: &ParquetFile, query: &Select) -> Result<QueryOutput> {
     run(file, &planner::compile(query)?)
 }
 
+/// Streaming counterpart to [`run`] (db-core#456): hands each emitted
+/// [`Chunk`] to `sink` as soon as it is ready instead of collecting the
+/// whole [`QueryOutput`] first. `sink` never fails on its own account --
+/// it is a printer, and matches [`stream_output::print_result_streaming`]'s
+/// existing convention of writing best-effort and ignoring I/O errors --
+/// so its `Result` only ever carries [`db_core::vm::engine::run_streaming`]'s
+/// own [`VmError::NotStreamable`] back out, unmodified.
+fn run_streaming(file: &ParquetFile, program: &Program, sink: impl FnMut(Chunk)) -> Result<()> {
+    let columns = resolve_columns(&leaf_columns(file), &program.columns_to_load())?;
+    let segments = row_group_segments(file, &columns);
+    let mut sink = sink;
+    Ok(engine::run_streaming(&segments, program, move |chunk| {
+        sink(chunk);
+        Ok(())
+    })?)
+}
+
+/// Streaming counterpart to [`execute`] (db-core#456).
+pub fn execute_streaming(
+    file: &ParquetFile,
+    query: &Select,
+    sink: impl FnMut(Chunk),
+) -> Result<()> {
+    run_streaming(file, &planner::compile(query)?, sink)
+}
+
 /// Execute a query with exactly one `JOIN` (INNER or LEFT): the right
 /// (build) side is materialized whole -- a hash join needs the entire
 /// build table in memory regardless -- and the left (probe) side stays one
@@ -518,6 +562,62 @@ impl QueryEngine {
             .find(|t| t.name == name)
             .map(|t| t.column_names.as_slice())
             .ok_or_else(|| QueryError::UnknownTable(name.to_string()))
+    }
+
+    /// Streaming counterpart to [`Self::execute`] (db-core#456): only the
+    /// plain single-table shape (no `JOIN`, `IN (SELECT ...)` semi-join, or
+    /// window function) can stream -- each of those needs its build/probe
+    /// or partition step to see every row before producing any output, the
+    /// opposite of what streaming is for. `on_event` is called exactly
+    /// once with [`StreamEvent::Columns`] (before any chunk), then once
+    /// per emitted chunk with [`StreamEvent::Chunk`], in result order --
+    /// one callback rather than two separate closures because both would
+    /// otherwise need to borrow the same output writer mutably at once.
+    /// Returns [`QueryError::NotStreamable`] for a join/semi-join/window
+    /// query, or `db_core::vm::batch::VmError::NotStreamable` (as
+    /// [`QueryError::Vm`]) for an aggregate, `DISTINCT`, `ORDER BY`, or
+    /// `LIMIT` one -- callers (column-rs's `-c` one-shot mode) treat both
+    /// as "fall back to `execute`", not as a real query error.
+    pub fn execute_streaming(
+        &self,
+        sql: &str,
+        mut on_event: impl FnMut(StreamEvent),
+    ) -> Result<()> {
+        let query =
+            db_core::parser::parse(sql).map_err(|e| QueryError::UnknownColumn(e.to_string()))?;
+        let from = from_table(&query)?;
+        if first_join(&query).is_some() {
+            return Err(QueryError::NotStreamable("query has a JOIN".to_string()));
+        }
+        if in_subquery(&query).is_some() {
+            return Err(QueryError::NotStreamable(
+                "query is an IN (SELECT ...) semi-join".to_string(),
+            ));
+        }
+        if query.columns.iter().any(is_window_column) {
+            return Err(QueryError::NotStreamable(
+                "query has a window function".to_string(),
+            ));
+        }
+        let schema = self.table_schema(from)?.to_vec();
+        let query = planner::expand_star(&query, &schema)?;
+        let program = planner::compile(&query)?;
+        // Decided before `on_event` fires at all: an aggregate, DISTINCT,
+        // ORDER BY, or LIMIT query is only discovered non-streamable by
+        // `vm::engine::run_streaming` itself, after it may already have
+        // started calling a sink -- too late for a caller (this one) that
+        // is about to commit to printing a header. Check first instead.
+        if !engine::is_streamable(&program) {
+            return Err(QueryError::NotStreamable(
+                "query has an aggregate, DISTINCT, ORDER BY, or LIMIT".to_string(),
+            ));
+        }
+        let main_data = self.table_data(from)?;
+        let main_file = ParquetFile::open(main_data)?;
+        on_event(StreamEvent::Columns(planner::output_column_names(&query)));
+        run_streaming(&main_file, &program, |chunk| {
+            on_event(StreamEvent::Chunk(chunk))
+        })
     }
 
     /// Execute a SQL query and return results. Dispatches to a `JOIN`,
