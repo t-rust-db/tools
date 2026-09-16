@@ -35,6 +35,20 @@ severity_error = "#f38ba8"  # row text for Error/Fatal severity (red)
 severity_warn  = "#fab387"  # row text for Warn severity (peach)
 severity_dim   = "#6c7086"  # row text for Info/Debug/Trace severity (overlay1)
 
+# Ordered row-coloring rules: the first whose expression matches a row
+# colors its text, falling through to severity-color/default if none
+# match. `expr` accepts the same grammar as `--highlight` (loglume's
+# short forms or a raw db-core boolean expression). An entry with an
+# unparsable expression or invalid color is skipped rather than
+# blocking startup.
+[[tui.color_rules]]
+expr = "message LIKE '%oom%'"
+color = "#fab387"
+
+[[tui.color_rules]]
+expr = "facility = 'auth'"
+color = "#89b4fa"
+
 # Saved filters/queries, referenced on the command line as "@name".
 [filters]
 myerr = "SELECT * FROM log WHERE severity >= 13"
