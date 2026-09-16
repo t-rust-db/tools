@@ -3,13 +3,14 @@
 mod handler;
 mod stream_output;
 
+use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use column_rs::query::QueryEngine;
+use column_rs::query::{QueryEngine, QueryError};
 use db_cli::{history_path, run_repl, OutputMode, ReplOptions};
 use handler::{ColumnHandler, Output};
-use stream_output::print_result_streaming;
+use stream_output::{print_chunk, print_result_streaming};
 
 const USAGE: &str = "[--version] [--help] [-c \"<SQL>\"] <file.parquet> [more.parquet ...]";
 
@@ -81,6 +82,20 @@ fn run_query(paths: &[PathBuf], sql: &str) -> ExitCode {
         Ok(e) => e,
         Err(code) => return code,
     };
+    // db-core#456: try the streaming path first -- it prints as it goes,
+    // instead of collecting the whole result before the first line. It
+    // only covers a plain single-table SELECT with no aggregate,
+    // DISTINCT, ORDER BY, or LIMIT (see `QueryEngine::execute_streaming`);
+    // anything else, including EXPLAIN, falls through to the existing
+    // collect-then-print path below unchanged.
+    match try_stream_query(&engine, sql) {
+        Ok(true) => return ExitCode::SUCCESS,
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
     let mut handler = ColumnHandler { engine };
     match db_cli::ReplHandler::execute(&mut handler, sql) {
         // #110: one-shot mode streams tab-separated output row-by-row
@@ -106,6 +121,46 @@ fn run_query(paths: &[PathBuf], sql: &str) -> ExitCode {
             eprintln!("error: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Attempts `sql` via [`QueryEngine::execute_streaming`] (db-core#456).
+/// `Ok(true)`: streamed and printed, caller is done. `Ok(false)`: not a
+/// streamable shape (`EXPLAIN`, a parse error, a `JOIN`/semi-join/window
+/// query, or an aggregate/`DISTINCT`/`ORDER BY`/`LIMIT`) -- caller falls
+/// back to the existing collect-then-print path, which reports whatever
+/// the real error turns out to be if there is one. `Err`: a genuine query
+/// error surfaced *during* streaming, after some rows may already have
+/// been printed -- there is no whole result to discard and retry with.
+fn try_stream_query(engine: &QueryEngine, sql: &str) -> Result<bool, QueryError> {
+    // `EXPLAIN ...` isn't ordinary SQL to `db_core::parser::parse`, so
+    // strip it first (matching `handler::ColumnHandler::execute`) and
+    // decline to stream it here -- the fallback path already renders
+    // Plan/Opcodes output correctly.
+    match column_rs::sql::parse_explain(sql) {
+        Ok((db_core::parser::Explain::None, _)) => {}
+        _ => return Ok(false),
+    }
+    let stdout = io::stdout();
+    let mut out = BufWriter::with_capacity(256 * 1024, stdout.lock());
+    let mut streamed_header = false;
+    let result = engine.execute_streaming(sql, |event| match event {
+        column_rs::query::StreamEvent::Columns(columns) => {
+            let _ = writeln!(out, "{}", columns.join("\t"));
+            streamed_header = true;
+        }
+        column_rs::query::StreamEvent::Chunk(chunk) => print_chunk(&mut out, &chunk),
+    });
+    match result {
+        Ok(()) => Ok(true),
+        // Not this query's fault -- the shape just can't stream. Nothing
+        // was printed yet in either case: `on_columns` (and therefore any
+        // row) only runs after every up-front check has already passed.
+        Err(
+            QueryError::NotStreamable(_)
+            | QueryError::Vm(db_core::vm::batch::VmError::NotStreamable { .. }),
+        ) if !streamed_header => Ok(false),
+        Err(e) => Err(e),
     }
 }
 
