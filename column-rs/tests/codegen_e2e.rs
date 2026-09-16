@@ -105,7 +105,7 @@ fn codegen_group_by_matches_query_engine_across_multiple_row_groups() {
     let engine = column_rs::query::QueryEngine::open(std::path::Path::new(&fixture)).unwrap();
     let result = engine.execute(sql).unwrap();
     let mut expected = format!("{}\n", result.columns.join("\t"));
-    for row in &result.rows {
+    for row in result.rows() {
         let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();
         expected.push_str(&line.join("\t"));
         expected.push('\n');
@@ -125,7 +125,7 @@ fn codegen_flat_filter_matches_query_engine() {
     let engine = column_rs::query::QueryEngine::open(std::path::Path::new(&fixture)).unwrap();
     let result = engine.execute(sql).unwrap();
     let mut expected = format!("{}\n", result.columns.join("\t"));
-    for row in &result.rows {
+    for row in result.rows() {
         let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();
         expected.push_str(&line.join("\t"));
         expected.push('\n');
@@ -154,7 +154,7 @@ fn codegen_join_matches_query_engine() {
     .unwrap();
     let result = engine.execute(sql).unwrap();
     let mut expected = format!("{}\n", result.columns.join("\t"));
-    for row in &result.rows {
+    for row in result.rows() {
         let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();
         expected.push_str(&line.join("\t"));
         expected.push('\n');
@@ -179,7 +179,7 @@ fn codegen_row_number_window_matches_query_engine() {
     let engine = column_rs::query::QueryEngine::open(std::path::Path::new(&fixture)).unwrap();
     let result = engine.execute(sql).unwrap();
     let mut expected = format!("{}\n", result.columns.join("\t"));
-    for row in &result.rows {
+    for row in result.rows() {
         let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();
         expected.push_str(&line.join("\t"));
         expected.push('\n');
@@ -203,7 +203,7 @@ fn codegen_lag_lead_window_matches_query_engine() {
     let engine = column_rs::query::QueryEngine::open(std::path::Path::new(&fixture)).unwrap();
     let result = engine.execute(sql).unwrap();
     let mut expected = format!("{}\n", result.columns.join("\t"));
-    for row in &result.rows {
+    for row in result.rows() {
         let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();
         expected.push_str(&line.join("\t"));
         expected.push('\n');
@@ -226,7 +226,7 @@ fn codegen_sum_over_window_matches_query_engine() {
     let engine = column_rs::query::QueryEngine::open(std::path::Path::new(&fixture)).unwrap();
     let result = engine.execute(sql).unwrap();
     let mut expected = format!("{}\n", result.columns.join("\t"));
-    for row in &result.rows {
+    for row in result.rows() {
         let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();
         expected.push_str(&line.join("\t"));
         expected.push('\n');
@@ -252,7 +252,7 @@ fn codegen_semi_join_matches_query_engine() {
     .unwrap();
     let result = engine.execute(sql).unwrap();
     let mut expected = format!("{}\n", result.columns.join("\t"));
-    for row in &result.rows {
+    for row in result.rows() {
         let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();
         expected.push_str(&line.join("\t"));
         expected.push('\n');

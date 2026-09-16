@@ -50,8 +50,7 @@ impl ReplHandler for ColumnHandler {
         match output {
             Output::Rows(result) => {
                 let rows: Vec<Vec<String>> = result
-                    .rows
-                    .iter()
+                    .rows()
                     .map(|row| row.iter().map(|v| v.to_string()).collect())
                     .collect();
                 render(mode, &result.columns, &rows, headers)

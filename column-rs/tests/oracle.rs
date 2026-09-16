@@ -547,7 +547,7 @@ fn oracle_inner_join_matches_duckdb() {
     let regions = ParquetFile::open(&regions_data).unwrap();
 
     let parsed = sql::parse("SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.key ORDER BY orders.id").unwrap();
-    let rows = query::execute_joined(&orders, &regions, &parsed).unwrap();
+    let rows = query::execute_joined(&orders, &regions, &parsed).unwrap().into_rows();
 
     assert_eq!(rows.len(), expected.len());
     for ((id, budget), row) in expected.iter().zip(&rows) {
@@ -603,7 +603,7 @@ fn oracle_join_across_multiple_row_groups_matches_duckdb() {
          GROUP BY region.region ORDER BY region.region",
     )
     .unwrap();
-    let rows = query::execute_joined(&production, &region, &parsed).unwrap();
+    let rows = query::execute_joined(&production, &region, &parsed).unwrap().into_rows();
 
     assert_eq!(rows.len(), expected.len());
     for ((name, count, sum), row) in expected.iter().zip(&rows) {
@@ -640,7 +640,7 @@ fn query_engine_runs_join_across_two_loaded_tables() {
     assert_eq!(engine.table_names(), vec!["orders", "regions"]);
 
     let result = engine.execute("SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.key ORDER BY orders.id").unwrap();
-    assert!(!result.rows.is_empty());
+    assert!(!result.output.is_empty());
     assert_eq!(result.columns, vec!["orders.id", "regions.budget"]);
 }
 
@@ -682,7 +682,7 @@ fn cli_one_shot_streaming_output_matches_query_engine() {
     let engine = column_rs::query::QueryEngine::open(Path::new(&path)).unwrap();
     let result = engine.execute(sql).unwrap();
     let mut expected = format!("{}\n", result.columns.join("\t"));
-    for row in &result.rows {
+    for row in result.rows() {
         let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();
         expected.push_str(&line.join("\t"));
         expected.push('\n');
@@ -716,7 +716,7 @@ fn oracle_left_join_keeps_unmatched_rows_matches_duckdb() {
     let parsed =
         sql::parse("SELECT orders.id, regions.budget FROM orders LEFT JOIN regions ON orders.region_key = regions.key ORDER BY orders.id")
             .unwrap();
-    let rows = query::execute_joined(&orders, &regions, &parsed).unwrap();
+    let rows = query::execute_joined(&orders, &regions, &parsed).unwrap().into_rows();
 
     assert_eq!(
         rows.len(),
@@ -763,7 +763,7 @@ fn oracle_semi_join_matches_duckdb() {
         "SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions) ORDER BY id",
     )
     .unwrap();
-    let rows = query::execute_semi_join(&orders, &regions, &parsed).unwrap();
+    let rows = query::execute_semi_join(&orders, &regions, &parsed).unwrap().into_rows();
 
     assert_eq!(
         rows.len(),
@@ -800,7 +800,7 @@ fn oracle_ranking_window_functions_match_duckdb() {
     let parsed =
         sql::parse("SELECT id, region_key, ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id), RANK() OVER (PARTITION BY region_key ORDER BY id), DENSE_RANK() OVER (PARTITION BY region_key ORDER BY id) FROM orders ORDER BY id")
             .unwrap();
-    let rows = query::execute_windowed(&file, &parsed).unwrap();
+    let rows = query::execute_windowed(&file, &parsed).unwrap().into_rows();
 
     assert_eq!(rows.len(), expected.len());
     for ((id, rn, rk, drk), row) in expected.iter().zip(&rows) {
@@ -855,7 +855,7 @@ fn oracle_lag_lead_first_last_value_match_duckdb() {
          FROM orders ORDER BY id",
     )
     .unwrap();
-    let rows = query::execute_windowed(&file, &parsed).unwrap();
+    let rows = query::execute_windowed(&file, &parsed).unwrap().into_rows();
 
     assert_eq!(rows.len(), expected.len());
     for ((id, lag, lead, first, last), row) in expected.iter().zip(&rows) {
@@ -924,7 +924,7 @@ fn oracle_window_aggregates_match_duckdb() {
          FROM orders ORDER BY id",
     )
     .unwrap();
-    let rows = query::execute_windowed(&file, &parsed).unwrap();
+    let rows = query::execute_windowed(&file, &parsed).unwrap().into_rows();
 
     assert_eq!(rows.len(), expected.len());
     for ((id, running_sum, whole_count, whole_avg), row) in expected.iter().zip(&rows) {
@@ -973,7 +973,7 @@ fn oracle_production_shaped_file_group_by_matches_duckdb() {
     );
 
     let query = sql::parse("SELECT region, SUM(amount), COUNT(*) FROM production WHERE id > 1000 GROUP BY region ORDER BY region").unwrap();
-    let mut rows = query::execute(&file, &query).unwrap();
+    let mut rows = query::execute(&file, &query).unwrap().into_rows();
     rows.sort_by(|a, b| a[0].to_string().cmp(&b[0].to_string()));
 
     assert_eq!(rows.len(), expected.len());
@@ -1020,7 +1020,7 @@ fn oracle_limit_only_matches_duckdb() {
     assert!(file.num_row_groups() > 1, "fixture should span multiple row groups to exercise the bounded scan crossing a row-group boundary");
 
     let query = sql::parse("SELECT region, amount, id FROM production LIMIT 1500").unwrap();
-    let rows = query::execute(&file, &query).unwrap();
+    let rows = query::execute(&file, &query).unwrap().into_rows();
 
     assert_eq!(rows.len(), expected.len());
     assert_eq!(rows.len(), 1500);
@@ -1113,7 +1113,7 @@ fn oracle_order_by_limit_top_n_matches_duckdb() {
             "SELECT id, val FROM nullable ORDER BY val {order} LIMIT 5"
         ))
         .unwrap();
-        let rows = query::execute(&file, &query).unwrap();
+        let rows = query::execute(&file, &query).unwrap().into_rows();
 
         let actual: Vec<(Option<i64>, Option<f64>)> = rows
             .iter()
@@ -1206,7 +1206,7 @@ fn oracle_query_vm_group_by_sum_matches_duckdb() {
     let query =
         sql::parse("SELECT flag, SUM(val) FROM mixed WHERE id > 100 GROUP BY flag ORDER BY flag")
             .unwrap();
-    let mut rows = query::execute(&file, &query).unwrap();
+    let mut rows = query::execute(&file, &query).unwrap().into_rows();
     rows.sort_by(|a, b| a[0].to_string().cmp(&b[0].to_string()));
 
     assert_eq!(rows.len(), expected.len());
@@ -1231,7 +1231,7 @@ fn oracle_query_vm_where_count_matches_duckdb() {
     let data = std::fs::read(&path).unwrap();
     let file = ParquetFile::open(&data).unwrap();
     let query = sql::parse("SELECT COUNT(*) FROM mixed WHERE id > 500").unwrap();
-    let rows = query::execute(&file, &query).unwrap();
+    let rows = query::execute(&file, &query).unwrap().into_rows();
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0][0].as_f64().unwrap() as i64, expected);
@@ -1257,7 +1257,7 @@ fn oracle_projection_of_unfiltered_columns_matches_duckdb() {
     let file = ParquetFile::open(&data).unwrap();
 
     let parsed = sql::parse("SELECT id, name FROM mixed WHERE val > 1400").unwrap();
-    let rows = query::execute(&file, &parsed).unwrap();
+    let rows = query::execute(&file, &parsed).unwrap().into_rows();
 
     assert!(!expected.is_empty(), "fixture should select some rows");
     assert_eq!(rows.len(), expected.len());
@@ -1286,8 +1286,8 @@ fn oracle_select_star_matches_duckdb() {
     let result = engine.execute("SELECT * FROM mixed").unwrap();
 
     assert_eq!(result.columns, vec!["id", "val", "flag", "name"]);
-    assert_eq!(result.rows.len(), expected.len());
-    for (expected_row, row) in expected.iter().zip(&result.rows) {
+    assert_eq!(result.output.num_rows(), expected.len());
+    for (expected_row, row) in expected.iter().zip(result.rows()) {
         assert_eq!(row[0], Value::Int(cell_as_i64(&expected_row[0]).unwrap()));
         assert_eq!(row[1], Value::Float(cell_as_f64(&expected_row[1]).unwrap()));
         assert_eq!(row[2], Value::Bool(cell_as_bool(&expected_row[2]).unwrap()));
@@ -1312,8 +1312,8 @@ fn oracle_select_mixed_star_matches_duckdb() {
     let result = engine.execute("SELECT id, * FROM mixed").unwrap();
 
     assert_eq!(result.columns, vec!["id", "id", "val", "flag", "name"]);
-    assert_eq!(result.rows.len(), expected.len());
-    for (expected_row, row) in expected.iter().zip(&result.rows) {
+    assert_eq!(result.output.num_rows(), expected.len());
+    for (expected_row, row) in expected.iter().zip(result.rows()) {
         assert_eq!(row[0], Value::Int(cell_as_i64(&expected_row[0]).unwrap()));
         assert_eq!(row[1], Value::Int(cell_as_i64(&expected_row[1]).unwrap()));
     }
@@ -1335,8 +1335,8 @@ fn oracle_select_star_with_where_order_limit_matches_duckdb() {
         .execute("SELECT * FROM mixed WHERE id > 100 ORDER BY id LIMIT 5")
         .unwrap();
 
-    assert_eq!(result.rows.len(), expected.len());
-    for (expected_row, row) in expected.iter().zip(&result.rows) {
+    assert_eq!(result.output.num_rows(), expected.len());
+    for (expected_row, row) in expected.iter().zip(result.rows()) {
         assert_eq!(row[0], Value::Int(cell_as_i64(&expected_row[0]).unwrap()));
     }
 }
@@ -1395,7 +1395,7 @@ fn oracle_select_star_join_matches_duckdb() {
         .unwrap();
 
     assert_eq!(result.columns.len(), expected[0].len());
-    assert_eq!(result.rows.len(), expected.len());
+    assert_eq!(result.output.num_rows(), expected.len());
 }
 
 /// #4: `||` string concatenation (`BinOp::Concat -> MapOp::Concat`) and
@@ -1436,8 +1436,7 @@ fn oracle_concat_and_unary_minus_match_duckdb() {
         );
         let result = engine.execute(ours_sql).unwrap();
         let ours: Vec<i64> = result
-            .rows
-            .iter()
+            .rows()
             .map(|row| row[0].as_f64().unwrap() as i64)
             .collect();
         assert_eq!(ours, expected, "{ours_sql}");
@@ -1465,8 +1464,8 @@ fn oracle_concat_and_unary_minus_match_duckdb() {
              FROM funky ORDER BY performer_id",
         )
         .unwrap();
-    assert_eq!(result.rows.len(), expected.len());
-    for ((name, neg, expr), row) in expected.iter().zip(&result.rows) {
+    assert_eq!(result.output.num_rows(), expected.len());
+    for ((name, neg, expr), row) in expected.iter().zip(result.rows()) {
         assert_eq!(row[0].to_string(), *name);
         assert_eq!(row[1].as_f64().unwrap() as i64, *neg);
         assert_eq!(row[2].as_f64().unwrap() as i64, *expr);
