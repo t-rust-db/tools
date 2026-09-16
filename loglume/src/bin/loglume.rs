@@ -779,6 +779,8 @@ mod config {
         #[serde(default)]
         pub(crate) zebra_bg: Option<String>,
         #[serde(default)]
+        pub(crate) severity_fatal: Option<String>,
+        #[serde(default)]
         pub(crate) severity_error: Option<String>,
         #[serde(default)]
         pub(crate) severity_warn: Option<String>,
@@ -1230,6 +1232,7 @@ mod tui {
         detail_dim: Color,
         status_error: Color,
         zebra_bg: Color,
+        severity_fatal: Color,
         severity_error: Color,
         severity_warn: Color,
         severity_dim: Color,
@@ -1244,7 +1247,8 @@ mod tui {
                 detail_dim: Color::Rgb(0x6c, 0x70, 0x86),     // overlay1
                 status_error: Color::Rgb(0xf3, 0x8b, 0xa8),   // red
                 zebra_bg: Color::Rgb(0x31, 0x32, 0x44),       // surface0
-                severity_error: Color::Rgb(0xf3, 0x8b, 0xa8), // red (Error/Fatal)
+                severity_fatal: Color::Rgb(0xff, 0x33, 0x33), // bright, saturated red (Fatal/Critical)
+                severity_error: Color::Rgb(0xf3, 0x8b, 0xa8), // red (Error)
                 severity_warn: Color::Rgb(0xfa, 0xb3, 0x87),  // peach (Warn)
                 severity_dim: Color::Rgb(0x6c, 0x70, 0x86),   // overlay1 (Info/Debug/Trace)
             }
@@ -1270,6 +1274,8 @@ mod tui {
                 status_error: parse_hex_color(cfg.status_error.as_deref())
                     .unwrap_or(defaults.status_error),
                 zebra_bg: parse_hex_color(cfg.zebra_bg.as_deref()).unwrap_or(defaults.zebra_bg),
+                severity_fatal: parse_hex_color(cfg.severity_fatal.as_deref())
+                    .unwrap_or(defaults.severity_fatal),
                 severity_error: parse_hex_color(cfg.severity_error.as_deref())
                     .unwrap_or(defaults.severity_error),
                 severity_warn: parse_hex_color(cfg.severity_warn.as_deref())
@@ -1280,12 +1286,15 @@ mod tui {
         }
     }
 
-    /// Foreground color for a row based on its `severity` column: red for
-    /// Error/Fatal, peach for Warn, dim for Info/Debug/Trace. `None` only
-    /// when the row has no `severity` column at all (#54).
+    /// Foreground color for a row based on its `severity` column: bright red
+    /// for Fatal/Critical, red for Error, peach for Warn, dim for
+    /// Info/Debug/Trace. `None` only when the row has no `severity` column
+    /// at all (#54).
     fn severity_color(theme: &Theme, severity: Option<i64>) -> Option<Color> {
         let severity = severity?;
-        if severity >= Severity::Error as u8 as i64 {
+        if severity >= Severity::Fatal as u8 as i64 {
+            Some(theme.severity_fatal)
+        } else if severity >= Severity::Error as u8 as i64 {
             Some(theme.severity_error)
         } else if severity >= Severity::Warn as u8 as i64 {
             Some(theme.severity_warn)
@@ -3047,6 +3056,7 @@ mod tui {
             assert_eq!(theme.detail_dim, Color::Rgb(0x6c, 0x70, 0x86));
             assert_eq!(theme.status_error, Color::Rgb(0xf3, 0x8b, 0xa8));
             assert_eq!(theme.zebra_bg, Color::Rgb(0x31, 0x32, 0x44));
+            assert_eq!(theme.severity_fatal, Color::Rgb(0xff, 0x33, 0x33));
             assert_eq!(theme.severity_error, Color::Rgb(0xf3, 0x8b, 0xa8));
             assert_eq!(theme.severity_warn, Color::Rgb(0xfa, 0xb3, 0x87));
             assert_eq!(theme.severity_dim, Color::Rgb(0x6c, 0x70, 0x86));
@@ -3089,11 +3099,15 @@ mod tui {
             let theme = Theme::default();
             assert_eq!(
                 severity_color(&theme, Some(Severity::Fatal as u8 as i64)),
-                Some(theme.severity_error)
+                Some(theme.severity_fatal)
             );
             assert_eq!(
                 severity_color(&theme, Some(Severity::Error as u8 as i64)),
                 Some(theme.severity_error)
+            );
+            assert_ne!(
+                theme.severity_fatal, theme.severity_error,
+                "Fatal/Critical must be visually distinct from plain Error"
             );
             assert_eq!(
                 severity_color(&theme, Some(Severity::Warn as u8 as i64)),
