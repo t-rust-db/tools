@@ -929,6 +929,54 @@ mod cache {
         cache_dir().join("filter_history")
     }
 
+    /// The latest TUI view settings (e.g. stacked/side-by-side layout),
+    /// persisted as a single overwritten snapshot rather than a history
+    /// (#56) -- unlike `History` above, there's only ever one "latest".
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    pub(crate) struct TuiState {
+        #[serde(default = "default_stacked")]
+        pub(crate) stacked: bool,
+    }
+
+    fn default_stacked() -> bool {
+        true
+    }
+
+    impl Default for TuiState {
+        fn default() -> Self {
+            Self { stacked: true }
+        }
+    }
+
+    impl TuiState {
+        /// Loads state from `path`, or the default if absent or unparsable
+        /// -- a corrupt or stale cache file must never block startup.
+        pub(crate) fn load(path: &Path) -> Self {
+            std::fs::read_to_string(path)
+                .ok()
+                .and_then(|raw| toml::from_str(&raw).ok())
+                .unwrap_or_default()
+        }
+
+        /// Overwrites `path` with this state (not appended -- only the
+        /// latest snapshot is kept).
+        pub(crate) fn save(&self, path: &Path) -> io::Result<()> {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let text = toml::to_string_pretty(self)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+            std::fs::write(path, text)
+        }
+    }
+
+    /// `$XDG_CACHE_HOME/loglume/tui_state`, falling back to
+    /// `$HOME/.cache/loglume/tui_state` -- same resolution as
+    /// [`filter_history_path`].
+    pub(crate) fn tui_state_path() -> PathBuf {
+        cache_dir().join("tui_state")
+    }
+
     /// Same resolution as [`filter_history_path`], for `?`-highlight
     /// expressions instead of `/`-filter expressions.
     pub(crate) fn highlight_history_path() -> PathBuf {
@@ -1039,6 +1087,44 @@ mod cache {
                 history.get(0),
                 Some((MAX_HISTORY_ENTRIES + 9).to_string().as_str())
             );
+            std::fs::remove_file(&path).ok();
+        }
+
+        fn temp_tui_state_path(tag: &str) -> PathBuf {
+            std::env::temp_dir().join(format!(
+                "loglume-tui-state-test-{tag}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or_default()
+            ))
+        }
+
+        #[test]
+        fn tui_state_load_of_missing_file_defaults_to_stacked() {
+            let path = temp_tui_state_path("missing");
+            assert_eq!(TuiState::load(&path), TuiState { stacked: true });
+        }
+
+        #[test]
+        fn tui_state_load_of_unparsable_file_falls_back_to_default() {
+            let path = temp_tui_state_path("garbage");
+            std::fs::write(&path, "not valid toml {{{").unwrap();
+            assert_eq!(TuiState::load(&path), TuiState::default());
+            std::fs::remove_file(&path).ok();
+        }
+
+        #[test]
+        fn tui_state_save_and_load_round_trips_and_overwrites() {
+            let path = temp_tui_state_path("roundtrip");
+            TuiState { stacked: false }.save(&path).unwrap();
+            assert_eq!(TuiState::load(&path), TuiState { stacked: false });
+
+            // A second save overwrites the single latest snapshot rather
+            // than appending (#56) -- unlike History, there's no log here.
+            TuiState { stacked: true }.save(&path).unwrap();
+            assert_eq!(TuiState::load(&path), TuiState { stacked: true });
             std::fs::remove_file(&path).ok();
         }
     }
@@ -1900,7 +1986,7 @@ mod tui {
             Ok(Self {
                 panes,
                 focused: 0,
-                stacked: true,
+                stacked: cache::TuiState::load(&cache::tui_state_path()).stacked,
             })
         }
 
@@ -1958,6 +2044,10 @@ mod tui {
                     }
                     KeyCode::Char('v') if self.panes.len() > 1 => {
                         self.stacked = !self.stacked;
+                        cache::TuiState {
+                            stacked: self.stacked,
+                        }
+                        .save(&cache::tui_state_path())?;
                         return Ok(false);
                     }
                     KeyCode::Char('x') => {

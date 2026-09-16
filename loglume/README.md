@@ -91,6 +91,15 @@ feature — the plain CLI's `--follow` output is a real scrolling terminal
 stream, which can't retroactively insert new lines above older ones, so
 it stays oldest-first regardless.
 
+## Layout (TUI)
+
+With multiple panes open, `v` toggles between stacked (only the focused
+pane drawn, full-area -- the default) and side-by-side (every pane drawn
+as a column). The choice is remembered across sessions in
+`$XDG_CACHE_HOME/loglume/tui_state` (falling back to
+`$HOME/.cache/loglume/tui_state`), overwritten in place -- only the
+latest setting is kept, not a history (#56).
+
 ## Detail pane (TUI)
 
 Press `d` to expand the currently selected row inline, accordion-style:
