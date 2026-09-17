@@ -21,6 +21,7 @@ dependencies = [
 [[package]]
 name = "db-cli"
 version = "0.4.1"
+source = "git+https://github.com/t-rust-db/db-cli?tag=v0.4.1#b2052b7801144d46e48056184a389811fa8fefd3"
 dependencies = [
  "dirs",
  "libc",
@@ -28,8 +29,8 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.103.0"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.103.0#2cd53bf5ec8105a36d76b672738c41ec03df4083"
+version = "0.106.1"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.106.1#137859a384ef58cca8fed56df0d03094490d0bc7"
 dependencies = [
  "memmap2",
  "ruzstd",
@@ -271,7 +272,3 @@ name = "windows_x86_64_msvc"
 version = "0.48.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed94fce61571a4006852b7389a063ab983c02eb1bb37b47f8272ce92d06d9538"
-
-[[patch.unused]]
-name = "db-core"
-version = "0.106.1"
