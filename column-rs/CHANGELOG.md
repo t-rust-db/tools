@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.20.2] - 2026-09-17
+
+### Changed
+
+- **`print_chunk` formats `Int`/`Float` cells with `itoa`/`ryu` instead of `Value`'s generic `Display`** (#35), avoiding `core::fmt`'s general float path — the dominant cost in a full-output print. Stdout `BufWriter` also bumped 256 KiB → 4 MiB in both the `-c` streaming path and the collect-then-print path. `filter_50pct` full-output: 471ms → 251ms on the parity harness (large), no RSS regression, output byte-identical (verified by existing oracle/differential tests).
+
 ## [0.20.1] - 2026-09-09
 
 ### Added

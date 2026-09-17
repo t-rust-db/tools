@@ -142,7 +142,7 @@ fn try_stream_query(engine: &QueryEngine, sql: &str) -> Result<bool, QueryError>
         _ => return Ok(false),
     }
     let stdout = io::stdout();
-    let mut out = BufWriter::with_capacity(256 * 1024, stdout.lock());
+    let mut out = BufWriter::with_capacity(4 * 1024 * 1024, stdout.lock());
     let mut streamed_header = false;
     let result = engine.execute_streaming(sql, |event| match event {
         column_rs::query::StreamEvent::Columns(columns) => {

@@ -10,10 +10,12 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "column-rs"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "db-cli",
  "db-core",
+ "itoa",
+ "ryu",
 ]
 
 [[package]]
@@ -26,7 +28,8 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.102.0"
+version = "0.103.0"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.103.0#2cd53bf5ec8105a36d76b672738c41ec03df4083"
 dependencies = [
  "memmap2",
  "ruzstd",
@@ -63,6 +66,12 @@ dependencies = [
  "libc",
  "wasi",
 ]
+
+[[package]]
+name = "itoa"
+version = "1.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "libc"
@@ -131,6 +140,12 @@ checksum = "fad02996bfc73da3e301efe90b1837be9ed8f4a462b6ed410aa35d00381de89f"
 dependencies = [
  "twox-hash",
 ]
+
+[[package]]
+name = "ryu"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "static_assertions"
@@ -256,3 +271,7 @@ name = "windows_x86_64_msvc"
 version = "0.48.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed94fce61571a4006852b7389a063ab983c02eb1bb37b47f8272ce92d06d9538"
+
+[[patch.unused]]
+name = "db-core"
+version = "0.106.1"
