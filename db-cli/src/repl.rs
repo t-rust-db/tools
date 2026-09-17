@@ -7,6 +7,8 @@
 use std::io;
 use std::path::Path;
 
+use crate::rusage::Timer;
+
 use crate::editor::{Readline, ReadlineError};
 use crate::output::OutputMode;
 
@@ -91,6 +93,9 @@ pub enum Step {
     /// dot-command, a usage message) — `sqlite3` keeps errors off stdout
     /// so piped output stays clean (#10).
     Error(String),
+    /// Print this diagnostic to stderr — not an error, but not result data
+    /// either (the `.timer` line), so it too stays out of piped stdout.
+    Note(String),
     /// Several steps from one input line (a line holding more than one
     /// statement), to be applied in order (#10).
     Many(Vec<Step>),
@@ -110,17 +115,21 @@ pub struct Repl<H: ReplHandler> {
     /// it owns after every line, since `Repl` itself (unit-testable with
     /// plain strings) never touches a real `Readline`.
     color: bool,
+    /// `.timer on|off` -- report each statement's wall time on stderr.
+    timer: bool,
     buffer: String,
 }
 
 impl<H: ReplHandler> Repl<H> {
-    /// A REPL around `handler` in `Table` mode, headers off, color on.
+    /// A REPL around `handler` in `Table` mode, headers off, color on,
+    /// timer off.
     pub fn new(handler: H) -> Self {
         Repl {
             handler,
             mode: OutputMode::Table,
             headers: false,
             color: true,
+            timer: false,
             buffer: String::new(),
         }
     }
@@ -151,6 +160,16 @@ impl<H: ReplHandler> Repl<H> {
     /// iteration to keep the `Readline` it owns in sync.
     pub fn color(&self) -> bool {
         self.color
+    }
+
+    /// Sets the `.timer` state (see [`Repl::set_mode`]).
+    pub fn set_timer(&mut self, timer: bool) {
+        self.timer = timer;
+    }
+
+    /// Current `.timer` setting.
+    pub fn timer(&self) -> bool {
+        self.timer
     }
 
     /// True while a multi-line statement is still being buffered (i.e. the
@@ -192,10 +211,18 @@ impl<H: ReplHandler> Repl<H> {
     }
 
     fn run_statement(&mut self, stmt: &str) -> Step {
-        match self.handler.execute(stmt) {
+        // Timed span covers execute + format, not the terminal write: the
+        // number should reflect the engine, not the size of the scrollback.
+        let timer = Timer::start();
+        let step = match self.handler.execute(stmt) {
             Ok(output) => Step::Print(self.handler.format(&output, self.mode, self.headers)),
             Err(e) => Step::Error(self.handler.error_line(&e)),
+        };
+        if self.timer && matches!(step, Step::Print(_)) {
+            let note = Step::Note(timer.stop().to_string());
+            return Step::Many(vec![step, note]);
         }
+        step
     }
 
     fn dot_command(&mut self, rest: &str) -> Step {
@@ -214,6 +241,7 @@ impl<H: ReplHandler> Repl<H> {
                 ".mode <table|list|column|line|csv|json>  Set output format".to_string(),
                 ".headers on|off  Toggle header row (list/column/csv)".to_string(),
                 ".color on|off  Toggle syntax highlighting".to_string(),
+                ".timer on|off  Report each statement's real/user/sys time (stderr)".to_string(),
                 ".quit / .exit  Exit".to_string(),
             ];
             lines.extend(self.handler.help_extra());
@@ -261,6 +289,19 @@ impl<H: ReplHandler> Repl<H> {
                     Step::Continue
                 }
                 _ => Step::Error("usage: .color on|off".to_string()),
+            };
+        }
+        if !cmd.is_empty() && "timer".starts_with(cmd) {
+            return match arg {
+                "on" => {
+                    self.timer = true;
+                    Step::Continue
+                }
+                "off" => {
+                    self.timer = false;
+                    Step::Continue
+                }
+                _ => Step::Error("usage: .timer on|off".to_string()),
             };
         }
 
@@ -374,7 +415,7 @@ fn emit(step: Step) -> bool {
             }
             false
         }
-        Step::Error(text) => {
+        Step::Error(text) | Step::Note(text) => {
             eprintln!("{text}");
             false
         }
@@ -635,6 +676,52 @@ mod tests {
         assert!(!repl.color());
         assert!(matches!(repl.feed_line(".color on"), Step::Continue));
         assert!(repl.color());
+    }
+
+    #[test]
+    fn timer_default_off_and_toggled_by_dot_command() {
+        let mut repl = mock();
+        assert!(!repl.timer());
+        assert!(matches!(repl.feed_line(".timer on"), Step::Continue));
+        assert!(repl.timer());
+        assert!(matches!(repl.feed_line(".timer off"), Step::Continue));
+        assert!(!repl.timer());
+    }
+
+    #[test]
+    fn timer_command_rejects_bad_argument() {
+        match mock().feed_line(".timer bogus") {
+            Step::Error(text) => assert_eq!(text, "usage: .timer on|off"),
+            _ => panic!("expected Error"),
+        }
+    }
+
+    #[test]
+    fn timer_on_appends_a_run_time_note_after_the_result() {
+        let mut repl = mock();
+        repl.feed_line(".timer on");
+        match repl.feed_line("select 1;") {
+            Step::Many(steps) => {
+                assert_eq!(steps.len(), 2);
+                assert!(matches!(&steps[0], Step::Print(_)));
+                assert!(
+                    matches!(&steps[1], Step::Note(t) if t.starts_with("Run Time: real ") && t.contains(" user ") && t.contains(" sys "))
+                );
+            }
+            _ => panic!("expected Many"),
+        }
+    }
+
+    #[test]
+    fn timer_off_leaves_statement_output_unchanged() {
+        assert!(matches!(mock().feed_line("select 1;"), Step::Print(_)));
+    }
+
+    #[test]
+    fn timer_does_not_report_on_execute_error() {
+        let mut repl = mock();
+        repl.feed_line(".timer on");
+        assert!(matches!(repl.feed_line("fail;"), Step::Error(_)));
     }
 
     #[test]
