@@ -20,6 +20,7 @@ pub mod editor;
 pub mod history;
 pub mod output;
 pub mod repl;
+pub mod rusage;
 
 pub use editor::{Completer, Highlighter, Readline, ReadlineError};
 pub use history::{history_path, History};
@@ -30,3 +31,4 @@ pub use output::{
 pub use repl::{
     run_repl, run_repl_with, run_repl_with_editor, Repl, ReplHandler, ReplOptions, Step,
 };
+pub use rusage::{RunTime, Timer};

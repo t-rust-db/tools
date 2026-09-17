@@ -18,8 +18,10 @@ engine plugs in its own query execution and result formatting.
   stringify cells before calling in.
 - `repl` — the generic REPL loop: statement buffering up to a trailing `;`,
   built-in dot-commands (`.help`, `.quit`/`.exit`, `.mode`, `.headers`,
-  `.color`), and dispatch to an engine-supplied handler for everything
-  else.
+  `.color`, `.timer`), and dispatch to an engine-supplied handler for
+  everything else.
+- `rusage` — `Timer`/`RunTime` behind `.timer`: wall clock plus
+  process-wide user/sys CPU via `getrusage`.
 
 ## Output modes
 
@@ -118,8 +120,13 @@ pub trait ReplHandler {
   Return `None` for anything you don't recognize — `db-cli` reports it as
   `unknown command: .<name>`.
 - The built-ins `.help`, `.quit`/`.exit`, `.mode <table|list|column|line|csv|json>`,
-  `.headers on|off`, and `.color on|off` are handled by `db-cli` itself and
-  never reach `command`.
+  `.headers on|off`, `.color on|off`, and `.timer on|off` are handled by
+  `db-cli` itself and never reach `command`.
+- `.timer on` prints `Run Time: real 0.012 user 0.010 sys 0.001` on stderr
+  after each successful statement — `sqlite3`'s shape. The span covers
+  `execute` + `format`, not the terminal write; `user`/`sys` come from
+  `getrusage(RUSAGE_SELF)`, so they sum every worker thread. A one-shot mode
+  can print the same line with `db_cli::Timer::start()` … `.stop()`.
 
 Drive it with:
 
