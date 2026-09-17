@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.20.3] - 2026-09-17
+
+### Added
+
+- **`.timer on|off` in the REPL** (db-cli v0.5.0): after each statement prints `Run Time: real 0.044 user 0.198 sys 0.061` on stderr — sqlite3's shape. The span is execute + format, so it isolates engine time from terminal output; `user`/`sys` are process-wide, so worker-thread parallelism shows up as `user` > `real`.
+
 ## [0.20.2] - 2026-09-17
 
 ### Changed
