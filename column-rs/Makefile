@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help smoke test test-lib test-oracle lint fixtures fixtures-funky bench bench-data version
+.PHONY: help smoke test test-lib test-oracle lint fixtures fixtures-funky bench bench-data version release
 
 help: ## Show this help
 	@echo ""
@@ -53,3 +53,20 @@ fixtures-funky: ## Regenerate funky.parquet, a themed wide-type-mix smoke-test f
 
 version: ## Print the crate's current version (Cargo.toml [package].version)
 	@sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1
+
+# The version bump and CHANGELOG entry land in the feature PR; a release is
+# just the annotated tag on the resulting merge commit on main. This target
+# refuses to tag anything else, so a tag always names exactly what is on
+# origin/main and matches Cargo.toml and CHANGELOG.md.
+release: ## Tag the current Cargo.toml version (vX.Y.Z) on main and push the tag -- requires clean main in sync with origin/main and a CHANGELOG entry
+	@v="$$($(MAKE) -s version)"; tag="v$$v"; \
+	branch="$$(git branch --show-current)"; \
+	[ "$$branch" = "main" ] || { echo "release: on '$$branch', must be on main" >&2; exit 1; }; \
+	[ -z "$$(git status --porcelain)" ] || { echo "release: working tree not clean" >&2; exit 1; }; \
+	git fetch -q origin main --tags; \
+	[ "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" ] || { echo "release: main is not in sync with origin/main (pull or push first)" >&2; exit 1; }; \
+	grep -q "^## \[$$v\]" CHANGELOG.md || { echo "release: CHANGELOG.md has no '## [$$v]' entry" >&2; exit 1; }; \
+	! git rev-parse -q --verify "refs/tags/$$tag" >/dev/null || { echo "release: tag $$tag already exists locally" >&2; exit 1; }; \
+	[ -z "$$(git ls-remote --tags origin "refs/tags/$$tag")" ] || { echo "release: tag $$tag already exists on origin" >&2; exit 1; }; \
+	git tag -a "$$tag" -m "$$tag" && git push origin "$$tag" && \
+	echo "release: tagged and pushed $$tag ($$(git rev-parse --short HEAD))"
