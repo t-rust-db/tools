@@ -9,6 +9,14 @@
 #
 # To bump versions: tag+push the dependency repos, update the `tag = "..."`
 # values in Cargo.toml, then delete/refresh Cargo.lock.
+#
+# Two things must hold for the db-core patch to actually apply (db-core#481):
+# Cargo.toml's `version` requirement on db-core must admit the sibling's
+# version -- it is `>=0.106.1` (open-ended) for that reason, while the
+# `tag` still pins what a published build gets -- and the sibling must be
+# re-resolved into Cargo.lock: run `cargo update -p db-core` after
+# checking out a newer sibling, or cargo keeps the tag's locked rev and
+# silently builds against the old db-core.
 
 [patch."https://github.com/t-rust-db/db-core"]
 db-core = { path = "../db-core" }
