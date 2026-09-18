@@ -12,7 +12,7 @@ name = "column-rs"
 path = "src/bin/column-rs/main.rs"
 
 [dependencies]
-db-core = { version = ">=0.106.1", git = "https://github.com/t-rust-db/db-core", tag = "v0.106.1", default-features = false, features = ["parser-column", "vm-batch", "codegen-batch", "emit-batch", "storage-column"] }
+db-core = { version = ">=0.110.0", git = "https://github.com/t-rust-db/db-core", tag = "v0.110.0", default-features = false, features = ["parser-column", "vm-batch", "codegen-batch", "emit-batch", "storage-column"] }
 db-cli = { git = "https://github.com/t-rust-db/db-cli", tag = "v0.5.0" }
 itoa = "1"
 ryu = "1"
