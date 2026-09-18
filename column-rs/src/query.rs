@@ -15,6 +15,7 @@ use crate::vm::{Batch, Opcode, Program, Segment, Value};
 use db_core::codegen::batch::{self as planner, PlanError, TableStats};
 use db_core::parser::ast::{Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
 use db_core::storage::column::parquet::footer::PhysicalType;
+use db_core::storage::column::{decode_column_full, Decoded};
 use db_core::storage::{ParquetFile, Vfs, VfsFile};
 use db_core::vm::batch::{Chunk, QueryOutput, ScanSource, VmError};
 use db_core::vm::engine::{self, InMemorySegment, NoResolver};
@@ -147,6 +148,13 @@ impl<'a, 'm> Segment for RowGroupSegment<'a, 'm> {
     /// Decode failures are errors, not data (column-rs#27): a column whose
     /// page cannot be read used to come back as `num_rows` NULLs, which
     /// made a corrupt or unsupported file look like a file full of NULLs.
+    /// `decode_column_full` (db-core#467) keeps that contract -- it
+    /// returns `Err`, never NULL-substitutes -- while also decoding
+    /// straight into a typed `Column` (dict-encoded strings as
+    /// `Column::Dict`, etc.) instead of this loader's own
+    /// hand-rolled-per-`PhysicalType` `Vec<Value>` build, which is what
+    /// kept storage-layer decode work (#457/#461/#472) from ever reaching
+    /// this CLI.
     fn load(&self) -> std::result::Result<Arc<Batch>, VmError> {
         let rg = self
             .file
@@ -161,42 +169,13 @@ impl<'a, 'm> Segment for RowGroupSegment<'a, 'm> {
         let num_rows = rg.num_rows() as usize;
         let mut batch = Batch::new(num_rows);
         for (name, index, physical_type) in &self.columns {
-            let values = match physical_type {
-                PhysicalType::Int64 => rg.read_int64_column(*index).map(|col| {
-                    col.into_iter()
-                        .map(|v| v.map_or(Value::Null, Value::Int))
-                        .collect()
-                }),
-                PhysicalType::Int32 => rg.read_int32_column(*index).map(|col| {
-                    col.into_iter()
-                        .map(|v| v.map_or(Value::Null, |i| Value::Int(i as i64)))
-                        .collect()
-                }),
-                PhysicalType::Double => rg.read_double_column(*index).map(|col| {
-                    col.into_iter()
-                        .map(|v| v.map_or(Value::Null, Value::Float))
-                        .collect()
-                }),
-                PhysicalType::Float => rg.read_float_column(*index).map(|col| {
-                    col.into_iter()
-                        .map(|v| v.map_or(Value::Null, |f| Value::Float(f as f64)))
-                        .collect()
-                }),
-                PhysicalType::Boolean => rg.read_boolean_column(*index).map(|col| {
-                    col.into_iter()
-                        .map(|v| v.map_or(Value::Null, Value::Bool))
-                        .collect()
-                }),
-                _ => rg.read_string_column(*index).map(|col| {
-                    col.into_iter()
-                        .map(|v| v.map_or(Value::Null, |s| Value::Str(s.into())))
-                        .collect()
-                }),
-            }
-            .map_err(|e| VmError::SegmentLoad {
-                reason: format!("row group {}: column `{name}`: {e}", self.row_group_index),
-            })?;
-            batch = batch.with_column(name.clone(), values);
+            let Decoded::Column(column) =
+                decode_column_full(&rg, *index, *physical_type).map_err(|e| {
+                    VmError::SegmentLoad {
+                        reason: format!("row group {}: column `{name}`: {e}", self.row_group_index),
+                    }
+                })?;
+            batch = batch.with_typed_column(name.clone(), column);
         }
         Ok(Arc::new(batch))
     }
@@ -275,8 +254,15 @@ fn read_whole_table(
         let batch = segment.load()?;
         num_rows += batch.num_rows;
         for (name, values) in &mut merged_columns {
+            // A decoded column lives in exactly one of `columns`/
+            // `typed_columns` (db-core#467) -- `RowGroupSegment::load`
+            // always uses the latter now, but this stays defensive
+            // about which map since `Batch` itself makes no promise a
+            // caller should rely on either way.
             if let Some(column) = batch.columns.get(name) {
                 values.extend(column.iter().cloned());
+            } else if let Some(column) = batch.typed_columns.get(name) {
+                values.extend((0..batch.num_rows).map(|i| column.get(i)));
             }
         }
     }
