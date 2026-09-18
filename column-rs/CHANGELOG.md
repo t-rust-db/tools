@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.20.4] - 2026-09-18
+
+### Fixed
+
+- **`RowGroupSegment::load` hand-decoded every Parquet column itself, diverging from db-core's own loader** (db-core#467): storage-layer decode work landing in `db_core::engine::column` (dict-string materialization, typed columns) never reached this CLI, which is what the parity benchmark actually measures. Switched to `db_core::storage::column::decode_column_full` (already used by db-core's own loader, already error-returning rather than NULL-substituting on a decode failure, preserving column-rs#27's contract) and `Batch::with_typed_column`. `read_whole_table` (the join/semi-join/window whole-table path) now also gathers from `Batch::typed_columns`, since a decoded column can live in either map. `GROUP BY region` on the 10M-row parity fixture: 0.07s → 0.05s real, 0.60s → 0.53s user. Bumps the `db-core` dependency to v0.112.0.
+
 ## [0.20.3] - 2026-09-17
 
 ### Added
