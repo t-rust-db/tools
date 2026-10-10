@@ -9,6 +9,7 @@ in one Cargo workspace: one `Cargo.lock`, one db-core pin, one CI.
 | [column-rs](column-rs/) | SQL over Parquet files (CLI) |
 | [sqlite-rs](sqlite-rs/) | Binary-compatible SQLite replica (library + CLI) |
 | [loglume](loglume/) | Log viewer with SQL filtering (TUI) |
+| [trigrep](trigrep/) | Trigram-indexed grep (`tg`) |
 
 Each tool keeps its own version, `CHANGELOG.md`, `Makefile` and README.
 
