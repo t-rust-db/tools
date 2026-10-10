@@ -61,3 +61,6 @@ path = "fuzz_targets/vdbe_exec.rs"
 test = false
 doc = false
 bench = false
+
+# Standalone: not a member of the tools workspace.
+[workspace]

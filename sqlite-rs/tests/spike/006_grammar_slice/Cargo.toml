@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 pomelo = "0.2.3"
+
+# Standalone: not a member of the tools workspace.
+[workspace]
