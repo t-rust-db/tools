@@ -5,7 +5,6 @@ in one Cargo workspace: one `Cargo.lock`, one db-core pin, one CI.
 
 | Tool | What it is |
 |---|---|
-| [db-cli](db-cli/) | Shared REPL/readline library for the CLIs |
 | [column-rs](column-rs/) | SQL over Parquet files (CLI) |
 | [sqlite-rs](sqlite-rs/) | Binary-compatible SQLite replica (library + CLI) |
 | [loglume](loglume/) | Log viewer with SQL filtering (TUI) |
@@ -13,6 +12,10 @@ in one Cargo workspace: one `Cargo.lock`, one db-core pin, one CI.
 | [db-studio](db-studio/) | TUI database studio over .sqlite/.parquet/.log files |
 
 Each tool keeps its own version, `CHANGELOG.md`, `Makefile` and README.
+
+The workspace also holds [db-cli](db-cli/), the shared REPL/readline
+library the CLIs are built on. It is a library, not a tool: it has no
+binary to install.
 
 ## Install
 
