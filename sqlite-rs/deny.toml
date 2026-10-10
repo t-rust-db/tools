@@ -1,0 +1,47 @@
+# Supply-chain gate (issue #26, spec 005-assurance Requirement 3). Installed
+# at zero runtime dependencies — the cheapest possible moment. Run via
+# `make check-deny` / `cargo deny check`.
+
+# Unix-only project (the `nix` crate dependency alone rules out Windows).
+# Without this, cargo-deny resolves the full dependency graph across every
+# platform, including Windows-only transitive deps of crates like
+# `rustyline` (e.g. `clipboard-win`, BSL-1.0-licensed) that never build
+# here and shouldn't gate the license check.
+[graph]
+all-features = false
+no-default-features = false
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+[advisories]
+ignore = []
+
+[licenses]
+# MIT and MPL-2.0 are needed only by crates arriving transitively through
+# first-party git dependencies (ADR-0040): `ruzstd`/`twox-hash` (MIT) via
+# db-storage (until t-rust-db/db-storage#12), `option-ext` (MPL-2.0, via
+# `dirs`) and `libredox`/`redox_users` (MIT) via db-cli. Remove each again
+# when nothing in the resolved graph requires it (`cargo deny check
+# licenses` reports the missing allowance instead of a silent pass).
+allow = ["Apache-2.0", "MIT", "MPL-2.0"]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# First-party t-rust-db crates only (ADR-0040); one entry per adopted crate.
+# db-storage is db-core's `storage` module (db-core ADR 0016) and db-cli is
+# a workspace path dependency (ADR-0045), so db-core is the only git source.
+allow-git = [
+    "https://github.com/t-rust-db/db-core",
+]

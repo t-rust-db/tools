@@ -1,5 +1,7 @@
 [workspace]
-members = ["db-cli", "column-rs"]
+members = ["db-cli", "column-rs", "sqlite-rs"]
+# Standalone packages under sqlite-rs (cargo-fuzz crate, throwaway spikes).
+exclude = ["sqlite-rs/tests/fuzz", "sqlite-rs/tests/spike"]
 resolver = "2"
 
 # One db-core pin for every tool (#1). The open-ended requirement lets a local
@@ -7,4 +9,4 @@ resolver = "2"
 # is what CI and `cargo install --git` build. See README.md.
 [workspace.dependencies]
 db-core = { version = ">=0.114.7", git = "https://github.com/t-rust-db/db-core", tag = "v0.114.7", default-features = false }
-db-cli = { path = "db-cli" }
+db-cli = { path = "db-cli", version = "0.5.0" }

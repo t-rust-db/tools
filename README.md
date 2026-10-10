@@ -7,6 +7,7 @@ in one Cargo workspace: one `Cargo.lock`, one db-core pin, one CI.
 |---|---|
 | [db-cli](db-cli/) | Shared REPL/readline library for the CLIs |
 | [column-rs](column-rs/) | SQL over Parquet files (CLI) |
+| [sqlite-rs](sqlite-rs/) | Binary-compatible SQLite replica (library + CLI) |
 
 Each tool keeps its own version, `CHANGELOG.md`, `Makefile` and README.
 

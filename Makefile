@@ -1,6 +1,6 @@
 # tools workspace: each tool keeps its own Makefile; these targets run them all.
 
-MEMBERS := db-cli column-rs
+MEMBERS := db-cli column-rs sqlite-rs
 
 .DEFAULT_GOAL := help
 
