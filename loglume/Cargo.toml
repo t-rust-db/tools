@@ -1,0 +1,45 @@
+[package]
+name = "loglume"
+version = "0.12.2"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/t-rust-db/tools"
+description = "Fast CLI log viewer with SQL filtering, built on db-core"
+authors = ["Ilja Heitlager <iheitlager@schubergphilis.com>"]
+
+[[bin]]
+name = "loglume"
+path = "src/bin/loglume.rs"
+
+[[example]]
+name = "notify_probe"
+path = "tests/spikes/notify_probe.rs"
+
+[lib]
+name = "loglume"
+path = "src/lib.rs"
+
+[dependencies]
+db-core = { workspace = true, features = ["engine-stream", "storage-stream", "vm-stream"] }
+clap = { version = "4", features = ["derive"] }
+ratatui = "0.30.2"
+crossterm = "0.29.0"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.6"
+
+[dev-dependencies]
+# Only the tests/spikes/notify_probe.rs spike still uses notify: the live
+# view polls instead (FSEvents misses held-open-fd appends).
+notify = "8"
+assert_cmd = "2"
+predicates = "3"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"

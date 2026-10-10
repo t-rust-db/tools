@@ -1,0 +1,200 @@
+ts=2026-09-10T08:00:00Z level=error msg="request completed" service=auth duration=1.225s status=200
+ts=2026-09-10T08:00:01Z level=error msg="retrying after failure" service=auth duration=0.160s status=200
+ts=2026-09-10T08:00:01Z level=warn msg="retrying after failure" service=auth duration=4465ms status=201
+ts=2026-09-10T08:00:02Z level=warn msg="slow query detected\ttiming flagged" service=auth duration=3463ms status=200
+ts=2026-09-10T08:00:02Z level=info msg="slow query detected\ttiming flagged" service=auth duration=3113ms status=200
+ts=2026-09-10T08:00:03Z level=info msg="retrying after failure" service=checkout duration=3764ms status=400
+ts=2026-09-10T08:00:03Z level=warn msg="request completed" service=notifications duration=4.147s status=400
+ts=2026-09-10T08:00:05Z level=info msg="retrying after failure" service=billing duration=376ms status=404
+ts=2026-09-10T08:00:06Z level=info msg="request completed" service=billing duration=3114ms status=200
+ts=2026-09-10T08:00:07Z level=debug msg="slow query detected\ttiming flagged" service=billing duration=1.777s status=404
+ts=2026-09-10T08:00:07Z level=error msg="request completed" service=notifications duration=4376ms status=404
+ts=2026-09-10T08:00:08Z level=warn msg="cache miss for key" service=checkout duration=2657ms status=500
+ts=2026-09-10T08:00:09Z level=info msg="user said \"hello world\" during checkout" service=auth duration=2.006s status=200
+ts=2026-09-10T08:00:09Z level=warn msg="slow query detected\ttiming flagged" service=billing duration=1.979s status=404
+ts=2026-09-10T08:00:10Z level=info msg="user said \"hello world\" during checkout" service=billing duration=3.735s status=201
+ts=2026-09-10T08:00:12Z level=warn msg="slow query detected\ttiming flagged" service=billing duration=4175ms status=201
+ts=2026-09-10T08:00:12Z level=info msg="request completed" service=billing duration=3459ms status=400
+ts=2026-09-10T08:00:13Z level=warn msg="retrying after failure" service=search duration=4.855s status=500
+ts=2026-09-10T08:00:14Z level=error msg="request completed" service=notifications duration=3.843s status=200
+ts=2026-09-10T08:00:15Z level=warn msg="user said \"hello world\" during checkout" service=search duration=2158ms status=400
+ts=2026-09-10T08:00:16Z level=warn msg="request completed" service=checkout duration=1253ms status=200
+ts=2026-09-10T08:00:18Z level=warn msg="retrying after failure" service=auth duration=2.444s status=200
+ts=2026-09-10T08:00:20Z level=debug msg="slow query detected\ttiming flagged" service=billing duration=1974ms status=400
+ts=2026-09-10T08:00:21Z level=info msg="cache miss for key" service=auth duration=1052ms status=404
+ts=2026-09-10T08:00:22Z level=warn msg="user said \"hello world\" during checkout" service=checkout duration=4.822s status=400
+ts=2026-09-10T08:00:24Z level=error msg="user said \"hello world\" during checkout" service=checkout duration=4.976s status=404
+ts=2026-09-10T08:00:25Z level=warn msg="cache miss for key" service=auth duration=1841ms status=200
+ts=2026-09-10T08:00:25Z level=warn msg="retrying after failure" service=billing duration=59ms status=200
+ts=2026-09-10T08:00:27Z level=info msg="user said \"hello world\" during checkout" service=auth duration=2707ms status=200
+ts=2026-09-10T08:00:28Z level=info msg="cache miss for key" service=billing duration=4678ms status=400
+ts=2026-09-10T08:00:29Z level=debug msg="cache miss for key" service=search duration=773ms status=200
+ts=2026-09-10T08:00:30Z level=info msg="cache miss for key" service=search duration=4.319s status=200
+ts=2026-09-10T08:00:31Z level=error msg="request completed" service=auth duration=3.641s status=500
+ts=2026-09-10T08:00:33Z level=info msg="user said \"hello world\" during checkout" service=billing duration=0.702s status=200
+ts=2026-09-10T08:00:34Z level=info msg="request completed" service=search duration=415ms status=404
+ts=2026-09-10T08:00:36Z level=debug msg="request completed" service=auth duration=1363ms status=201
+ts=2026-09-10T08:00:37Z level=info msg="cache miss for key" service=auth duration=3105ms status=200
+ts=2026-09-10T08:00:39Z level=info msg="cache miss for key" service=checkout duration=3.483s status=404
+ts=2026-09-10T08:00:41Z level=warn msg="cache miss for key" service=billing duration=2431ms status=200
+ts=2026-09-10T08:00:43Z level=warn msg="retrying after failure" service=auth duration=0.287s status=400
+ts=2026-09-10T08:00:43Z level=debug msg="retrying after failure" service=billing duration=4161ms status=200
+ts=2026-09-10T08:00:45Z level=info msg="retrying after failure" service=auth duration=3308ms status=200
+ts=2026-09-10T08:00:47Z level=warn msg="user said \"hello world\" during checkout" service=notifications duration=672ms status=201
+ts=2026-09-10T08:00:48Z level=warn msg="retrying after failure" service=checkout duration=1.022s status=404
+ts=2026-09-10T08:00:49Z level=info msg="cache miss for key" service=billing duration=2.287s status=500
+ts=2026-09-10T08:00:51Z level=info msg="cache miss for key" service=notifications duration=601ms status=400
+ts=2026-09-10T08:00:51Z level=info msg="user said \"hello world\" during checkout" service=checkout duration=2002ms status=200
+ts=2026-09-10T08:00:52Z level=warn msg="retrying after failure" service=checkout duration=4544ms status=200
+ts=2026-09-10T08:00:54Z level=info msg="user said \"hello world\" during checkout" service=checkout duration=877ms status=404
+ts=2026-09-10T08:00:55Z level=info msg="slow query detected\ttiming flagged" service=notifications duration=2809ms status=200
+ts=2026-09-10T08:00:56Z level=debug msg="slow query detected\ttiming flagged" service=notifications duration=1.256s status=500
+ts=2026-09-10T08:00:56Z level=error msg="cache miss for key" service=checkout duration=30ms status=200
+ts=2026-09-10T08:00:58Z level=error msg="slow query detected\ttiming flagged" service=billing duration=2.759s status=201
+ts=2026-09-10T08:00:59Z level=info msg="request completed" service=billing duration=3025ms status=400
+ts=2026-09-10T08:01:00Z level=warn msg="user said \"hello world\" during checkout" service=auth duration=1.824s status=500
+ts=2026-09-10T08:01:02Z level=info msg="slow query detected\ttiming flagged" service=billing duration=843ms status=200
+ts=2026-09-10T08:01:04Z level=debug msg="cache miss for key" service=notifications duration=1940ms status=500
+ts=2026-09-10T08:01:04Z level=debug msg="user said \"hello world\" during checkout" service=search duration=1470ms status=404
+ts=2026-09-10T08:01:06Z level=debug msg="cache miss for key" service=billing duration=0.797s status=404
+ts=2026-09-10T08:01:06Z level=debug msg="request completed" service=search duration=1635ms status=500
+ts=2026-09-10T08:01:08Z level=info msg="slow query detected\ttiming flagged" service=billing duration=194ms status=404
+ts=2026-09-10T08:01:08Z level=info msg="slow query detected\ttiming flagged" service=auth duration=1.756s status=400
+ts=2026-09-10T08:01:09Z level=debug msg="retrying after failure" service=checkout duration=945ms status=200
+ts=2026-09-10T08:01:09Z level=info msg="request completed" service=auth duration=1.729s status=500
+ts=2026-09-10T08:01:10Z level=warn msg="retrying after failure" service=auth duration=4.498s status=200
+ts=2026-09-10T08:01:10Z level=error msg="cache miss for key" service=auth duration=2984ms status=201
+ts=2026-09-10T08:01:11Z level=error msg="slow query detected\ttiming flagged" service=notifications duration=3.317s status=200
+ts=2026-09-10T08:01:12Z level=info msg="retrying after failure" service=checkout duration=1.632s status=404
+ts=2026-09-10T08:01:13Z level=info msg="user said \"hello world\" during checkout" service=search duration=3.387s status=200
+ts=2026-09-10T08:01:14Z level=info msg="cache miss for key" service=notifications duration=2490ms status=200
+ts=2026-09-10T08:01:14Z level=debug msg="retrying after failure" service=notifications duration=2.325s status=201
+ts=2026-09-10T08:01:16Z level=warn msg="cache miss for key" service=billing duration=2325ms status=400
+ts=2026-09-10T08:01:17Z level=warn msg="slow query detected\ttiming flagged" service=auth duration=2543ms status=200
+ts=2026-09-10T08:01:19Z level=info msg="request completed" service=auth duration=3893ms status=400
+ts=2026-09-10T08:01:20Z level=info msg="cache miss for key" service=search duration=3146ms status=201
+ts=2026-09-10T08:01:21Z level=info msg="request completed" service=auth duration=1.095s status=500
+ts=2026-09-10T08:01:23Z level=warn msg="cache miss for key" service=auth duration=995ms status=201
+ts=2026-09-10T08:01:23Z level=warn msg="retrying after failure" service=notifications duration=4.750s status=201
+ts=2026-09-10T08:01:25Z level=error msg="retrying after failure" service=search duration=4.486s status=404
+ts=2026-09-10T08:01:26Z level=warn msg="slow query detected\ttiming flagged" service=billing duration=3.829s status=400
+ts=2026-09-10T08:01:27Z level=info msg="slow query detected\ttiming flagged" service=search duration=2341ms status=200
+ts=2026-09-10T08:01:28Z level=info msg="retrying after failure" service=auth duration=1236ms status=200
+ts=2026-09-10T08:01:29Z level=info msg="user said \"hello world\" during checkout" service=auth duration=2.039s status=400
+ts=2026-09-10T08:01:29Z level=info msg="user said \"hello world\" during checkout" service=search duration=4.524s status=400
+ts=2026-09-10T08:01:31Z level=info msg="retrying after failure" service=search duration=0.030s status=200
+ts=2026-09-10T08:01:32Z level=warn msg="cache miss for key" service=notifications duration=4000ms status=200
+ts=2026-09-10T08:01:32Z level=warn msg="request completed" service=search duration=3.345s status=500
+ts=2026-09-10T08:01:33Z level=info msg="cache miss for key" service=billing duration=3228ms status=400
+ts=2026-09-10T08:01:34Z level=info msg="request completed" service=search duration=3783ms status=200
+ts=2026-09-10T08:01:35Z level=warn msg="slow query detected\ttiming flagged" service=billing duration=1.635s status=500
+ts=2026-09-10T08:01:36Z level=info msg="cache miss for key" service=checkout duration=3853ms status=200
+ts=2026-09-10T08:01:38Z level=info msg="slow query detected\ttiming flagged" service=billing duration=330ms status=500
+ts=2026-09-10T08:01:38Z level=info msg="user said \"hello world\" during checkout" service=auth duration=1955ms status=200
+ts=2026-09-10T08:01:39Z level=info msg="retrying after failure" service=billing duration=3.498s status=500
+ts=2026-09-10T08:01:40Z level=warn msg="retrying after failure" service=auth duration=2549ms status=200
+ts=2026-09-10T08:01:41Z level=info msg="retrying after failure" service=search duration=4.707s status=200
+ts=2026-09-10T08:01:41Z level=error msg="user said \"hello world\" during checkout" service=auth duration=4.252s status=400
+ts=2026-09-10T08:01:42Z level=debug msg="retrying after failure" service=auth duration=2.664s status=404
+ts=2026-09-10T08:01:43Z level=warn msg="slow query detected\ttiming flagged" service=auth duration=4.112s status=200
+ts=2026-09-10T08:01:44Z level=info msg="cache miss for key" service=billing duration=0.882s status=400
+ts=2026-09-10T08:01:46Z level=info msg="retrying after failure" service=notifications duration=2.325s status=500
+ts=2026-09-10T08:01:47Z level=info msg="slow query detected\ttiming flagged" service=billing duration=2285ms status=201
+ts=2026-09-10T08:01:48Z level=warn msg="retrying after failure" service=notifications duration=1.683s status=201
+ts=2026-09-10T08:01:50Z level=info msg="cache miss for key" service=billing duration=3.989s status=200
+ts=2026-09-10T08:01:50Z level=warn msg="slow query detected\ttiming flagged" service=notifications duration=4233ms status=200
+ts=2026-09-10T08:01:50Z level=error msg="cache miss for key" service=search duration=3901ms status=404
+ts=2026-09-10T08:01:52Z level=warn msg="request completed" service=auth duration=1.109s status=404
+ts=2026-09-10T08:01:52Z level=error msg="retrying after failure" service=checkout duration=2.768s status=200
+ts=2026-09-10T08:01:53Z level=error msg="retrying after failure" service=checkout duration=3.515s status=200
+ts=2026-09-10T08:01:54Z level=info msg="request completed" service=billing duration=0.599s status=400
+ts=2026-09-10T08:01:56Z level=error msg="user said \"hello world\" during checkout" service=billing duration=3967ms status=200
+ts=2026-09-10T08:01:57Z level=debug msg="retrying after failure" service=notifications duration=4.903s status=500
+ts=2026-09-10T08:01:57Z level=info msg="slow query detected\ttiming flagged" service=billing duration=0.072s status=400
+ts=2026-09-10T08:01:58Z level=info msg="request completed" service=notifications duration=3.487s status=200
+ts=2026-09-10T08:01:59Z level=debug msg="cache miss for key" service=auth duration=4703ms status=200
+ts=2026-09-10T08:02:00Z level=warn msg="slow query detected\ttiming flagged" service=billing duration=2069ms status=500
+ts=2026-09-10T08:02:01Z level=debug msg="request completed" service=search duration=0.371s status=404
+ts=2026-09-10T08:02:02Z level=info msg="user said \"hello world\" during checkout" service=notifications duration=0.427s status=200
+ts=2026-09-10T08:02:03Z level=debug msg="cache miss for key" service=notifications duration=4281ms status=201
+ts=2026-09-10T08:02:03Z level=warn msg="slow query detected\ttiming flagged" service=notifications duration=1.528s status=400
+ts=2026-09-10T08:02:04Z level=error msg="request completed" service=billing duration=2168ms status=404
+ts=2026-09-10T08:02:04Z level=info msg="user said \"hello world\" during checkout" service=notifications duration=1283ms status=200
+ts=2026-09-10T08:02:05Z level=error msg="retrying after failure" service=search duration=0.164s status=200
+ts=2026-09-10T08:02:06Z level=error msg="cache miss for key" service=auth duration=2168ms status=500
+ts=2026-09-10T08:02:08Z level=warn msg="user said \"hello world\" during checkout" service=search duration=4462ms status=200
+ts=2026-09-10T08:02:09Z level=info msg="user said \"hello world\" during checkout" service=auth duration=1360ms status=500
+ts=2026-09-10T08:02:09Z level=error msg="retrying after failure" service=checkout duration=0.623s status=404
+ts=2026-09-10T08:02:10Z level=warn msg="slow query detected\ttiming flagged" service=notifications duration=2.189s status=400
+ts=2026-09-10T08:02:10Z level=warn msg="slow query detected\ttiming flagged" service=notifications duration=0.130s status=200
+ts=2026-09-10T08:02:12Z level=debug msg="retrying after failure" service=notifications duration=2208ms status=400
+ts=2026-09-10T08:02:12Z level=debug msg="user said \"hello world\" during checkout" service=search duration=4.580s status=200
+ts=2026-09-10T08:02:14Z level=warn msg="cache miss for key" service=auth duration=1.740s status=200
+ts=2026-09-10T08:02:15Z level=info msg="user said \"hello world\" during checkout" service=checkout duration=3.469s status=200
+ts=2026-09-10T08:02:16Z level=warn msg="retrying after failure" service=auth duration=0.441s status=200
+ts=2026-09-10T08:02:17Z level=debug msg="cache miss for key" service=notifications duration=4445ms status=201
+ts=2026-09-10T08:02:18Z level=info msg="retrying after failure" service=checkout duration=3.127s status=500
+ts=2026-09-10T08:02:18Z level=info msg="retrying after failure" service=billing duration=2.191s status=404
+ts=2026-09-10T08:02:19Z level=info msg="retrying after failure" service=billing duration=2546ms status=400
+ts=2026-09-10T08:02:19Z level=warn msg="request completed" service=billing duration=3781ms status=200
+ts=2026-09-10T08:02:20Z level=info msg="cache miss for key" service=checkout duration=2.078s status=201
+ts=2026-09-10T08:02:22Z level=info msg="cache miss for key" service=notifications duration=3143ms status=200
+ts=2026-09-10T08:02:24Z level=warn msg="user said \"hello world\" during checkout" service=auth duration=3.864s status=500
+ts=2026-09-10T08:02:25Z level=debug msg="retrying after failure" service=checkout duration=2318ms status=404
+ts=2026-09-10T08:02:25Z level=warn msg="retrying after failure" service=search duration=3659ms status=400
+ts=2026-09-10T08:02:26Z level=info msg="retrying after failure" service=notifications duration=2.277s status=200
+ts=2026-09-10T08:02:28Z level=error msg="user said \"hello world\" during checkout" service=notifications duration=1.169s status=500
+ts=2026-09-10T08:02:29Z level=info msg="cache miss for key" service=search duration=4.942s status=500
+ts=2026-09-10T08:02:30Z level=info msg="cache miss for key" service=auth duration=4115ms status=400
+ts=2026-09-10T08:02:31Z level=info msg="cache miss for key" service=auth duration=0.078s status=200
+ts=2026-09-10T08:02:32Z level=error msg="user said \"hello world\" during checkout" service=auth duration=3.908s status=200
+ts=2026-09-10T08:02:32Z level=error msg="cache miss for key" service=auth duration=4.262s status=500
+ts=2026-09-10T08:02:34Z level=info msg="cache miss for key" service=notifications duration=561ms status=200
+ts=2026-09-10T08:02:35Z level=info msg="user said \"hello world\" during checkout" service=auth duration=4.892s status=500
+ts=2026-09-10T08:02:36Z level=debug msg="request completed" service=search duration=2454ms status=200
+ts=2026-09-10T08:02:36Z level=debug msg="request completed" service=checkout duration=1.875s status=200
+ts=2026-09-10T08:02:37Z level=warn msg="retrying after failure" service=billing duration=1435ms status=200
+ts=2026-09-10T08:02:38Z level=warn msg="retrying after failure" service=billing duration=4.564s status=200
+ts=2026-09-10T08:02:38Z level=error msg="slow query detected\ttiming flagged" service=search duration=3.335s status=500
+ts=2026-09-10T08:02:39Z level=info msg="retrying after failure" service=billing duration=3619ms status=200
+ts=2026-09-10T08:02:41Z level=info msg="cache miss for key" service=checkout duration=4.227s status=200
+ts=2026-09-10T08:02:43Z level=debug msg="cache miss for key" service=auth duration=3125ms status=400
+ts=2026-09-10T08:02:44Z level=info msg="slow query detected\ttiming flagged" service=auth duration=1.373s status=400
+ts=2026-09-10T08:02:46Z level=debug msg="request completed" service=notifications duration=4.164s status=200
+ts=2026-09-10T08:02:47Z level=info msg="retrying after failure" service=checkout duration=1558ms status=400
+ts=2026-09-10T08:02:48Z level=debug msg="user said \"hello world\" during checkout" service=auth duration=2531ms status=500
+ts=2026-09-10T08:02:49Z level=warn msg="slow query detected\ttiming flagged" service=billing duration=2418ms status=200
+ts=2026-09-10T08:02:50Z level=info msg="user said \"hello world\" during checkout" service=billing duration=2.655s status=200
+ts=2026-09-10T08:02:52Z level=info msg="cache miss for key" service=checkout duration=4.021s status=201
+ts=2026-09-10T08:02:54Z level=info msg="user said \"hello world\" during checkout" service=search duration=0.452s status=201
+ts=2026-09-10T08:02:54Z level=warn msg="request completed" service=search duration=3.364s status=404
+ts=2026-09-10T08:02:54Z level=warn msg="slow query detected\ttiming flagged" service=auth duration=3863ms status=200
+ts=2026-09-10T08:02:56Z level=warn msg="slow query detected\ttiming flagged" service=notifications duration=518ms status=404
+ts=2026-09-10T08:02:57Z level=error msg="slow query detected\ttiming flagged" service=search duration=1146ms status=200
+ts=2026-09-10T08:02:59Z level=info msg="cache miss for key" service=auth duration=1924ms status=400
+ts=2026-09-10T08:02:59Z level=warn msg="slow query detected\ttiming flagged" service=notifications duration=2.937s status=404
+ts=2026-09-10T08:03:00Z level=warn msg="request completed" service=search duration=4.695s status=200
+ts=2026-09-10T08:03:00Z level=info msg="user said \"hello world\" during checkout" service=search duration=4.753s status=500
+ts=2026-09-10T08:03:00Z level=error msg="slow query detected\ttiming flagged" service=notifications duration=0.304s status=200
+ts=2026-09-10T08:03:01Z level=info msg="cache miss for key" service=auth duration=4892ms status=200
+ts=2026-09-10T08:03:01Z level=info msg="user said \"hello world\" during checkout" service=billing duration=563ms status=500
+ts=2026-09-10T08:03:02Z level=info msg="retrying after failure" service=billing duration=2692ms status=500
+ts=2026-09-10T08:03:03Z level=warn msg="request completed" service=checkout duration=1065ms status=400
+ts=2026-09-10T08:03:03Z level=info msg="request completed" service=auth duration=122ms status=200
+ts=2026-09-10T08:03:05Z level=info msg="retrying after failure" service=checkout duration=1428ms status=200
+ts=2026-09-10T08:03:05Z level=error msg="cache miss for key" service=notifications duration=521ms status=201
+ts=2026-09-10T08:03:06Z level=info msg="retrying after failure" service=notifications duration=3703ms status=400
+ts=2026-09-10T08:03:06Z level=warn msg="request completed" service=notifications duration=2.291s status=200
+ts=2026-09-10T08:03:06Z level=warn msg="cache miss for key" service=search duration=4017ms status=404
+ts=2026-09-10T08:03:08Z level=info msg="request completed" service=checkout duration=539ms status=200
+ts=2026-09-10T08:03:09Z level=error msg="retrying after failure" service=notifications duration=1.905s status=400
+ts=2026-09-10T08:03:10Z level=warn msg="retrying after failure" service=notifications duration=0.497s status=404
+ts=2026-09-10T08:03:10Z level=error msg="retrying after failure" service=billing duration=2.258s status=200
+ts=2026-09-10T08:03:11Z level=debug msg="cache miss for key" service=search duration=3.648s status=200
+ts=2026-09-10T08:03:12Z level=error msg="slow query detected\ttiming flagged" service=checkout duration=3886ms status=200
+ts=2026-09-10T08:03:12Z level=info msg="request completed" service=search duration=3053ms status=500
+ts=2026-09-10T08:03:12Z level=info msg="retrying after failure" service=notifications duration=3.350s status=201
+ts=2026-09-10T08:03:13Z level=error msg="cache miss for key" service=auth duration=3.002s status=200
+ts=2026-09-10T08:03:13Z level=warn msg="user said \"hello world\" during checkout" service=billing duration=1.122s status=200
+ts=2026-09-10T08:03:14Z level=warn msg="slow query detected\ttiming flagged" service=auth duration=2.871s status=500
+ts=2026-09-10T08:03:15Z level=warn msg="retrying after failure" service=notifications duration=4989ms status=404
