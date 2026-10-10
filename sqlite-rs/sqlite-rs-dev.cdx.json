@@ -3,7 +3,7 @@
   "specVersion": "1.5",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-10-10T10:41:37.000000000Z",
+    "timestamp": "2026-10-10T16:03:09.000000000Z",
     "tools": [
       {
         "vendor": "sqlite-rs",
@@ -26,7 +26,7 @@
     "properties": [
       {
         "name": "sqlite-rs:generated-at-commit",
-        "value": "37433f64eab62c95b724fd2d1d423a4bbe7f3e96"
+        "value": "a94ff78660fc495f3514faa91fd8bff02733199e"
       }
     ]
   },
@@ -150,16 +150,16 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/db-core@0.114.7",
+      "bom-ref": "pkg:cargo/db-core@0.122.0",
       "name": "db-core",
-      "version": "0.114.7",
+      "version": "0.122.0",
       "scope": "required",
       "licenses": [
         {
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/db-core@0.114.7"
+      "purl": "pkg:cargo/db-core@0.122.0"
     },
     {
       "type": "library",
