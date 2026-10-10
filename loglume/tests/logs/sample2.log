@@ -1,0 +1,200 @@
+<30>Sep 9 08:00:00 cache01 systemd[40284]: Stopping User Manager for UID 1000
+<38>Sep 9 08:00:00 web02 sshd[17459]: Accepted publickey for admin
+<4>Sep 9 08:00:04 gateway kernel[62497]: [UFW BLOCK] IN=eth0 OUT=
+<35>Sep 9 08:00:07 cache01 sshd[52944]: Failed password for root
+<30>Sep 9 08:00:12 cache01 cron[14932]: CRON[12345]: (CRON) info (No MTA installed)
+<134>Sep 9 08:00:12 web02 postgres[6437]: LOG: checkpoint starting
+<4>Sep 9 08:00:17 gateway kernel[31738]: [UFW BLOCK] IN=eth0 OUT=
+<28>Sep 9 08:00:19 db01 nginx[1499]: connection timeout upstream
+<30>Sep 9 08:00:21 worker01 cron[31283]: (root) CMD (/usr/local/bin/backup.sh)
+<38>Sep 9 08:00:23 worker01 sshd[4363]: session opened for user deploy
+<35>Sep 9 08:00:25 gateway sshd[49988]: Failed password for root
+<2>Sep 9 08:00:29 web02 kernel[3428]: TCP: out of memory
+<38>Sep 9 08:00:30 cache01 sshd[6318]: session opened for user deploy
+<131>Sep 9 08:00:34 web01 postgres[21303]: ERROR: relation does not exist
+<30>Sep 9 08:00:38 db01 systemd[35301]: Stopping User Manager for UID 1000
+<27>Sep 9 08:00:40 gateway nginx[30030]: POST /api/auth 401
+<29>Sep 9 08:00:41 web02 systemd[62692]: Started Session 42 of user admin
+<28>Sep 9 08:00:44 web02 nginx[52048]: connection timeout upstream
+<4>Sep 9 08:00:48 cache01 kernel[7323]: [UFW BLOCK] IN=eth0 OUT=
+<30>Sep 9 08:00:49 web02 cron[27861]: (root) CMD (/usr/local/bin/backup.sh)
+<38>Sep 9 08:00:49 worker01 sshd[51499]: Connection closed by authenticating user
+<38>Sep 9 08:00:52 db01 sshd[57221]: Accepted publickey for admin
+<38>Sep 9 08:00:56 gateway sshd[33848]: Accepted publickey for admin
+<6>Sep 9 08:00:57 web01 kernel[15176]: EXT4-fs (sda1): mounted filesystem
+<30>Sep 9 08:00:59 cache01 cron[28136]: (www-data) CMD (php artisan schedule:run)
+<2>Sep 9 08:01:03 web01 kernel[58643]: TCP: out of memory
+<30>Sep 9 08:01:04 gateway cron[51516]: (www-data) CMD (php artisan schedule:run)
+<30>Sep 9 08:01:06 gateway cron[43818]: (root) CMD (/usr/local/bin/backup.sh)
+<30>Sep 9 08:01:09 gateway nginx[15326]: GET /health 200
+<131>Sep 9 08:01:13 gateway postgres[26136]: ERROR: relation does not exist
+<27>Sep 9 08:01:15 cache01 nginx[64164]: GET /api/orders 500
+<30>Sep 9 08:01:19 worker01 nginx[60454]: GET /health 200
+<30>Sep 9 08:01:23 cache01 cron[9341]: CRON[12345]: (CRON) info (No MTA installed)
+<30>Sep 9 08:01:27 cache01 cron[27826]: (www-data) CMD (php artisan schedule:run)
+<6>Sep 9 08:01:32 web02 kernel[25835]: EXT4-fs (sda1): mounted filesystem
+<2>Sep 9 08:01:36 worker01 kernel[13744]: oom-killer: Kill process
+<38>Sep 9 08:01:37 db01 sshd[44716]: Accepted publickey for admin
+<30>Sep 9 08:01:39 web02 cron[44766]: CRON[12345]: (CRON) info (No MTA installed)
+<130>Sep 9 08:01:40 db01 postgres[49694]: FATAL: password authentication failed
+<130>Sep 9 08:01:44 web02 postgres[57394]: FATAL: password authentication failed
+<134>Sep 9 08:01:48 cache01 postgres[8361]: LOG: connection authorized
+<38>Sep 9 08:01:51 web01 sshd[63252]: Connection closed by authenticating user
+<130>Sep 9 08:01:54 web02 postgres[62151]: FATAL: password authentication failed
+<130>Sep 9 08:01:55 gateway postgres[31672]: FATAL: password authentication failed
+<134>Sep 9 08:01:58 worker01 postgres[14125]: LOG: checkpoint starting
+<30>Sep 9 08:02:02 db01 nginx[39044]: GET /api/users 200
+<30>Sep 9 08:02:02 cache01 nginx[25197]: GET /health 200
+<134>Sep 9 08:02:07 gateway postgres[13714]: LOG: checkpoint starting
+<30>Sep 9 08:02:10 cache01 systemd[18354]: Stopping User Manager for UID 1000
+<38>Sep 9 08:02:13 web02 sshd[57880]: session opened for user deploy
+<130>Sep 9 08:02:17 cache01 postgres[37823]: FATAL: password authentication failed
+<38>Sep 9 08:02:22 db01 sshd[14606]: Connection closed by authenticating user
+<2>Sep 9 08:02:23 gateway kernel[13036]: oom-killer: Kill process
+<30>Sep 9 08:02:27 worker01 systemd[44582]: Reached target Multi-User System
+<27>Sep 9 08:02:28 worker01 nginx[31138]: POST /api/auth 401
+<27>Sep 9 08:02:31 db01 nginx[5728]: GET /api/orders 500
+<134>Sep 9 08:02:32 web01 postgres[42517]: LOG: checkpoint starting
+<30>Sep 9 08:02:32 cache01 cron[11877]: (www-data) CMD (php artisan schedule:run)
+<30>Sep 9 08:02:33 cache01 nginx[4129]: GET /api/users 200
+<38>Sep 9 08:02:35 worker01 sshd[11388]: Connection closed by authenticating user
+<27>Sep 9 08:02:39 gateway nginx[16047]: GET /api/orders 500
+<27>Sep 9 08:02:43 cache01 nginx[18878]: POST /api/auth 401
+<30>Sep 9 08:02:44 web01 cron[61214]: CRON[12345]: (CRON) info (No MTA installed)
+<6>Sep 9 08:02:45 web02 kernel[43768]: EXT4-fs (sda1): mounted filesystem
+<4>Sep 9 08:02:50 web01 kernel[48497]: [UFW BLOCK] IN=eth0 OUT=
+<38>Sep 9 08:02:51 web02 sshd[3168]: Accepted publickey for admin
+<131>Sep 9 08:02:55 cache01 postgres[24193]: ERROR: relation does not exist
+<131>Sep 9 08:02:59 web02 postgres[23288]: ERROR: relation does not exist
+<30>Sep 9 08:03:03 gateway cron[13320]: (www-data) CMD (php artisan schedule:run)
+<131>Sep 9 08:03:04 web01 postgres[33542]: ERROR: relation does not exist
+<4>Sep 9 08:03:08 gateway kernel[16144]: [UFW BLOCK] IN=eth0 OUT=
+<131>Sep 9 08:03:09 web01 postgres[38142]: ERROR: relation does not exist
+<2>Sep 9 08:03:12 web01 kernel[58372]: TCP: out of memory
+<38>Sep 9 08:03:16 cache01 sshd[17580]: Connection closed by authenticating user
+<27>Sep 9 08:03:18 worker01 nginx[2335]: GET /api/orders 500
+<38>Sep 9 08:03:19 web02 sshd[58734]: Accepted publickey for admin
+<6>Sep 9 08:03:21 db01 kernel[9100]: EXT4-fs (sda1): mounted filesystem
+<30>Sep 9 08:03:23 web01 nginx[11744]: GET /health 200
+<30>Sep 9 08:03:26 db01 cron[22427]: CRON[12345]: (CRON) info (No MTA installed)
+<30>Sep 9 08:03:30 cache01 nginx[40994]: GET /health 200
+<38>Sep 9 08:03:31 gateway sshd[51049]: Accepted publickey for admin
+<30>Sep 9 08:03:36 gateway cron[28466]: (www-data) CMD (php artisan schedule:run)
+<38>Sep 9 08:03:38 web02 sshd[4576]: session opened for user deploy
+<131>Sep 9 08:03:39 db01 postgres[56283]: ERROR: relation does not exist
+<29>Sep 9 08:03:42 web01 systemd[55896]: Started Daily apt upgrade
+<38>Sep 9 08:03:43 gateway sshd[5015]: Connection closed by authenticating user
+<30>Sep 9 08:03:48 web02 cron[51082]: CRON[12345]: (CRON) info (No MTA installed)
+<30>Sep 9 08:03:50 gateway nginx[33963]: GET /api/users 200
+<30>Sep 9 08:03:52 web01 systemd[39550]: Stopping User Manager for UID 1000
+<30>Sep 9 08:03:53 web02 systemd[61091]: Reached target Multi-User System
+<30>Sep 9 08:03:56 worker01 cron[16245]: (root) CMD (/usr/local/bin/backup.sh)
+<29>Sep 9 08:04:00 web02 systemd[29595]: Started Daily apt upgrade
+<38>Sep 9 08:04:03 web02 sshd[49375]: session opened for user deploy
+<38>Sep 9 08:04:08 gateway sshd[11999]: Connection closed by authenticating user
+<134>Sep 9 08:04:11 worker01 postgres[16383]: LOG: connection authorized
+<38>Sep 9 08:04:12 gateway sshd[26914]: session opened for user deploy
+<30>Sep 9 08:04:15 web02 nginx[22236]: GET /health 200
+<30>Sep 9 08:04:18 cache01 cron[7359]: (root) CMD (/usr/local/bin/backup.sh)
+<27>Sep 9 08:04:22 web01 nginx[5073]: GET /api/orders 500
+<30>Sep 9 08:04:24 gateway nginx[13131]: GET /health 200
+<134>Sep 9 08:04:25 db01 postgres[38830]: LOG: connection authorized
+<38>Sep 9 08:04:28 gateway sshd[8476]: Connection closed by authenticating user
+<29>Sep 9 08:04:29 web02 systemd[35790]: Started Session 42 of user admin
+<29>Sep 9 08:04:30 web01 systemd[24261]: Started Daily apt upgrade
+<2>Sep 9 08:04:31 web01 kernel[2183]: oom-killer: Kill process
+<30>Sep 9 08:04:33 cache01 cron[36279]: (root) CMD (/usr/local/bin/backup.sh)
+<30>Sep 9 08:04:34 web01 nginx[12530]: GET /api/users 200
+<30>Sep 9 08:04:35 worker01 cron[50842]: (www-data) CMD (php artisan schedule:run)
+<130>Sep 9 08:04:40 web01 postgres[8468]: FATAL: password authentication failed
+<30>Sep 9 08:04:43 gateway nginx[33582]: GET /health 200
+<29>Sep 9 08:04:45 worker01 systemd[22435]: Started Session 42 of user admin
+<28>Sep 9 08:04:49 db01 nginx[16956]: connection timeout upstream
+<30>Sep 9 08:04:49 web02 nginx[22368]: GET /health 200
+<30>Sep 9 08:04:52 db01 cron[41951]: CRON[12345]: (CRON) info (No MTA installed)
+<30>Sep 9 08:04:53 gateway systemd[35209]: Reached target Multi-User System
+<134>Sep 9 08:04:53 db01 postgres[51902]: LOG: connection authorized
+<134>Sep 9 08:04:55 web01 postgres[33386]: LOG: checkpoint starting
+<130>Sep 9 08:04:59 cache01 postgres[53036]: FATAL: password authentication failed
+<30>Sep 9 08:05:04 worker01 cron[40647]: (root) CMD (/usr/local/bin/backup.sh)
+<27>Sep 9 08:05:07 db01 nginx[51799]: GET /api/orders 500
+<2>Sep 9 08:05:08 db01 kernel[49673]: oom-killer: Kill process
+<4>Sep 9 08:05:11 web01 kernel[4116]: [UFW BLOCK] IN=eth0 OUT=
+<130>Sep 9 08:05:13 web02 postgres[13607]: FATAL: password authentication failed
+<134>Sep 9 08:05:16 gateway postgres[2283]: LOG: connection authorized
+<30>Sep 9 08:05:16 web02 cron[44762]: (root) CMD (/usr/local/bin/backup.sh)
+<27>Sep 9 08:05:19 web01 nginx[55418]: GET /api/orders 500
+<30>Sep 9 08:05:24 web02 cron[54670]: (root) CMD (/usr/local/bin/backup.sh)
+<30>Sep 9 08:05:28 web02 cron[28221]: CRON[12345]: (CRON) info (No MTA installed)
+<38>Sep 9 08:05:28 cache01 sshd[42406]: session opened for user deploy
+<30>Sep 9 08:05:29 worker01 cron[17396]: (www-data) CMD (php artisan schedule:run)
+<134>Sep 9 08:05:33 web02 postgres[48684]: LOG: checkpoint starting
+<134>Sep 9 08:05:34 worker01 postgres[17437]: LOG: connection authorized
+<38>Sep 9 08:05:36 db01 sshd[15254]: session opened for user deploy
+<2>Sep 9 08:05:40 db01 kernel[17533]: oom-killer: Kill process
+<130>Sep 9 08:05:43 web02 postgres[19561]: FATAL: password authentication failed
+<30>Sep 9 08:05:44 worker01 cron[53558]: (root) CMD (/usr/local/bin/backup.sh)
+<4>Sep 9 08:05:46 db01 kernel[15863]: [UFW BLOCK] IN=eth0 OUT=
+<38>Sep 9 08:05:49 worker01 sshd[23135]: Accepted publickey for admin
+<134>Sep 9 08:05:53 cache01 postgres[1691]: LOG: connection authorized
+<29>Sep 9 08:05:55 cache01 systemd[6482]: Started Daily apt upgrade
+<30>Sep 9 08:05:55 web02 nginx[13561]: GET /health 200
+<134>Sep 9 08:05:55 db01 postgres[12352]: LOG: checkpoint starting
+<131>Sep 9 08:05:59 gateway postgres[6832]: ERROR: relation does not exist
+<30>Sep 9 08:06:02 web01 cron[20514]: (root) CMD (/usr/local/bin/backup.sh)
+<2>Sep 9 08:06:04 web01 kernel[43514]: oom-killer: Kill process
+<29>Sep 9 08:06:09 worker01 systemd[15301]: Started Session 42 of user admin
+<30>Sep 9 08:06:11 gateway nginx[46597]: GET /health 200
+<131>Sep 9 08:06:16 web02 postgres[54147]: ERROR: relation does not exist
+<2>Sep 9 08:06:20 worker01 kernel[48078]: oom-killer: Kill process
+<38>Sep 9 08:06:22 worker01 sshd[37528]: Connection closed by authenticating user
+<6>Sep 9 08:06:23 worker01 kernel[2346]: EXT4-fs (sda1): mounted filesystem
+<2>Sep 9 08:06:23 db01 kernel[9409]: TCP: out of memory
+<30>Sep 9 08:06:25 worker01 nginx[63589]: GET /health 200
+<30>Sep 9 08:06:29 db01 cron[37278]: (root) CMD (/usr/local/bin/backup.sh)
+<134>Sep 9 08:06:30 web01 postgres[3157]: LOG: checkpoint starting
+<30>Sep 9 08:06:34 cache01 cron[42662]: (root) CMD (/usr/local/bin/backup.sh)
+<38>Sep 9 08:06:34 gateway sshd[32119]: Accepted publickey for admin
+<2>Sep 9 08:06:36 worker01 kernel[25420]: oom-killer: Kill process
+<29>Sep 9 08:06:39 db01 systemd[61193]: Started Daily apt upgrade
+<30>Sep 9 08:06:40 web02 cron[18152]: (root) CMD (/usr/local/bin/backup.sh)
+<27>Sep 9 08:06:44 db01 nginx[21539]: GET /api/orders 500
+<6>Sep 9 08:06:47 web01 kernel[62160]: EXT4-fs (sda1): mounted filesystem
+<35>Sep 9 08:06:48 web02 sshd[19819]: Failed password for root
+<134>Sep 9 08:06:53 web01 postgres[10333]: LOG: checkpoint starting
+<2>Sep 9 08:06:54 worker01 kernel[18374]: TCP: out of memory
+<134>Sep 9 08:06:56 cache01 postgres[55894]: LOG: connection authorized
+<27>Sep 9 08:07:00 cache01 nginx[32334]: POST /api/auth 401
+<30>Sep 9 08:07:04 db01 systemd[52084]: Stopping User Manager for UID 1000
+<27>Sep 9 08:07:06 web02 nginx[54163]: GET /api/orders 500
+<30>Sep 9 08:07:10 worker01 cron[64250]: (root) CMD (/usr/local/bin/backup.sh)
+<30>Sep 9 08:07:13 gateway cron[3632]: CRON[12345]: (CRON) info (No MTA installed)
+<38>Sep 9 08:07:14 gateway sshd[30559]: Accepted publickey for admin
+<2>Sep 9 08:07:15 cache01 kernel[42647]: oom-killer: Kill process
+<38>Sep 9 08:07:18 gateway sshd[40789]: Accepted publickey for admin
+<131>Sep 9 08:07:19 cache01 postgres[59205]: ERROR: relation does not exist
+<6>Sep 9 08:07:20 cache01 kernel[55678]: EXT4-fs (sda1): mounted filesystem
+<134>Sep 9 08:07:23 web01 postgres[4705]: LOG: checkpoint starting
+<130>Sep 9 08:07:26 web02 postgres[56604]: FATAL: password authentication failed
+<29>Sep 9 08:07:28 web02 systemd[38609]: Started Session 42 of user admin
+<38>Sep 9 08:07:30 gateway sshd[52608]: Accepted publickey for admin
+<30>Sep 9 08:07:31 worker01 cron[44667]: (root) CMD (/usr/local/bin/backup.sh)
+<131>Sep 9 08:07:34 db01 postgres[34583]: ERROR: relation does not exist
+<27>Sep 9 08:07:35 cache01 nginx[48210]: GET /api/orders 500
+<2>Sep 9 08:07:40 db01 kernel[1007]: oom-killer: Kill process
+<30>Sep 9 08:07:43 gateway nginx[16190]: GET /health 200
+<134>Sep 9 08:07:43 gateway postgres[11447]: LOG: connection authorized
+<38>Sep 9 08:07:46 db01 sshd[22093]: Connection closed by authenticating user
+<29>Sep 9 08:07:48 web02 systemd[25545]: Started Session 42 of user admin
+<28>Sep 9 08:07:52 web02 nginx[31386]: connection timeout upstream
+<134>Sep 9 08:07:54 cache01 postgres[48940]: LOG: checkpoint starting
+<30>Sep 9 08:07:57 worker01 cron[46268]: (root) CMD (/usr/local/bin/backup.sh)
+<2>Sep 9 08:08:00 cache01 kernel[53138]: TCP: out of memory
+<38>Sep 9 08:08:05 worker01 sshd[52994]: Accepted publickey for admin
+<30>Sep 9 08:08:09 cache01 cron[21724]: CRON[12345]: (CRON) info (No MTA installed)
+<38>Sep 9 08:08:10 gateway sshd[6865]: Accepted publickey for admin
+<130>Sep 9 08:08:11 web02 postgres[11269]: FATAL: password authentication failed
+<131>Sep 9 08:08:16 cache01 postgres[23356]: ERROR: relation does not exist
+<30>Sep 9 08:08:17 gateway nginx[6646]: GET /api/users 200
+<29>Sep 9 08:08:20 web02 systemd[29685]: Started Session 42 of user admin
+<28>Sep 9 08:08:22 web02 nginx[42743]: connection timeout upstream

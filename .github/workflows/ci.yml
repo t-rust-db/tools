@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  db-cli:
+    name: db-cli
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: make -C db-cli lint
+      - run: make -C db-cli test
+
+  column-rs:
+    name: column-rs
+    runs-on: ubuntu-latest
+    env:
+      DUCKDB_VERSION: "1.5.5"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned DuckDB (oracle for tests/oracle.rs)
+        run: |
+          curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o duckdb.zip
+          unzip duckdb.zip
+          sudo mv duckdb /usr/local/bin/duckdb
+          duckdb --version
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: make -C column-rs lint
+      - run: make -C column-rs test
+
+  loglume:
+    name: loglume
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: make -C loglume check
+
+  trigrep:
+    name: trigrep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: make -C trigrep lint
+      - run: make -C trigrep smoke
+      - run: make -C trigrep test
+
+  trigrep-deny:
+    name: trigrep supply chain (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: make -C trigrep check-deny
+
+  # Qualified-subset gate (cargo-mvl-limit); exemptions live in
+  # trigrep/Makefile's MVL_LIMIT_EXCLUDE with their reason.
+  trigrep-mvl-limit:
+    name: trigrep qualified subset (cargo-mvl-limit)
+    runs-on: ubuntu-latest
+    env:
+      # Not on crates.io: built from source at this pinned rev (same as db-core).
+      MVL_RUST_REV: "a64eb33e7c9ef9ad031d22a70405e59aa1ad3cb0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mvl-limit
+      - name: Cache cargo-mvl-limit
+        id: cache-mvl
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-mvl-limit
+          key: cargo-mvl-limit-${{ runner.os }}-${{ env.MVL_RUST_REV }}
+      - name: Build cargo-mvl-limit
+        if: steps.cache-mvl.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          cargo install --git https://github.com/mvl-lang/mvl-rust \
+            --rev "$MVL_RUST_REV" rust-limit --bin cargo-mvl-limit --locked --force
+      - run: make -C trigrep check-mvl-limit
+
+  db-studio:
+    name: db-studio
+    runs-on: ubuntu-latest
+    env:
+      DUCKDB_VERSION: "1.5.5"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install DuckDB and sqlite3 (generate the iot-fleet test fixtures)
+        run: |
+          curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o duckdb.zip
+          unzip duckdb.zip
+          sudo mv duckdb /usr/local/bin/duckdb
+          sudo apt-get install -y sqlite3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: make -C db-studio check

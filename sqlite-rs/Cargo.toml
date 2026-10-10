@@ -1,0 +1,305 @@
+[package]
+name = "sqlite-rs"
+version = "0.25.5"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "A binary-compatible Rust replication of SQLite"
+repository = "https://github.com/t-rust-db/tools"
+documentation = "https://docs.rs/sqlite-rs"
+keywords = ["sqlite", "database", "sql", "embedded"]
+categories = ["database", "database-implementations"]
+
+[dependencies]
+# First-party t-rust-db crates, pinned to release tags (ADR-0040). Exactly
+# the features this crate uses, nothing by default. Bumping a tag is a
+# reviewed dependency update: check-deny, cargo vet, sbom, full test run.
+# Parser (t-rust-db/sqlite-rs#17): db-core's parser::row is this crate's
+# own parser, ported; a strict superset until Lab271/sqlite-rs#701/#702
+# land (db-core ADR 0009). More db-core features follow with #18/#19.
+db-core = { workspace = true, features = ["parser-row", "vm-row", "codegen-row", "storage-row"] }
+# CLI-only (readline, history, REPL loop, output modes — t-rust-db/sqlite-rs#14/#15):
+# optional so library consumers with `default-features = false` never pull
+# it (or its libc/dirs closure) in.
+db-cli = { workspace = true, optional = true }
+# CLI-only (`grep` subcommand pattern matching — t-rust-db/sqlite-rs#45):
+# same rationale/gating as `db-cli` above — optional so library consumers
+# with `default-features = false` never pull it in (ADR-0040, ADR-0044).
+regex = { version = "1.10", optional = true }
+
+[features]
+default = ["cli"]
+# The `sqlite-rs` binary. Off => library only.
+cli = ["dep:db-cli", "dep:regex"]
+
+# The CLI itself; auto-discovery would find it anyway, but the feature gate
+# needs an explicit entry.
+[[bin]]
+name = "sqlite-rs"
+path = "src/bin/sqlite-rs/main.rs"
+required-features = ["cli"]
+
+# Test-only helper: a genuine second OS process for the cross-process
+# lock-contention tests (#66; now `tests/corpus/*_interop_test.rs` — the
+# in-module ones moved to db-storage with `row::vfs`). Not a `#[[test]]`
+# itself — spawned via `Command`/`CARGO_BIN_EXE_lock_probe`.
+[[bin]]
+name = "lock_probe"
+path = "tests/helpers/lock_probe.rs"
+
+# Test-only helper: a genuine second OS process for #361's crash-torture
+# test (`tests/corpus/crash_torture_test.rs`) to `kill -9` mid-write-loop
+# — a same-process thread can't be killed independently of the test
+# process itself. Not a `[[test]]` itself — spawned via
+# `Command`/`CARGO_BIN_EXE_write_loop_probe`.
+[[bin]]
+name = "write_loop_probe"
+path = "tests/helpers/write_loop_probe.rs"
+
+[[test]]
+name = "unit_layer_isolation"
+path = "tests/unit/layer_isolation.rs"
+
+[[test]]
+name = "unit_supply_chain_gates"
+path = "tests/unit/supply_chain_gates.rs"
+
+[[test]]
+name = "unit_mcdc_discharge"
+path = "tests/unit/mcdc_discharge_test.rs"
+
+[[test]]
+name = "unit_header"
+path = "tests/unit/header.rs"
+
+[[test]]
+name = "unit_record"
+path = "tests/unit/record.rs"
+
+[[test]]
+name = "unit_pager_fixtures"
+path = "tests/unit/pager_fixtures.rs"
+
+[[test]]
+name = "unit_vfs"
+path = "tests/unit/vfs.rs"
+
+[[test]]
+name = "unit_parser"
+path = "tests/unit/parser.rs"
+
+[[test]]
+name = "unit_insert_parser"
+path = "tests/unit/insert_parser.rs"
+
+[[test]]
+name = "unit_delete_parser"
+path = "tests/unit/delete_parser.rs"
+
+[[test]]
+name = "unit_ddl_parser"
+path = "tests/unit/ddl_parser.rs"
+
+[[test]]
+name = "unit_transaction_parser"
+path = "tests/unit/transaction_parser.rs"
+
+[[test]]
+name = "unit_pragma_parser"
+path = "tests/unit/pragma_parser.rs"
+
+[[test]]
+name = "unit_pragma_synchronous_repl"
+path = "tests/unit/pragma_synchronous_repl.rs"
+
+[[test]]
+name = "unit_introspection_pragmas"
+path = "tests/unit/introspection_pragmas.rs"
+
+[[test]]
+name = "unit_codegen"
+path = "tests/unit/codegen.rs"
+
+[[test]]
+name = "unit_cli_smoke"
+path = "tests/unit/cli_smoke.rs"
+
+[[test]]
+name = "unit_repl_dot_commands"
+path = "tests/unit/repl_dot_commands.rs"
+
+[[test]]
+name = "unit_repl_history"
+path = "tests/unit/repl_history.rs"
+
+[[test]]
+name = "unit_grep"
+path = "tests/unit/grep_test.rs"
+
+[[test]]
+name = "extracted_sql_corpus"
+path = "tests/corpus/extracted_sql_test.rs"
+
+[[test]]
+name = "vdbe_oracle_vectors"
+path = "tests/unit/vdbe_oracle_vectors_test.rs"
+
+[[test]]
+name = "opcode_completeness"
+path = "tests/unit/vdbe_opcode_completeness_test.rs"
+
+[[test]]
+name = "vdbe_cursor_sorter"
+path = "tests/unit/vdbe_cursor_sorter_test.rs"
+
+[[test]]
+name = "vdbe_cursor_positioning"
+path = "tests/unit/vdbe_cursor_positioning_test.rs"
+
+[[test]]
+name = "vdbe_explain"
+path = "tests/unit/vdbe_explain_test.rs"
+
+[[test]]
+name = "vdbe_write_opcodes"
+path = "tests/unit/vdbe_write_opcodes_test.rs"
+
+[[test]]
+name = "vdbe_integrity_check"
+path = "tests/unit/vdbe_integrity_check_test.rs"
+
+[[test]]
+name = "codegen_expr"
+path = "tests/unit/codegen_expr_test.rs"
+
+[[test]]
+name = "codegen_select"
+path = "tests/unit/codegen_select_test.rs"
+
+[[test]]
+name = "codegen_insert"
+path = "tests/unit/codegen_insert_test.rs"
+
+[[test]]
+name = "codegen_delete"
+path = "tests/unit/codegen_delete_test.rs"
+
+[[test]]
+name = "codegen_update"
+path = "tests/unit/codegen_update_test.rs"
+
+[[test]]
+name = "range_scan"
+path = "tests/unit/range_scan_test.rs"
+
+[[test]]
+name = "tokenizer_proptest"
+path = "tests/proptest/tokenizer_proptest.rs"
+
+[[test]]
+name = "semantics_proptest"
+path = "tests/proptest/semantics_proptest.rs"
+
+[[test]]
+name = "record_proptest"
+path = "tests/proptest/record_proptest.rs"
+
+[[test]]
+name = "btree_proptest"
+path = "tests/proptest/btree_proptest.rs"
+
+[dev-dependencies]
+# Same crate, plus its `test-support` feature (`btree::test_minimal_db`) for
+# this crate's own unit tests — feature unification keeps it out of release
+# builds (t-rust-db/db-storage#13).
+db-core = { workspace = true, features = ["storage-test-support"] }
+proptest = "1"
+
+# MD5 is part of the sqllogictest format itself (`"N values hashing to
+# <md5>"` result blocks, #96) — not a project cryptographic dependency, so
+# pulling in a maintained implementation beats hand-rolling a bit-exact
+# digest for a test-only concern.
+md-5 = "0.10"
+
+# Single source of truth for the pinned sqlite3 version — the oracle binary,
+# the parse.y the grammar is re-derived from, and the TCL suite the SQL corpus
+# is extracted from all track this one value.
+#
+# Read directly by tools/harvest_opcodes.py, tools/grammar_drift.py,
+# tools/extract_sql_corpus.py and tools/gen_fixtures.sh. The sites that cannot
+# read it at run time — tests/corpus/oracle.rs (a `const`) and CI's
+# SQLITE_ORACLE_VERSION — are held to it by the `make version-pin` gate, so
+# they cannot drift silently.
+#
+# Bumping this is a deliberate, reviewed event (spec 004 Requirement 1): it
+# invalidates committed fixtures, tools/opcodes-v2.json and the grammar's
+# parse.y line citations. Bump, then re-run `make fixtures opcodes sql-corpus
+# grammar-drift test-corpus`.
+[package.metadata.oracle]
+version = "3.53.4"
+
+
+[lints.rust]
+# Backstop for ADR-0031: `src/lib.rs` and `src/bin/sqlite-rs/main.rs` each
+# carry their own `#![deny(unsafe_code)]`; this makes the crate-wide
+# default explicit at the Cargo.toml level too, so both lib and bin
+# targets are covered even if a module-level attribute is ever dropped.
+# No `#![allow(unsafe_code)]` carve-outs remain: `fcntl` left with the VFS
+# to db-storage (t-rust-db/sqlite-rs#2), `termios` with the line editor to
+# db-cli (#14). ADR-0031's vendored FFI now lives in those crates.
+unsafe_code = "deny"
+
+[lints.clippy]
+let_underscore_must_use = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+arithmetic_side_effects = "deny"
+mod_module_files = "deny"
+
+# Excluded from the default `cargo test` run: the corpus harness shells out
+# to a pinned real `sqlite3` and takes ~8s, so it stays behind
+# `make test-corpus` (`cargo test --test corpus`, which still works — this
+# only changes what runs *by default*).
+#
+# Declaring it here rather than filtering by name in the Makefile is what
+# keeps `make test` a plain `cargo test`: every other test target is picked
+# up automatically, so a newly added test file can never be silently
+# dropped. It previously was — `tests/record_proptest.rs`'s 10 tests were
+# built but never run, because the Makefile enumerated targets by name.
+[[test]]
+name = "corpus"
+path = "tests/corpus/main.rs"
+test = false
+
+# Same rationale as "corpus" above: shells out to the pinned oracle
+# to build each vendored `.test` file's fixture state, so it stays behind
+# `make sqllogictest` (`cargo test --test sqllogictest`) rather than the
+# default `cargo test` run (#96).
+[[test]]
+name = "sqllogictest"
+path = "tests/sqllogictest/main.rs"
+test = false
+
+[[test]]
+name = "tier0"
+path = "tests/tiers/tier0.rs"
+
+[[test]]
+name = "tier1"
+path = "tests/tiers/tier1.rs"
+
+[[test]]
+name = "tier2"
+path = "tests/tiers/tier2.rs"
+
+[[test]]
+name = "tier3"
+path = "tests/tiers/tier3.rs"
+
+# Last Lab271/sqlite-rs commit folded into this snapshot (ADR-0039: Lab271 is
+# leading until archived). Updated by `make sync-lab271`; informational, not
+# gated — being behind is expected while the repointing (#1) is in progress.
+[package.metadata.lab271]
+synced = "7701d18144ed4036b3bdbcabe193fe0ef2884629"

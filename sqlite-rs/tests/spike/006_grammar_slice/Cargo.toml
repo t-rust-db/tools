@@ -1,0 +1,10 @@
+[package]
+name = "grammar_slice_spike"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pomelo = "0.2.3"
+
+# Standalone: not a member of the tools workspace.
+[workspace]

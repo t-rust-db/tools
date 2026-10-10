@@ -1,0 +1,5 @@
+<38>Sep 9 08:00:00 web02 sshd[33939]: session opened for user deploy
+<30>Sep 9 08:00:04 web01 systemd[53006]: Stopping User Manager for UID 1000
+<30>Sep 9 08:00:07 web02 cron[49440]: CRON[12345]: (CRON) info (No MTA installed)
+<30>Sep 9 08:00:08 web01 nginx[18298]: GET /health 200
+<27>Sep 9 08:00:13 db01 nginx[10174]: GET /api/orders 500

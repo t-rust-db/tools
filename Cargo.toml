@@ -1,0 +1,15 @@
+[workspace]
+members = ["db-cli", "column-rs", "sqlite-rs", "loglume", "trigrep", "db-studio"]
+# Standalone packages under sqlite-rs (cargo-fuzz crate, throwaway spikes).
+exclude = ["sqlite-rs/tests/fuzz", "sqlite-rs/tests/spike"]
+resolver = "2"
+
+# One db-core pin for every tool (#1), always the tagged release on GitHub.
+[workspace.dependencies]
+db-core = { version = "0.114.7", git = "https://github.com/t-rust-db/db-core", tag = "v0.114.7", default-features = false }
+db-cli = { path = "db-cli", version = "0.5.0" }
+
+# Cargo only honours profiles at the workspace root (moved here from trigrep).
+[profile.release]
+lto = true
+codegen-units = 1

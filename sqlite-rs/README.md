@@ -1,0 +1,197 @@
+# sqlite-rs
+
+A safe binary compatible Rust replication of SQLite without any reliance on external libraries.
+
+## Why
+
+SQLite is the most widely deployed database in the world — every phone, browser, and OS ships it, with over a trillion active deployments. Its dominance rests on four pillars:
+
+- **Reliability:** 100% MC/DC test coverage, aviation-grade (it literally flies in the A350)
+- **Zero ops:** no server, no config, one file
+- **Stability promise:** file format frozen until 2050, public domain
+- **Ubiquity:** the de-facto standard for embedded, transactional, SQL storage
+
+The file format and SQL dialect are the moat. That is why sqlite-rs targets *compatibility* rather than a new engine: the interesting gap in the market is not "a better SQLite" — it is a **memory-safe, extensible SQLite**.
+
+### The safety thesis
+
+SQLite's legendary test discipline (a 700:1 test-to-code ratio, 100% MC/DC) exists because in C, the test suite must prove two things at once: *the code doesn't corrupt memory* and *the code computes the right answer*. Every recent SQLite CVE is a memory-safety failure downstream of an arithmetic error — an integer overflow or truncation feeding an unchecked read or write.
+
+sqlite-rs splits that burden: **the Rust compiler carries the memory-safety half by construction** (`forbid(unsafe_code)`, ownership instead of `Mem`'s lifetime flags, enums instead of flag-tagged unions, checked arithmetic instead of silent truncation), so the entire evidence budget — the pinned-oracle corpus, fuzzing, property tests, mutation runs — is spent on the only question types cannot answer: *is the behavior SQLite's behavior?*
+
+The honest caveat: safety is not correctness. Memory-safe code can still return the wrong answer politely — which is why every claim in this repo is ultimately backed by a byte-level diff against a pinned stock `sqlite3`, not by the type system alone.
+
+### Zero external dependencies
+
+sqlite-rs targets security-sensitive contexts where every dependency is a trust boundary and proc macros are the worst case — they execute arbitrary code at build time, not just at run time. The **library** declares **no third-party dependencies of its own**: proc-macro-based error enums and the CLI's line editor were replaced with hand-rolled equivalents ([ADR-0030](.openspec/adr/0030-zero-proc-macro-dependencies.md)), and `nix` was replaced by ~180 lines of vendored, verified `unsafe extern "C"` bindings ([ADR-0031](.openspec/adr/0031-vendor-nix-subset.md)). Since the t-rust-db org move ([ADR-0040](.openspec/adr/0040-first-party-git-dependencies.md)) the storage stack comes from `db-core` (`db_core::storage`, a pinned git tag) and the CLI layer from `db-cli` (a member of the same [tools](../README.md) workspace, [ADR-0045](.openspec/adr/0045-tools-workspace-member.md)), which carry the vendored FFI now — this crate is `#![deny(unsafe_code)]` with no carve-out at all — and whose few transitive crates (`memmap2`/`ruzstd`, `libc`/`dirs`) are tracked down to zero one level up. Every crate in the closure is still license-checked, advisory-checked and `cargo vet`-ed here.
+
+This is a machine-checked claim, not a prose one: [`sqlite-rs.cdx.json`](sqlite-rs.cdx.json) is a [CycloneDX](https://cyclonedx.org/) SBOM generated from `Cargo.lock` (`make sbom`), and it has zero components. Build-time code execution is a real attack surface independent of what ships, though, so [`sqlite-rs-dev.cdx.json`](sqlite-rs-dev.cdx.json) (`make sbom-dev`) covers the full `Cargo.lock` closure — every test/build/bench-only crate, `scope`-tagged `optional` — for exactly that visibility; `make check-deny`/`make check-audit`/`cargo vet` already gate that same closure in CI.
+
+## The Landscape
+
+SQLite has no credible replacement in its core niche — embedded, transactional, SQL, zero-config. The alternatives all occupy adjacent niches:
+
+### Embedded relational (SQLite's home turf)
+
+| DB | Angle | Trade-off |
+|----|-------|-----------|
+| **DuckDB** | The real challenger — "SQLite for analytics" (OLAP, columnar) | Not for transactional workloads |
+| **libSQL / Turso** | SQLite fork + replication, server mode | Still C SQLite at heart |
+| **limbo (Turso)** | SQLite-compatible pure Rust rewrite | Early stage — same bet as this project |
+| **Firebird Embedded** | Full-featured, stored procedures | Tiny mindshare |
+| **H2 / Derby** | JVM world | Java-only niche |
+
+### Embedded key-value (when you don't need SQL)
+
+| DB | Angle |
+|----|-------|
+| **RocksDB** | LSM-tree, write-heavy, powers many databases internally |
+| **LMDB** | Memory-mapped B-tree, read-blazing, crash-proof |
+| **redb / sled** | Rust-native options — redb is the serious one |
+| **FoundationDB** | Distributed KV, transactional |
+
+### Client-server (when you outgrow single-node)
+
+- **PostgreSQL** — the default answer for almost everything serious
+- **MySQL / MariaDB** — legacy web scale
+- **CockroachDB / TiDB** — distributed Postgres/MySQL-compatible
+
+DuckDB is the only genuinely new force in the embedded space, and it deliberately took the *other* half (analytics) rather than compete head-on. The two are complements: applications increasingly ship both.
+
+Meanwhile the "SQLite in production" renaissance (Litestream, LiteFS, Rails 8 defaults, fly.io) has made single-node SQLite fashionable again for server-side workloads — raising the value of a memory-safe implementation.
+
+## Goals
+
+- **Drop-in file compatibility** — read and write `.sqlite` files byte-compatible with SQLite 3.x
+- **Dialect compatibility** — accept what SQLite accepts, reject what it rejects, using SQLite's own test corpus as the oracle
+- **Memory safety** — Rust's ownership model across the B-tree, pager, and WAL (the durability-critical path)
+- **Safe extensibility** — a virtual-table trait that lets third parties extend the engine without `unsafe`
+
+## Plan
+
+Development proceeds in twelve value blocks — each delivers usable capability, going from working to working. From reading existing SQLite files (V1), through single-table queries, CRUD, multi-table SQL, transactions and WAL, up to virtual tables, JSON, and FTS5 (V12).
+
+See [.openspec/plan.md](.openspec/plan.md) for the full breakdown and [.openspec/](/.openspec) for architecture and parser specifications.
+
+## Status
+
+**Version 0.22.0** — see [CHANGELOG.md](CHANGELOG.md). One minor version per completed plan phase.
+
+| Phase | Version | Status |
+|-------|---------|--------|
+| V1 — Read core | 0.1.0–0.4.0 | ✅ Complete |
+| V2 — Single-table queries | 0.5.0–0.8.0 | ✅ Complete |
+| V3 — CRUD | 0.9.0–0.12.0 | ✅ Complete |
+| V4 — JOINs & aggregates | 0.13.0 | ✅ Complete |
+| V5 — Transactions | 0.14.0–0.15.0 | ✅ Complete |
+| V6 — WAL & CTEs | 0.16.0–0.17.0 | ✅ Complete |
+| V7 — Polish & compatibility | 0.18.x | ✅ Complete |
+| Migration to t-rust-db (epic #1, phases 1–3) | 0.19.0 | ✅ Complete |
+| Migration to t-rust-db (epic #1, phase 4: codegen repoint #19) | 0.20.0 | ✅ Complete |
+
+### Performance
+
+5 of 7 tier-1 benchmark queries beat or match the sqlite3 oracle (v3.53.4);
+`point_lookup` runs 10× faster than C. The benchmarks, their results and the
+V4→V7.3 progression live in
+[t-rust-db/benchmark `perf/sqlite-rs`](https://github.com/t-rust-db/benchmark/tree/main/perf/sqlite-rs)
+(#22), alongside the oracle parity suite.
+
+## Syncing from Lab271
+
+This repository is a snapshot of [Lab271/sqlite-rs](https://github.com/Lab271/sqlite-rs),
+which stays **leading for engine behaviour** until it is archived
+([ADR-0039](.openspec/adr/0039-lab271-leading-until-archived.md)): fix
+parser/codegen/VDBE bugs there; do the `db-storage`/`db-core`/`db-cli`
+repointing (#1) here. `Cargo.toml`'s `[package.metadata.lab271] synced`
+names the last Lab271 commit folded in.
+
+```sh
+make sync-lab271          # fetch Lab271 main, show what changed since `synced`
+make sync-lab271 APPLY=1  # stage the delta + bump `synced`, then commit as
+                          #   chore: sync Lab271/sqlite-rs @<sha>
+```
+
+Paths already repointed are excluded via `LAB271_EXCLUDE` in the Makefile.
+
+## Getting Started
+
+### Build
+
+```bash
+cargo build --release
+```
+
+### Run
+
+```bash
+# Query a database
+target/release/sqlite-rs query mydb.db "SELECT * FROM users"
+
+# Interactive REPL
+target/release/sqlite-rs repl mydb.db
+
+# Dump schema and data
+target/release/sqlite-rs dump mydb.db
+```
+
+### trigrep (moved)
+
+The serverless trigram grep that lived here as `sqlgrep` (2026-09-08/09) is now its own crate, [trigrep](../trigrep/) (binary `tg`) in the tools workspace, depending on db-core's storage layer directly. Moving it returns this crate to zero third-party runtime dependencies with no exception clause (ADR-0043 superseded). A grep *inside* SQLite files, the [eirtools/sqlgrep](https://github.com/eirtools/sqlgrep) feature, is implemented as `sqlite-rs grep` below.
+
+### grep
+
+`sqlite-rs grep` searches for a pattern *inside* one or more SQLite database
+files — every table's every row/column, matched against the cell's text
+form — porting the behavior (not the code) of
+[eirtools/sqlgrep](https://github.com/eirtools/sqlgrep) (Apache-2.0). This is
+a subcommand of the existing `sqlite-rs` binary, not a separate tool; its
+`regex` dependency is CLI-only, gated behind the same `cli` feature `db-cli`
+already uses ([ADR-0044](.openspec/adr/0044-grep-regex-cli-only-dependency.md)).
+Full requirements and descoped items: [`.openspec/specs/014-grep/spec.md`](.openspec/specs/014-grep/spec.md).
+
+```bash
+# Every table, default regex matching
+target/release/sqlite-rs grep 'error' logs.db
+
+# Fixed-string, case-insensitive, across multiple files (filename-prefixed)
+target/release/sqlite-rs grep -F -i 'timeout' a.db b.db
+
+# Also search CREATE TABLE/INDEX DDL, and opt in to matching BLOB cells
+target/release/sqlite-rs grep --schema --blob=hex 'DEADBEEF' cache.db
+```
+
+Output is one line per matching cell:
+`[<file>::]<table>::<row index>::<column>::<value>` (row index zero-based),
+with exit codes 0 (matched), 1 (no match), 2 (usage/open error) — matching
+`grep(1)`. NULL cells never match (no `CAST(... AS TEXT)` form to match
+against); BLOB cells are skipped unless `--blob=text|hex` is given.
+Descoped in this first cut: `sqlite://` URL inputs and explicit
+`SELECT`/stdin/`@file` query sources — only the default "every table in
+`sqlite_master`" scan is implemented (spec 014-grep's "Descoped" section).
+
+### Documentation
+
+```bash
+# Build the docs site
+make docs
+
+# Serve locally
+make docs-serve
+
+# Generate rustdoc
+cargo doc --open
+```
+
+### Testing
+
+```bash
+make test          # Unit + integration tests
+make test-corpus   # Oracle-diff fixture corpus (requires pinned sqlite3); full oracle parity: t-rust-db/benchmark parity/sqlite-rs
+make lint          # Clippy + fmt
+make bench         # Criterion benchmarks (requires pinned sqlite3)
+```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build/test instructions, code style, and the PR process. Security issues should go through [SECURITY.md](SECURITY.md) rather than a public issue.
