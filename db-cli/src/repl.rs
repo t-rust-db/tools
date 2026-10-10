@@ -291,7 +291,9 @@ impl<H: ReplHandler> Repl<H> {
                 _ => Step::Error("usage: .color on|off".to_string()),
             };
         }
-        if !cmd.is_empty() && "timer".starts_with(cmd) {
+        // At least `.ti`: a bare `.t` is the handler's `.tables` (as in
+        // sqlite3), not ours.
+        if cmd.len() >= 2 && "timer".starts_with(cmd) {
             return match arg {
                 "on" => {
                     self.timer = true;
@@ -686,6 +688,15 @@ mod tests {
         assert!(repl.timer());
         assert!(matches!(repl.feed_line(".timer off"), Step::Continue));
         assert!(!repl.timer());
+    }
+
+    #[test]
+    fn bare_t_is_left_to_the_handler_not_timer() {
+        let mut repl = mock();
+        repl.feed_line(".t on");
+        assert!(!repl.timer());
+        assert!(matches!(repl.feed_line(".ti on"), Step::Continue));
+        assert!(repl.timer());
     }
 
     #[test]
