@@ -1,0 +1,10 @@
+[workspace]
+members = ["db-cli"]
+resolver = "2"
+
+# One db-core pin for every tool (#1). The open-ended requirement lets a local
+# `[patch]` onto a newer sibling db-core checkout apply (db-core#481); the tag
+# is what CI and `cargo install --git` build. See README.md.
+[workspace.dependencies]
+db-core = { version = ">=0.114.7", git = "https://github.com/t-rust-db/db-core", tag = "v0.114.7", default-features = false }
+db-cli = { path = "db-cli" }

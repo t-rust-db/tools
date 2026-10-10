@@ -1,0 +1,36 @@
+[package]
+name = "db-cli"
+version = "0.5.0"
+edition = "2021"
+description = "Generic REPL/readline infrastructure for t-rust-db engine CLIs"
+license = "Apache-2.0"
+
+[dependencies]
+libc = "0.2"
+dirs = "5"
+
+[lib]
+name = "db_cli"
+path = "src/lib.rs"
+
+# Test-only helper: a minimal read_line loop, driven over a pty by
+# tests/redraw_pty.rs to verify the wrapped-line redraw fix end-to-end in a
+# real (virtual) terminal. Not part of the crate's public surface.
+[[bin]]
+name = "redraw-harness"
+path = "tests/fixtures/redraw_harness.rs"
+test = false
+
+# sqlite-rs's lint bar (t-rust-db/db-cli#5); no mod.rs files here so
+# mod_module_files is enforced too.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+let_underscore_must_use = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+arithmetic_side_effects = "deny"
+mod_module_files = "deny"
