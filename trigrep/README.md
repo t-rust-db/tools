@@ -7,7 +7,8 @@ opened per invocation, brought up to date, queried, closed.** No daemon to keep
 warm, no JSON-RPC, no index format of its own.
 
 The cache is a real SQLite-format database maintained through
-[`db-storage`](https://github.com/t-rust-db/db-storage)'s b-tree and pager
+[`db-core`](https://github.com/t-rust-db/db-core)'s b-tree and pager
+(`db_core::storage`, formerly db-storage)
 (rollback journal, hot-journal recovery on open). Open it with `sqlite3` and
 look at the `files`, `trigrams` and `meta` tables. No SQL runs: trigram lookup,
 posting-list intersection and the regex are plain control flow over
@@ -98,9 +99,8 @@ make lint         # clippy -D warnings, rustfmt --check
 make install      # `tg` into ~/.cargo/bin
 ```
 
-`.cargo/config.toml` patches `db-storage` to the sibling checkout for local
-development; a clone without that sibling builds from the tagged git
-dependency in `Cargo.toml`.
+trigrep is a member of the [tools](../README.md) workspace, which builds
+against one tagged db-core release from GitHub.
 
 ## Design
 

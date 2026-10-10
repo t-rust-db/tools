@@ -6,7 +6,7 @@
 `db-studio` reads an optional `config.toml` from
 `$XDG_CONFIG_HOME/db-studio/config.toml` (or `$HOME/.config/db-studio/config.toml`
 if `$XDG_CONFIG_HOME` isn't set), following the XDG Base Directory Spec --
-same convention as [`loglume`](https://github.com/t-rust-db/loglume)'s own
+same convention as [`loglume`](../loglume/)'s own
 config file. Run `db-studio config` to print the resolved path and its
 current contents.
 

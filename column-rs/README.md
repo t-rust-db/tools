@@ -73,6 +73,6 @@ cargo build --release
 cargo test
 ```
 
-column-rs is a member of the [tools](../README.md) workspace, which pins
-db-core and builds db-cli from `../db-cli`. To build against a local
-db-core checkout, see the workspace README.
+column-rs is a member of the [tools](../README.md) workspace, which builds
+against one tagged db-core release from GitHub and builds db-cli from
+`../db-cli`.

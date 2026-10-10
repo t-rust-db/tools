@@ -29,13 +29,7 @@ make lint         # each tool's `make lint`
 make -C <tool> help
 ```
 
-The workspace pins a tagged db-core (`[workspace.dependencies]` in
-`Cargo.toml`). To build against a local db-core checkout next to this repo,
-create an uncommitted `.cargo/config.toml`:
-
-```toml
-[patch."https://github.com/t-rust-db/db-core"]
-db-core = { path = "../db-core" }
-```
-
-then run `cargo update -p db-core` so the lockfile picks the patch up.
+Every tool builds against one tagged db-core release from GitHub
+(`[workspace.dependencies]` in `Cargo.toml`), never a local checkout. To
+move to a new db-core release, bump the tag (and version) there and run
+`cargo update -p db-core`.
