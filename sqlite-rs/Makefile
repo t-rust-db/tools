@@ -395,17 +395,18 @@ verify: check-coverage check-deny check-mvl-limit check-mod-files ## Full verifi
 
 # Scoped, not full-crate: a whole-crate mutation run is a documented V1
 # exit-gate deliverable (epic #5, .openspec/plan.md) still out of scope —
-# see the v0.12.0 changelog entry. MUTANTS_FILE defaults to the core
-# logic modules a prior scoped run already covered (record decode,
-# b-tree write path, VDBE write-opcode dispatch); override for a
-# different slice, e.g. `make mutants MUTANTS_FILE='src/codegen/*.rs'`.
-MUTANTS_FILE ?= src/{record,btree,vdbe}/*.rs
+# see the v0.12.0 changelog entry. MUTANTS_FILE defaults to the VDBE
+# write-opcode dispatch (record decode and the b-tree write path now live
+# in db-core); override for a different slice, e.g.
+# `make mutants MUTANTS_FILE='src/codegen/*.rs'`. Paths are relative to
+# this crate; cargo-mutants resolves them from the workspace root.
+MUTANTS_FILE ?= src/vdbe/*.rs
 mutants: ## Run cargo-mutants over $(MUTANTS_FILE), report to target/mutants.out (scoped — see comment above)
 	@command -v cargo-mutants >/dev/null 2>&1 || { \
 	  echo "error: cargo-mutants not found."; \
 	  echo "install: cargo install cargo-mutants"; \
 	  exit 1; }
-	cargo mutants --output target -f "$(MUTANTS_FILE)"
+	cargo mutants --output target -p sqlite-rs -f "sqlite-rs/$(MUTANTS_FILE)"
 
 # === Fuzz ===
 
