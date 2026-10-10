@@ -1,5 +1,5 @@
 [workspace]
-members = ["db-cli"]
+members = ["db-cli", "column-rs"]
 resolver = "2"
 
 # One db-core pin for every tool (#1). The open-ended requirement lets a local

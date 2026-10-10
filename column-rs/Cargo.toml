@@ -1,0 +1,18 @@
+[package]
+name = "column-rs"
+version = "0.20.4"
+edition = "2021"
+
+[lib]
+name = "column_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "column-rs"
+path = "src/bin/column-rs/main.rs"
+
+[dependencies]
+db-core = { workspace = true, features = ["parser-column", "vm-batch", "codegen-batch", "emit-batch", "storage-column"] }
+db-cli = { workspace = true }
+itoa = "1"
+ryu = "1"

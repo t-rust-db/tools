@@ -6,6 +6,7 @@ in one Cargo workspace: one `Cargo.lock`, one db-core pin, one CI.
 | Tool | What it is |
 |---|---|
 | [db-cli](db-cli/) | Shared REPL/readline library for the CLIs |
+| [column-rs](column-rs/) | SQL over Parquet files (CLI) |
 
 Each tool keeps its own version, `CHANGELOG.md`, `Makefile` and README.
 
