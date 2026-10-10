@@ -1,5 +1,5 @@
 [workspace]
-members = ["db-cli", "column-rs", "sqlite-rs", "loglume", "trigrep"]
+members = ["db-cli", "column-rs", "sqlite-rs", "loglume", "trigrep", "db-studio"]
 # Standalone packages under sqlite-rs (cargo-fuzz crate, throwaway spikes).
 exclude = ["sqlite-rs/tests/fuzz", "sqlite-rs/tests/spike"]
 resolver = "2"

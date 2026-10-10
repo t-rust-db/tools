@@ -10,6 +10,7 @@ in one Cargo workspace: one `Cargo.lock`, one db-core pin, one CI.
 | [sqlite-rs](sqlite-rs/) | Binary-compatible SQLite replica (library + CLI) |
 | [loglume](loglume/) | Log viewer with SQL filtering (TUI) |
 | [trigrep](trigrep/) | Trigram-indexed grep (`tg`) |
+| [db-studio](db-studio/) | TUI database studio over .sqlite/.parquet/.log files |
 
 Each tool keeps its own version, `CHANGELOG.md`, `Makefile` and README.
 
