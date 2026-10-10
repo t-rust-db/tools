@@ -83,7 +83,9 @@ fn cache_file(cache: &Path) -> PathBuf {
         .expect("cache file exists")
 }
 
-/// Opens, integrity-checks, and returns the `files` row count.
+/// Opens, integrity-checks, and returns the `files` row count. A kill
+/// after the file is created but before the first commit leaves a
+/// consistent database with no schema yet: that counts as empty.
 fn recovered_file_count(path: &Path) -> i64 {
     let (header, pager) = open_db(&UnixVfs, path)
         .unwrap_or_else(|e| panic!("cache failed to reopen after kill: {e}"));
@@ -91,11 +93,12 @@ fn recovered_file_count(path: &Path) -> i64 {
     assert_eq!(problems, ["ok"], "integrity_check after kill: {problems:?}");
     let mut cursor = TableCursor::new(&pager, &header, 1);
     let schemas = read_schema(&mut cursor, header.text_encoding).unwrap();
-    let files = schemas
+    schemas
         .iter()
         .find(|s| s.name == "files")
-        .expect("files table");
-    count_table_rows(&&pager, files.root_page).unwrap()
+        .map_or(0, |files| {
+            count_table_rows(&&pager, files.root_page).unwrap()
+        })
 }
 
 #[test]
@@ -118,7 +121,7 @@ fn kill_9_mid_index_always_leaves_a_consistent_cache() {
 
     let (mut saw_empty, mut saw_full, mut saw_none) = (0u32, 0u32, 0u32);
     for i in 0..iterations() {
-        std::fs::remove_file(&db).unwrap();
+        std::fs::remove_file(&db).ok(); // absent if the last kill beat file creation
         std::fs::remove_file(&journal).ok();
         // Spread kills over the back half of the run, where the commit
         // (journal write, page writes, journal delete) happens.
