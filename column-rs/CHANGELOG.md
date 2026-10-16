@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.22.0] - 2026-10-16
+
+### Added
+
+- **`--pipe` mode** (#39): `column-rs --pipe <tables...>` reads one JSON request per line on stdin (`{"id", "sql"}`) and answers each with JSON Lines: a header with typed columns, one line per row, and `done` (or an `error`, after which it reads the next request). Values are encoded by their column's type, from the table's schema for a bare column and from the values for an expression. Integers above 2^53 are strings. DECIMAL is an exact string at its scale (exact to about 15 digits; db-core carries decimals as floats). BLOB is base64, timestamps are ISO 8601 UTC, and a MAP is an object. Each request reads a fresh snapshot of a table directory. `QueryEngine::execute_typed` returns the column types alongside the result. The README has a Python example.
+
 ## [0.21.0] - 2026-10-16
 
 ### Added

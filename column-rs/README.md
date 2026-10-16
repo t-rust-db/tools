@@ -51,6 +51,12 @@ column-rs orders.parquet customers.parquet
 # One-shot mode
 column-rs -c "SELECT id, amount FROM orders WHERE amount > 1000" orders.parquet
 
+# A table directory (written by column-ingest) is a table named after it
+column-rs -c "SELECT event_id, COUNT(*) FROM events GROUP BY event_id" events/
+
+# Pipe mode: JSON Lines requests on stdin, typed JSON Lines results
+column-rs --pipe events/
+
 # Compile a query ahead of time (no runtime parser in the output)
 column-rs codegen "SELECT id FROM orders WHERE amount > 1000" --out query.rs
 ```
@@ -58,6 +64,53 @@ column-rs codegen "SELECT id FROM orders WHERE amount > 1000" --out query.rs
 See [`t-rust-db/examples/column-rs`](https://github.com/t-rust-db/examples)
 for a runnable fixture and a spread of example queries (filter, GROUP BY,
 ORDER BY + LIMIT, JOIN, window function).
+
+## Pipe mode
+
+`column-rs --pipe <tables...>` keeps one process open for many queries. Each
+line on stdin is one request, `{"id": ..., "sql": "..."}`. The answer to it
+is a header line, one line per row, and a `done` line, all carrying the
+request's `id`:
+
+```json
+{"id":1,"columns":[{"name":"event_id","type":"VARCHAR"},{"name":"n","type":"BIGINT"}]}
+{"id":1,"row":["ev_0000",4749]}
+{"id":1,"done":true,"rows":1,"elapsed_ms":3}
+```
+
+A failed request gets `{"id":1,"error":{"kind":"...","message":"..."}}`
+instead, and the process carries on. Each value is encoded by its
+column's type:
+- Integers above 2^53 are strings.
+- A DECIMAL is an exact string at its scale. It is exact up to about 15
+  digits, because db-core's engine carries decimals as floats.
+- A BLOB is base64.
+- Timestamps are ISO 8601 UTC.
+- A MAP is an object.
+
+Each request reads a fresh snapshot of a table directory, so it sees every
+record acknowledged before it.
+
+```python
+import json, subprocess
+
+proc = subprocess.Popen(["column-rs", "--pipe", "events/"],
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+
+def query(id, sql):
+    proc.stdin.write(json.dumps({"id": id, "sql": sql}) + "\n")
+    proc.stdin.flush()
+    header, rows = json.loads(proc.stdout.readline()), []
+    if "error" in header:
+        raise RuntimeError(header["error"]["message"])
+    while "done" not in (line := json.loads(proc.stdout.readline())):
+        rows.append(line["row"])
+    return [c["name"] for c in header["columns"]], rows
+
+print(query(1, "SELECT event_id, COUNT(*) AS n FROM events GROUP BY event_id ORDER BY n DESC LIMIT 3"))
+proc.stdin.close()
+proc.wait()
+```
 
 ## Benchmarks
 

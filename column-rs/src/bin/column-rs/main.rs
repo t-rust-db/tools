@@ -12,7 +12,8 @@ use db_cli::{history_path, run_repl, OutputMode, ReplOptions};
 use handler::{ColumnHandler, Output};
 use stream_output::{print_chunk, print_result_streaming};
 
-const USAGE: &str = "[--version] [--help] [-c \"<SQL>\"] <file.parquet|table-dir> [more ...]";
+const USAGE: &str =
+    "[--version] [--help] [-c \"<SQL>\" | --pipe] <file.parquet|table-dir> [more ...]";
 
 fn usage_error(expected: &str) -> ExitCode {
     eprintln!("usage: column-rs {expected}");
@@ -50,6 +51,26 @@ fn main() -> ExitCode {
                 return usage_error("-c \"<SQL>\" <file.parquet|table-dir> [more ...]");
             }
             run_query(&paths, &sql)
+        }
+        Some("--pipe") => {
+            let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            if paths.is_empty() {
+                return usage_error("--pipe <file.parquet|table-dir> [more ...]");
+            }
+            let engine = match open_engine(&paths) {
+                Ok(engine) => engine,
+                Err(code) => return code,
+            };
+            let stdout = std::io::stdout();
+            match column_rs::pipe::run(&engine, std::io::stdin().lock(), &mut stdout.lock()) {
+                Ok(()) => ExitCode::SUCCESS,
+                // A parent that closed our stdout is done with us.
+                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            }
         }
         Some("codegen") => {
             let Some(sql) = args.next() else {

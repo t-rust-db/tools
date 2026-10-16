@@ -1,6 +1,6 @@
 [package]
 name = "column-rs"
-version = "0.21.0"
+version = "0.22.0"
 edition = "2021"
 
 [lib]
@@ -16,6 +16,7 @@ db-core = { workspace = true, features = ["parser-column", "vm-batch", "codegen-
 db-cli = { workspace = true }
 itoa = "1"
 ryu = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [dev-dependencies]
 # Builds table directories for tests/table_dir.rs (column-rs itself reads

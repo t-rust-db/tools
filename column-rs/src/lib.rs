@@ -1,3 +1,4 @@
+pub mod pipe;
 pub mod query;
 
 /// Re-exports preserving column-rs's pre-extraction `column_rs::vm::*`

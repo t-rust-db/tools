@@ -364,6 +364,83 @@ impl<'h> Opened<'h> {
         }
     }
 
+    /// Each column's type, by name, for `--pipe`'s typed output: a file's
+    /// from its footer (timestamps in nanoseconds carry no converted type
+    /// there and read as integers), a directory's from its schema.
+    fn column_types(&self) -> HashMap<String, crate::pipe::ColType> {
+        use crate::pipe::{ColType, TimeUnit};
+        use db_core::storage::column::parquet::footer::ConvertedType;
+        use db_core::storage::parquet::schema::ColumnType;
+        match self {
+            Opened::File(file) => file
+                .metadata()
+                .schema
+                .iter()
+                .skip(1)
+                .filter_map(|e| {
+                    let decimal = || ColType::Decimal {
+                        precision: u8::try_from(e.precision.unwrap_or(0)).unwrap_or(0),
+                        scale: u8::try_from(e.scale.unwrap_or(0)).unwrap_or(0),
+                    };
+                    let ty = match (e.physical_type?, e.converted_type) {
+                        (_, Some(ConvertedType::Decimal)) => decimal(),
+                        (_, Some(ConvertedType::TimestampMillis)) => {
+                            ColType::Timestamp(TimeUnit::Millis)
+                        }
+                        (_, Some(ConvertedType::TimestampMicros)) => {
+                            ColType::Timestamp(TimeUnit::Micros)
+                        }
+                        (
+                            _,
+                            Some(
+                                ConvertedType::Uint8
+                                | ConvertedType::Uint16
+                                | ConvertedType::Uint32
+                                | ConvertedType::Uint64,
+                            ),
+                        ) => ColType::UInt,
+                        (PhysicalType::Int32 | PhysicalType::Int64 | PhysicalType::Int96, _) => {
+                            ColType::Int
+                        }
+                        (PhysicalType::Float | PhysicalType::Double, _) => ColType::Double,
+                        (PhysicalType::Boolean, _) => ColType::Bool,
+                        (PhysicalType::ByteArray, None) | (PhysicalType::FixedLenByteArray, _) => {
+                            ColType::Blob
+                        }
+                        (PhysicalType::ByteArray, Some(_)) => ColType::Text,
+                        (PhysicalType::Unknown(_), _) => return None,
+                    };
+                    Some((e.name.clone(), ty))
+                })
+                .collect(),
+            Opened::Dir(snapshot, _) => snapshot
+                .schema()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|c| {
+                    let ty = match c.column_type {
+                        ColumnType::Boolean => ColType::Bool,
+                        ColumnType::Int32 | ColumnType::Int64 => ColType::Int,
+                        ColumnType::UInt8
+                        | ColumnType::UInt16
+                        | ColumnType::UInt32
+                        | ColumnType::UInt64 => ColType::UInt,
+                        ColumnType::Float | ColumnType::Double => ColType::Double,
+                        ColumnType::Utf8 => ColType::Text,
+                        ColumnType::Binary | ColumnType::FixedLenByteArray(_) => ColType::Blob,
+                        ColumnType::TimestampMicros => ColType::Timestamp(TimeUnit::Micros),
+                        ColumnType::TimestampNanos => ColType::Timestamp(TimeUnit::Nanos),
+                        ColumnType::Decimal { precision, scale } => {
+                            ColType::Decimal { precision, scale }
+                        }
+                        ColumnType::MapUtf8 => ColType::Map,
+                    };
+                    (c.name, ty)
+                })
+                .collect(),
+        }
+    }
+
     /// Row groups (plus a directory's pages) and rows, for `EXPLAIN`.
     fn stats(&self) -> TableStats {
         let (row_groups, rows) = match self {
@@ -841,6 +918,16 @@ impl QueryEngine {
     /// `IN (SELECT ...)` semi-join, windowed, or plain single-table
     /// execution path depending on the parsed query's shape.
     pub fn execute(&self, sql: &str) -> Result<QueryResult> {
+        self.execute_typed(sql).map(|(result, _)| result)
+    }
+
+    /// [`Self::execute`], plus each result column's table type when it is
+    /// a bare column reference (`None` for an expression, whose type the
+    /// caller infers from its values): what `--pipe` encodes by.
+    pub fn execute_typed(
+        &self,
+        sql: &str,
+    ) -> Result<(QueryResult, Vec<Option<crate::pipe::ColType>>)> {
         let query =
             db_core::parser::parse(sql).map_err(|e| QueryError::UnknownColumn(e.to_string()))?;
 
@@ -885,10 +972,40 @@ impl QueryEngine {
             execute_on(&main, &query)?
         };
 
-        Ok(QueryResult {
-            columns: planner::output_column_names(&query),
-            output: rows,
-        })
+        let main_types = main.column_types();
+        let right_types = right.as_ref().map(Opened::column_types).unwrap_or_default();
+        let right_name = first_join(&query).map(join_table).transpose()?;
+        let types = query
+            .columns
+            .iter()
+            .map(|column| match column {
+                ResultColumn::Expr {
+                    expr:
+                        Expr {
+                            kind: ExprKind::Column { table, name, .. },
+                            ..
+                        },
+                    ..
+                } => {
+                    let in_right = table.as_deref().is_some_and(|t| Some(t) == right_name);
+                    let (first, second) = if in_right {
+                        (&right_types, &main_types)
+                    } else {
+                        (&main_types, &right_types)
+                    };
+                    first.get(name).or_else(|| second.get(name)).copied()
+                }
+                _ => None,
+            })
+            .collect();
+
+        Ok((
+            QueryResult {
+                columns: planner::output_column_names(&query),
+                output: rows,
+            },
+            types,
+        ))
     }
 
     /// List loaded table names, in load order.
