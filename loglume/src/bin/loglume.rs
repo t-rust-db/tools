@@ -360,37 +360,45 @@ impl Source {
     }
 }
 
+/// A file's size and mtime, `None` if it is missing.
+type FileStat = Option<(u64, Option<std::time::SystemTime>)>;
+
+fn file_stat(path: &Path) -> FileStat {
+    std::fs::metadata(path)
+        .ok()
+        .map(|m| (m.len(), m.modified().ok()))
+}
+
+/// What a table directory's change shows up in: its manifest and its WAL
+/// segment files.
+fn dir_fingerprint(dir: &Path) -> (FileStat, Vec<(std::ffi::OsString, FileStat)>) {
+    let mut wal: Vec<_> = std::fs::read_dir(dir.join("wal"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| (e.file_name(), file_stat(&e.path())))
+        .collect();
+    wal.sort();
+    (file_stat(&dir.join(MANIFEST_FILE)), wal)
+}
+
 /// Signal every change to the table directory at `path`: its manifest
 /// (a flush or compaction) or its WAL (an append). Polls, like
 /// [`watch_file`].
+///
+/// The baseline is taken before this returns, so a change made right
+/// after it (before the polling thread first runs) is still signalled.
 pub(crate) fn watch_table_dir(path: &Path) -> std::sync::mpsc::Receiver<()> {
     let (tx, rx) = std::sync::mpsc::channel();
     let path = path.to_path_buf();
-    std::thread::spawn(move || {
-        let fingerprint = |dir: &Path| {
-            let stat = |p: &Path| {
-                std::fs::metadata(p)
-                    .ok()
-                    .map(|m| (m.len(), m.modified().ok()))
-            };
-            let mut wal: Vec<_> = std::fs::read_dir(dir.join("wal"))
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|e| (e.file_name(), stat(&e.path())))
-                .collect();
-            wal.sort();
-            (stat(&dir.join(MANIFEST_FILE)), wal)
-        };
-        let mut last = fingerprint(&path);
-        loop {
-            std::thread::sleep(WATCH_POLL);
-            let now = fingerprint(&path);
-            if now != last {
-                last = now;
-                if tx.send(()).is_err() {
-                    return;
-                }
+    let mut last = dir_fingerprint(&path);
+    std::thread::spawn(move || loop {
+        std::thread::sleep(WATCH_POLL);
+        let now = dir_fingerprint(&path);
+        if now != last {
+            last = now;
+            if tx.send(()).is_err() {
+                return;
             }
         }
     });
@@ -438,16 +446,12 @@ pub(crate) const WATCH_POLL: std::time::Duration = std::time::Duration::from_mil
 pub(crate) fn watch_file(path: &Path) -> std::sync::mpsc::Receiver<()> {
     let (tx, rx) = std::sync::mpsc::channel();
     let path = path.to_path_buf();
+    // The baseline is taken before this returns, as in `watch_table_dir`.
+    let mut last = file_stat(&path);
     std::thread::spawn(move || {
-        let stat = |p: &Path| {
-            std::fs::metadata(p)
-                .ok()
-                .map(|m| (m.len(), m.modified().ok()))
-        };
-        let mut last = stat(&path);
         loop {
             std::thread::sleep(WATCH_POLL);
-            let now = stat(&path);
+            let now = file_stat(&path);
             if now != last {
                 last = now;
                 // A send error means the receiver is gone: stop polling.
@@ -463,11 +467,14 @@ pub(crate) fn watch_file(path: &Path) -> std::sync::mpsc::Receiver<()> {
 fn run_follow(path: &Path, sql: &str, tail: usize, highlight: Option<&str>) -> io::Result<()> {
     let mut source = Source::open(path)?;
     let predicate = source.compile_highlight(highlight)?;
+    // Watch before the first query, so nothing appended in between is
+    // missed (at worst it is requeried once more).
+    let changes = source.watch(path);
     let result = source.query(sql)?;
     print_result(&result, tail, predicate.as_ref());
     let mut printed = result.rows.len();
 
-    for () in source.watch(path) {
+    for () in changes {
         // Only newly appended lines enter the ring here, so the query
         // below applies the filter to those last lines; rows already
         // shown are skipped via `printed`.
@@ -1849,6 +1856,9 @@ mod tui {
             pane_state_cache_path: &Path,
         ) -> io::Result<Self> {
             let mut engine = Source::open(path)?;
+            // Watch before the first query, so nothing appended in between
+            // is missed (at worst it is requeried once more).
+            let rx = engine.watch(path);
 
             // Restore this file's last-applied filter/highlight, if any
             // (#72). A persisted entry that no longer compiles/runs
@@ -1865,8 +1875,6 @@ mod tui {
 
             let result = engine.run_query(&sql).map_err(engine_err)?;
             let color_rules = compile_color_rules(&engine, color_rules_cfg);
-
-            let rx = engine.watch(path);
 
             let mut list_state = ListState::default();
             if !result.rows.is_empty() {
