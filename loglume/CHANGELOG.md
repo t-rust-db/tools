@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-10-16
+
+### Added
+
+- **Table directories** (t-rust-db/tools#15, db-core ADR 0029): `loglume "<filter>" <dir>` and `loglume -f "<filter>" <dir>` read a directory holding a `manifest.json` (written by `column-ingest` or db-core's `Table`) as the table `log`, through db-core's snapshot reader: its Parquet files and the records still in its WAL together. `--follow` polls the manifest and the WAL and prints new matching records. A directory ingested from a log file answers each filter with the same lines as the file.
+- `--scope`, `--tui` and `--alert` stay log-file only and say so on a directory (`SINCE`/`UNTIL` and standing queries are stream-engine features); the configured default scope is not applied to a directory.
+
 ## [0.12.2] - 2026-09-19
 
 ### Changed
