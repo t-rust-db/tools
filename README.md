@@ -18,6 +18,15 @@ The workspace also holds [db-cli](db-cli/), the shared REPL/readline
 library the CLIs are built on. It is a library, not a tool: it has no
 binary to install.
 
+[`scripts/gen_events.py`](scripts/gen_events.py) writes a seeded event
+workload (sessions, events, transactions) as JSON Lines, to pipe into
+`column-ingest`:
+
+```sh
+scripts/gen_events.py --sessions 1000 --e 3 --seed 1 | column-ingest events/
+column-rs -c "SELECT event_id, COUNT(*) AS n FROM events GROUP BY event_id ORDER BY n DESC LIMIT 5" events/
+```
+
 ## Install
 
 ```bash
