@@ -4,7 +4,7 @@ MEMBERS := db-cli column-rs column-ingest sqlite-rs loglume trigrep db-studio
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test lint
+.PHONY: help build test lint e2e
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -18,3 +18,8 @@ test: ## Run each tool's `make test`
 
 lint: ## Run each tool's `make lint`
 	@set -e; for m in $(MEMBERS); do echo "== $$m"; $(MAKE) -C $$m lint; done
+
+e2e: ## End-to-end: gen_events.py -> column-ingest -> column-rs, checked against DuckDB (needs duckdb)
+	python3 -m unittest scripts/test_gen_events.py
+	cargo build --release -p column-ingest -p column-rs
+	python3 scripts/e2e.py --bin target/release

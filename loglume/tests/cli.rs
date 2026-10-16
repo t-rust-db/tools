@@ -690,14 +690,13 @@ mod table_dir {
     }
 
     #[test]
-    fn scope_tui_and_alert_are_for_log_files() {
+    fn scope_and_alert_are_for_log_files() {
         let t = TempDir::new();
         let dir = t.0.join("events");
         syslog_table(&dir).close().unwrap();
         let dir = dir.to_str().unwrap();
         for args in [
             vec!["--scope", "1h", "severity >= ERR", dir],
-            vec!["--tui", "severity >= ERR", dir],
             vec!["--alert", "--exec", "true", "severity >= ERR", dir],
         ] {
             Command::cargo_bin("loglume")
@@ -706,6 +705,7 @@ mod table_dir {
                 .assert()
                 .failure()
                 .stderr(predicate::str::contains("table director"));
+            // (--tui opens a directory pane: #45.)
         }
     }
 }
