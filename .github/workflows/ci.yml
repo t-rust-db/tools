@@ -38,6 +38,23 @@ jobs:
       - run: make -C column-rs lint
       - run: make -C column-rs test
 
+  e2e:
+    name: end-to-end (generator, column-ingest, column-rs, DuckDB)
+    runs-on: ubuntu-latest
+    env:
+      DUCKDB_VERSION: "1.5.5"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned DuckDB (the oracle)
+        run: |
+          curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o duckdb.zip
+          unzip duckdb.zip
+          sudo mv duckdb /usr/local/bin/duckdb
+          duckdb --version
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: make e2e
+
   column-ingest:
     name: column-ingest
     runs-on: ubuntu-latest
