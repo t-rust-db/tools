@@ -45,8 +45,8 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.122.0"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.122.0#031139ee9919d73a9c8647e70801172bdee41b28"
+version = "0.133.0"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.133.0#0e33d4117b6b2f668e2fb42da00201d0db1be2bc"
 
 [[package]]
 name = "dirs"
