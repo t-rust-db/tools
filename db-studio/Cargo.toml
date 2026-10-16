@@ -1,8 +1,8 @@
 [package]
 name = "db-studio"
-version = "0.13.0"
+version = "0.14.0"
 edition = "2021"
-description = "A TUI database studio for the t-rust-db family -- open a .sqlite/.parquet/.log file, get a query pane and grid output over the matching db-core engine"
+description = "A TUI database studio for the t-rust-db family -- open a .sqlite/.parquet/.log file or a table directory, get a query pane and grid output over the matching db-core engine"
 license = "Apache-2.0"
 repository = "https://github.com/t-rust-db/tools"
 authors = ["Ilja Heitlager <iheitlager@schubergphilis.com>"]
@@ -11,7 +11,7 @@ authors = ["Ilja Heitlager <iheitlager@schubergphilis.com>"]
 # M1 was row-mode only (see .openspec/plan.md); M3 added batch,
 # M5 (db-studio#35) adds stream. db-core comes from the tools
 # workspace's tagged pin, like every other tool.
-db-core = { workspace = true, features = ["engine-row", "engine-column", "engine-stream"] }
+db-core = { workspace = true, features = ["engine-row", "engine-column", "engine-stream", "ingest-read"] }
 ratatui = "0.30.2"
 crossterm = "0.29.0"
 tui-textarea-2 = { version = "0.13.2", default-features = false, features = ["ratatui", "crossterm"] }
@@ -20,6 +20,11 @@ tui-tree-widget = "0.24.1"
 nucleo-matcher = "0.3.1"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.6"
+
+[dev-dependencies]
+# Builds table directories for the open tests (db-studio opens them with
+# ingest-read only).
+db-core = { workspace = true, features = ["ingest"] }
 
 [lints.rust]
 unsafe_code = "deny"
