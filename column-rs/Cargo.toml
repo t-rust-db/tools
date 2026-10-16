@@ -1,6 +1,6 @@
 [package]
 name = "column-rs"
-version = "0.20.4"
+version = "0.21.0"
 edition = "2021"
 
 [lib]
@@ -12,7 +12,12 @@ name = "column-rs"
 path = "src/bin/column-rs/main.rs"
 
 [dependencies]
-db-core = { workspace = true, features = ["parser-column", "vm-batch", "codegen-batch", "emit-batch", "storage-column"] }
+db-core = { workspace = true, features = ["parser-column", "vm-batch", "codegen-batch", "emit-batch", "storage-column", "engine-column", "ingest-read"] }
 db-cli = { workspace = true }
 itoa = "1"
 ryu = "1"
+
+[dev-dependencies]
+# Builds table directories for tests/table_dir.rs (column-rs itself reads
+# them with ingest-read only).
+db-core = { workspace = true, features = ["ingest"] }

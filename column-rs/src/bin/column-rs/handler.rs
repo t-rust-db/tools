@@ -111,7 +111,7 @@ impl ReplHandler for ColumnHandler {
         vec![
             ".tables     List tables (Parquet files)".to_string(),
             ".schema     Show column schema".to_string(),
-            ".open <path> [AS <name>]  Load another Parquet file into this session".to_string(),
+            ".open <path> [AS <name>]  Load another Parquet file or table directory into this session".to_string(),
         ]
     }
 

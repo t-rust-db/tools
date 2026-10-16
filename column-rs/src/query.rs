@@ -5,6 +5,14 @@
 //! [`Segment`], materialize whole tables for the join/semi-join/window
 //! paths, and dispatch a parsed query to the right shape.
 //!
+//! A table is a Parquet file or a table directory (one holding
+//! `manifest.json`, written by db-core's ingest or `column-ingest`; tools#13).
+//! A directory is read as a fresh db-core `Snapshot` per query: its files'
+//! row groups and its WAL pages, in LSN order, through db-core's
+//! `snapshot_segments` (which NULL-fills a column a file lacks and casts
+//! one a file stores with another type) and `read_snapshot` (the whole
+//! table, for join build sides, semi-joins and windows).
+//!
 //! Nothing here plans or post-processes anything -- `compile()`,
 //! `AggPart`, `post_process` (now the `Opcode::Combine`/`Sort`/`Limit` tail applied by
 //! `db_core::vm::engine::run`) and the `EXPLAIN` tree all moved to db-core
@@ -13,9 +21,13 @@
 
 use crate::vm::{Batch, Opcode, Program, Segment, Value};
 use db_core::codegen::batch::{self as planner, PlanError, TableStats};
+use db_core::engine::column::table::read_snapshot;
+use db_core::engine::column::{snapshot_files, snapshot_segments, SnapshotSegment};
+use db_core::engine::{EngineError, ErrorKind};
 use db_core::parser::ast::{Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
 use db_core::storage::column::parquet::footer::PhysicalType;
 use db_core::storage::column::{decode_column_full, Decoded};
+use db_core::storage::ingest::{Snapshot, MANIFEST_FILE};
 use db_core::storage::{ParquetFile, Vfs, VfsFile};
 use db_core::vm::batch::{Chunk, QueryOutput, ScanSource, VmError};
 use db_core::vm::engine::{self, InMemorySegment, NoResolver};
@@ -61,6 +73,9 @@ pub enum QueryError {
     /// refuses (aggregates, `DISTINCT`, `ORDER BY`, `LIMIT`). Callers
     /// treat both the same way -- fall back to [`QueryEngine::execute`].
     NotStreamable(String),
+    /// A table directory could not be read (tools#13): its manifest,
+    /// WAL or one of its files.
+    TableDirectory(String),
 }
 
 impl fmt::Display for QueryError {
@@ -93,6 +108,7 @@ impl fmt::Display for QueryError {
                 )
             }
             QueryError::NotStreamable(reason) => write!(f, "cannot stream this query: {reason}"),
+            QueryError::TableDirectory(why) => write!(f, "table directory: {why}"),
         }
     }
 }
@@ -122,6 +138,19 @@ impl From<PlanError> for QueryError {
             PlanError::NoJoinClause => QueryError::NoJoinClause,
             PlanError::Internal(msg) => QueryError::PlannerInvariant(msg),
             PlanError::ScopeClauseUnsupported => QueryError::ScopeClauseUnsupported,
+        }
+    }
+}
+
+impl From<EngineError> for QueryError {
+    /// db-core's table-directory readers report an unknown column the way
+    /// the planner does; everything else is the directory's.
+    fn from(e: EngineError) -> Self {
+        match e.message.strip_prefix("unknown column: ") {
+            Some(name) if e.kind == ErrorKind::Compile => {
+                QueryError::UnknownColumn(name.to_string())
+            }
+            _ => QueryError::TableDirectory(e.message),
         }
     }
 }
@@ -228,6 +257,138 @@ fn row_group_segments<'f>(
         .collect()
 }
 
+/// One segment of a query's table: a Parquet file's row group, or a table
+/// directory's row group or WAL page.
+enum AnySegment<'a, 'm> {
+    File(RowGroupSegment<'a, 'm>),
+    Dir(SnapshotSegment<'a, 'm>),
+}
+
+impl Segment for AnySegment<'_, '_> {
+    fn load(&self) -> std::result::Result<Arc<Batch>, VmError> {
+        match self {
+            AnySegment::File(s) => s.load(),
+            AnySegment::Dir(s) => s.load(),
+        }
+    }
+
+    fn order_key_bound(&self, descending: bool) -> Option<Value> {
+        match self {
+            AnySegment::File(s) => s.order_key_bound(descending),
+            AnySegment::Dir(s) => s.order_key_bound(descending),
+        }
+    }
+
+    fn load_columns(&self, columns: &[String]) -> std::result::Result<Arc<Batch>, VmError> {
+        match self {
+            AnySegment::File(s) => s.load_columns(columns),
+            AnySegment::Dir(s) => s.load_columns(columns),
+        }
+    }
+
+    fn gather_at(
+        &self,
+        columns: &[String],
+        positions: &[u32],
+    ) -> Option<std::result::Result<Batch, VmError>> {
+        match self {
+            AnySegment::File(s) => s.gather_at(columns, positions),
+            AnySegment::Dir(s) => s.gather_at(columns, positions),
+        }
+    }
+}
+
+/// A table as one query reads it: a Parquet file, or a table directory's
+/// snapshot with its files opened.
+enum Opened<'h> {
+    File(&'h ParquetFile<'h>),
+    Dir(&'h Snapshot, Vec<ParquetFile<'h>>),
+}
+
+impl<'h> Opened<'h> {
+    /// A table directory's snapshot, its files opened.
+    fn dir(snapshot: &'h Snapshot) -> Result<Self> {
+        Ok(Opened::Dir(snapshot, snapshot_files(snapshot)?))
+    }
+
+    /// The table's column names: a file's schema leaves (as loaded), a
+    /// directory's union of every file's and page's columns.
+    fn column_names(&self) -> Result<Vec<String>> {
+        Ok(match self {
+            Opened::File(file) => file
+                .metadata()
+                .schema
+                .iter()
+                .skip(1)
+                .map(|e| e.name.clone())
+                .collect(),
+            Opened::Dir(snapshot, _) => snapshot
+                .schema()
+                .map_err(|e| QueryError::TableDirectory(e.to_string()))?
+                .into_iter()
+                .map(|c| c.name)
+                .collect(),
+        })
+    }
+
+    /// One segment per row group (and, for a directory, per page) over
+    /// `names`. A directory's segments run `program`'s late
+    /// materialization; a file's decode eagerly, as before.
+    fn segments<'s>(
+        &'s self,
+        names: &[String],
+        program: &'s Program,
+    ) -> Result<Vec<AnySegment<'s, 's>>> {
+        Ok(match self {
+            Opened::File(file) => {
+                let columns = resolve_columns(&leaf_columns(file), names)?;
+                row_group_segments(file, &columns)
+                    .into_iter()
+                    .map(AnySegment::File)
+                    .collect()
+            }
+            Opened::Dir(snapshot, files) => snapshot_segments(snapshot, files, names, program)?
+                .into_iter()
+                .map(AnySegment::Dir)
+                .collect(),
+        })
+    }
+
+    /// The whole table's `names`, as one batch.
+    fn whole(&self, names: &[String]) -> Result<Batch> {
+        match self {
+            Opened::File(file) => {
+                read_whole_table(file, &resolve_columns(&leaf_columns(file), names)?)
+            }
+            Opened::Dir(snapshot, _) => Ok(read_snapshot(snapshot, names)?),
+        }
+    }
+
+    /// Row groups (plus a directory's pages) and rows, for `EXPLAIN`.
+    fn stats(&self) -> TableStats {
+        let (row_groups, rows) = match self {
+            Opened::File(file) => (file.num_row_groups(), file.num_rows()),
+            Opened::Dir(snapshot, files) => (
+                files
+                    .iter()
+                    .map(ParquetFile::num_row_groups)
+                    .sum::<usize>()
+                    .saturating_add(snapshot.pages().len()),
+                i64::try_from(snapshot.rows()).unwrap_or(i64::MAX),
+            ),
+        };
+        TableStats {
+            row_groups,
+            rows,
+            // column-rs is single-mode: every SCAN in the plan is a
+            // Parquet file or a table directory's segments, so there's no
+            // cross-mode join source label to carry (db-core#315,
+            // ADR-0019 -- stream/row-driven joins only).
+            source: None,
+        }
+    }
+}
+
 /// Read a whole table's worth of the given columns (concatenating every row
 /// group) into a single in-memory batch, keyed by each column's display name
 /// (see [`resolve_columns`]) -- used for join build/probe sides and window
@@ -330,18 +491,24 @@ fn is_window_column(column: &ResultColumn) -> bool {
 }
 
 pub fn run_program(file: &ParquetFile, program: &[Opcode]) -> Result<QueryOutput> {
-    run(file, &Program::from_opcodes(program.iter().cloned()))
+    run(
+        &Opened::File(file),
+        &Program::from_opcodes(program.iter().cloned()),
+    )
 }
 
-fn run(file: &ParquetFile, program: &Program) -> Result<QueryOutput> {
-    let columns = resolve_columns(&leaf_columns(file), &program.columns_to_load())?;
-    let segments = row_group_segments(file, &columns);
+fn run(table: &Opened<'_>, program: &Program) -> Result<QueryOutput> {
+    let segments = table.segments(&program.columns_to_load(), program)?;
     Ok(engine::run(&segments, program)?)
 }
 
 /// Execute a single-table `query` against `file`.
 pub fn execute(file: &ParquetFile, query: &Select) -> Result<QueryOutput> {
-    run(file, &planner::compile(query)?)
+    execute_on(&Opened::File(file), query)
+}
+
+fn execute_on(table: &Opened<'_>, query: &Select) -> Result<QueryOutput> {
+    run(table, &planner::compile(query)?)
 }
 
 /// Streaming counterpart to [`run`] (db-core#456): hands each emitted
@@ -351,9 +518,8 @@ pub fn execute(file: &ParquetFile, query: &Select) -> Result<QueryOutput> {
 /// existing convention of writing best-effort and ignoring I/O errors --
 /// so its `Result` only ever carries [`db_core::vm::engine::run_streaming`]'s
 /// own [`VmError::NotStreamable`] back out, unmodified.
-fn run_streaming(file: &ParquetFile, program: &Program, sink: impl FnMut(Chunk)) -> Result<()> {
-    let columns = resolve_columns(&leaf_columns(file), &program.columns_to_load())?;
-    let segments = row_group_segments(file, &columns);
+fn run_streaming(table: &Opened<'_>, program: &Program, sink: impl FnMut(Chunk)) -> Result<()> {
+    let segments = table.segments(&program.columns_to_load(), program)?;
     let mut sink = sink;
     Ok(engine::run_streaming(&segments, program, move |chunk| {
         sink(chunk);
@@ -367,7 +533,7 @@ pub fn execute_streaming(
     query: &Select,
     sink: impl FnMut(Chunk),
 ) -> Result<()> {
-    run_streaming(file, &planner::compile(query)?, sink)
+    run_streaming(&Opened::File(file), &planner::compile(query)?, sink)
 }
 
 /// Execute a query with exactly one `JOIN` (INNER or LEFT): the right
@@ -384,14 +550,18 @@ pub fn execute_joined(
     right_file: &ParquetFile,
     query: &Select,
 ) -> Result<QueryOutput> {
+    execute_joined_on(&Opened::File(left_file), &Opened::File(right_file), query)
+}
+
+fn execute_joined_on(left: &Opened<'_>, right: &Opened<'_>, query: &Select) -> Result<QueryOutput> {
     let plan = planner::compile_join(query, planner::BuildSourceKind::InMemory)?;
-    let left_columns = resolve_columns(&leaf_columns(left_file), &plan.left_columns)?;
-    let right_columns = resolve_columns(&leaf_columns(right_file), &plan.right_columns)?;
-    let left = row_group_segments(left_file, &left_columns);
-    let right = read_whole_table(right_file, &right_columns)?;
+    // The probe side decodes eagerly, as a file's row groups always have.
+    let eager = Program::from_opcodes([]);
+    let probe = left.segments(&plan.left_columns, &eager)?;
+    let build = right.whole(&plan.right_columns)?;
     Ok(engine::run_join_segments(
-        left,
-        ScanSource::InMemory(right),
+        probe,
+        ScanSource::InMemory(build),
         &plan,
         &NoResolver,
     )?)
@@ -406,9 +576,17 @@ pub fn execute_semi_join(
     sub_file: &ParquetFile,
     query: &Select,
 ) -> Result<QueryOutput> {
+    execute_semi_join_on(&Opened::File(main_file), &Opened::File(sub_file), query)
+}
+
+fn execute_semi_join_on(
+    main: &Opened<'_>,
+    sub: &Opened<'_>,
+    query: &Select,
+) -> Result<QueryOutput> {
     let plan = planner::compile_semi_join(query)?;
 
-    let sub_rows = execute(sub_file, &plan.subquery)?;
+    let sub_rows = execute_on(sub, &plan.subquery)?;
     if !sub_rows.is_empty() && sub_rows.num_columns() != 1 {
         return Err(QueryError::UnsupportedSemiJoin(
             "IN subquery must select exactly one column".to_string(),
@@ -421,8 +599,7 @@ pub fn execute_semi_join(
     if !needed.contains(&plan.key_column) {
         needed.push(plan.key_column.clone());
     }
-    let columns = resolve_columns(&leaf_columns(main_file), &needed)?;
-    let batch = read_whole_table(main_file, &columns)?;
+    let batch = main.whole(&needed)?;
     let filtered = engine::semi_filter(&batch, &plan.key_column, &allowed)?;
 
     let segments = [InMemorySegment(filtered)];
@@ -433,9 +610,12 @@ pub fn execute_semi_join(
 /// whole table is materialized (partitioning/sorting need every row) and
 /// the planned window program runs over it as a single segment.
 pub fn execute_windowed(file: &ParquetFile, query: &Select) -> Result<QueryOutput> {
+    execute_windowed_on(&Opened::File(file), query)
+}
+
+fn execute_windowed_on(table: &Opened<'_>, query: &Select) -> Result<QueryOutput> {
     let program = planner::compile_window(query)?;
-    let columns = resolve_columns(&leaf_columns(file), &program.columns_to_load())?;
-    let batch = read_whole_table(file, &columns)?;
+    let batch = table.whole(&program.columns_to_load())?;
     let segments = [InMemorySegment(batch)];
     Ok(engine::run(&segments, &program)?)
 }
@@ -469,14 +649,48 @@ impl QueryResult {
 /// to re-parse the footer.
 struct Table {
     name: String,
-    data: db_core::storage::MmapRegion,
+    data: TableData,
     column_names: Vec<String>,
 }
 
-/// High-level query engine wrapping one or more Parquet files, addressed by
-/// table name (derived from each file's stem, e.g. `orders.parquet` ->
-/// `orders`) -- enough tables loaded at once to run a `JOIN` or `IN
-/// (SELECT ...)` semi-join across them.
+/// Where a table's rows are.
+enum TableData {
+    /// A Parquet file, memory-mapped.
+    File(db_core::storage::MmapRegion),
+    /// A table directory (tools#13), read as a fresh snapshot per query.
+    Dir(std::path::PathBuf),
+}
+
+/// What a query holds for one table while it runs: a file's `ParquetFile`
+/// over the engine's mapping, or a directory's snapshot.
+enum Held<'d> {
+    File(ParquetFile<'d>),
+    Dir(Snapshot),
+}
+
+impl Held<'_> {
+    fn open(&self) -> Result<Opened<'_>> {
+        match self {
+            Held::File(file) => Ok(Opened::File(file)),
+            Held::Dir(snapshot) => Opened::dir(snapshot),
+        }
+    }
+}
+
+/// Whether `path` is a table directory: a directory holding a manifest.
+fn is_table_dir(path: &std::path::Path) -> bool {
+    path.is_dir() && path.join(MANIFEST_FILE).is_file()
+}
+
+fn open_snapshot(path: &std::path::Path) -> Result<Snapshot> {
+    Snapshot::open(path).map_err(|e| QueryError::TableDirectory(format!("{}: {e}", path.display())))
+}
+
+/// High-level query engine wrapping one or more Parquet files or table
+/// directories, addressed by table name (derived from each file's stem,
+/// e.g. `orders.parquet` -> `orders`, or a directory's name) -- enough
+/// tables loaded at once to run a `JOIN` or `IN (SELECT ...)` semi-join
+/// across them.
 #[derive(Default)]
 pub struct QueryEngine {
     tables: Vec<Table>,
@@ -501,9 +715,29 @@ impl QueryEngine {
         Ok(engine)
     }
 
-    /// Load an additional Parquet file into this session, under `name` (or
-    /// its file stem if `None`). Errors if that table name is already loaded.
+    /// Load an additional Parquet file or table directory into this
+    /// session, under `name` (or its file stem, or the directory's name,
+    /// if `None`). Errors if that table name is already loaded.
     pub fn add_table(&mut self, path: &std::path::Path, name: Option<String>) -> Result<()> {
+        if is_table_dir(path) {
+            let snapshot = open_snapshot(path)?;
+            let column_names = Opened::dir(&snapshot)?.column_names()?;
+            let table_name = name.unwrap_or_else(|| {
+                path.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("data")
+                    .to_string()
+            });
+            if self.tables.iter().any(|t| t.name == table_name) {
+                return Err(QueryError::DuplicateTable(table_name));
+            }
+            self.tables.push(Table {
+                name: table_name,
+                data: TableData::Dir(path.to_path_buf()),
+                column_names,
+            });
+            return Ok(());
+        }
         let data = db_core::storage::PosixVfs
             .open(path)
             .and_then(|f| f.mmap())
@@ -528,26 +762,24 @@ impl QueryEngine {
             .collect();
         self.tables.push(Table {
             name: table_name,
-            data,
+            data: TableData::File(data),
             column_names,
         });
         Ok(())
     }
 
-    fn table_data(&self, name: &str) -> Result<&[u8]> {
-        self.tables
+    /// Opens table `name` for one query: a file's footer, a directory's
+    /// fresh snapshot.
+    fn hold(&self, name: &str) -> Result<Held<'_>> {
+        let table = self
+            .tables
             .iter()
             .find(|t| t.name == name)
-            .map(|t| &t.data[..])
-            .ok_or_else(|| QueryError::UnknownTable(name.to_string()))
-    }
-
-    fn table_schema(&self, name: &str) -> Result<&[String]> {
-        self.tables
-            .iter()
-            .find(|t| t.name == name)
-            .map(|t| t.column_names.as_slice())
-            .ok_or_else(|| QueryError::UnknownTable(name.to_string()))
+            .ok_or_else(|| QueryError::UnknownTable(name.to_string()))?;
+        Ok(match &table.data {
+            TableData::File(data) => Held::File(ParquetFile::open(data)?),
+            TableData::Dir(path) => Held::Dir(open_snapshot(path)?),
+        })
     }
 
     /// Streaming counterpart to [`Self::execute`] (db-core#456): only the
@@ -585,8 +817,9 @@ impl QueryEngine {
                 "query has a window function".to_string(),
             ));
         }
-        let schema = self.table_schema(from)?.to_vec();
-        let query = planner::expand_star(&query, &schema)?;
+        let held = self.hold(from)?;
+        let table = held.open()?;
+        let query = planner::expand_star(&query, &table.column_names()?)?;
         let program = planner::compile(&query)?;
         // Decided before `on_event` fires at all: an aggregate, DISTINCT,
         // ORDER BY, or LIMIT query is only discovered non-streamable by
@@ -598,10 +831,8 @@ impl QueryEngine {
                 "query has an aggregate, DISTINCT, ORDER BY, or LIMIT".to_string(),
             ));
         }
-        let main_data = self.table_data(from)?;
-        let main_file = ParquetFile::open(main_data)?;
         on_event(StreamEvent::Columns(planner::output_column_names(&query)));
-        run_streaming(&main_file, &program, |chunk| {
+        run_streaming(&table, &program, |chunk| {
             on_event(StreamEvent::Chunk(chunk))
         })
     }
@@ -618,36 +849,40 @@ impl QueryEngine {
         // sides, qualified `table.column` per the naming convention
         // `compile_join` already uses for its `left_columns`/`right_columns`.
         let from = from_table(&query)?;
-        let schema: Vec<String> = if let Some(join) = first_join(&query) {
-            let right = join_table(join)?;
-            let left_schema = self.table_schema(from)?;
-            let right_schema = self.table_schema(right)?;
-            left_schema
-                .iter()
-                .map(|c| format!("{from}.{c}"))
-                .chain(right_schema.iter().map(|c| format!("{right}.{c}")))
-                .collect()
-        } else {
-            self.table_schema(from)?.to_vec()
+        let main_held = self.hold(from)?;
+        let main = main_held.open()?;
+        let right_held = first_join(&query)
+            .map(|join| join_table(join).and_then(|name| self.hold(name)))
+            .transpose()?;
+        let right = right_held.as_ref().map(Held::open).transpose()?;
+        let schema: Vec<String> = match (first_join(&query), &right) {
+            (Some(join), Some(right)) => {
+                let right_name = join_table(join)?;
+                main.column_names()?
+                    .iter()
+                    .map(|c| format!("{from}.{c}"))
+                    .chain(
+                        right
+                            .column_names()?
+                            .iter()
+                            .map(|c| format!("{right_name}.{c}")),
+                    )
+                    .collect()
+            }
+            _ => main.column_names()?,
         };
         let query = planner::expand_star(&query, &schema)?;
 
-        let main_data = self.table_data(from)?;
-        let main_file = ParquetFile::open(main_data)?;
-
         let has_window = query.columns.iter().any(is_window_column);
         let rows = if let Some(subquery) = in_subquery(&query) {
-            let sub_data = self.table_data(from_table(subquery)?)?;
-            let sub_file = ParquetFile::open(sub_data)?;
-            execute_semi_join(&main_file, &sub_file, &query)?
-        } else if let Some(join) = first_join(&query) {
-            let right_data = self.table_data(join_table(join)?)?;
-            let right_file = ParquetFile::open(right_data)?;
-            execute_joined(&main_file, &right_file, &query)?
+            let sub_held = self.hold(from_table(subquery)?)?;
+            execute_semi_join_on(&main, &sub_held.open()?, &query)?
+        } else if let Some(right) = &right {
+            execute_joined_on(&main, right, &query)?
         } else if has_window {
-            execute_windowed(&main_file, &query)?
+            execute_windowed_on(&main, &query)?
         } else {
-            execute(&main_file, &query)?
+            execute_on(&main, &query)?
         };
 
         Ok(QueryResult {
@@ -661,11 +896,24 @@ impl QueryEngine {
         self.tables.iter().map(|t| t.name.as_str()).collect()
     }
 
-    /// Get schema information: (table_name, columns), in load order.
+    /// Get schema information: (table_name, columns), in load order. A
+    /// table directory's columns are read fresh: appends may add some.
     pub fn schemas(&self) -> Vec<(&str, Vec<String>)> {
         self.tables
             .iter()
-            .map(|t| (t.name.as_str(), t.column_names.clone()))
+            .map(|t| {
+                let fresh = match &t.data {
+                    TableData::Dir(_) => self
+                        .hold(&t.name)
+                        .and_then(|held| held.open()?.column_names())
+                        .ok(),
+                    TableData::File(_) => None,
+                };
+                (
+                    t.name.as_str(),
+                    fresh.unwrap_or_else(|| t.column_names.clone()),
+                )
+            })
             .collect()
     }
 
@@ -682,20 +930,8 @@ impl QueryEngine {
         }
         let mut stats: HashMap<&str, TableStats> = HashMap::new();
         for table in tables {
-            let file = ParquetFile::open(self.table_data(table)?)?;
-            stats.insert(
-                table,
-                TableStats {
-                    row_groups: file.num_row_groups(),
-                    rows: file.num_rows(),
-                    // column-rs is single-mode: every SCAN in the plan
-                    // is already understood to be a Parquet file, so
-                    // there's no cross-mode join source label to carry
-                    // (db-core#315, ADR-0019 -- stream/row-driven joins
-                    // only).
-                    source: None,
-                },
-            );
+            let held = self.hold(table)?;
+            stats.insert(table, held.open()?.stats());
         }
         Ok(planner::explain(query, |table| {
             stats
