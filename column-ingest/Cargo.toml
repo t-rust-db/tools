@@ -1,0 +1,30 @@
+[package]
+name = "column-ingest"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/t-rust-db/tools"
+description = "Pipe or follow events into a db-core table directory (WAL, Parquet, time tiers)"
+authors = ["Ilja Heitlager <iheitlager@schubergphilis.com>"]
+
+[[bin]]
+name = "column-ingest"
+path = "src/main.rs"
+
+[dependencies]
+db-core = { workspace = true, features = ["ingest"] }
+clap = { version = "4", features = ["derive"] }
+signal-hook = "0.3"
+
+[dev-dependencies]
+assert_cmd = "2"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"

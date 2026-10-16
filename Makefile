@@ -1,6 +1,6 @@
 # tools workspace: each tool keeps its own Makefile; these targets run them all.
 
-MEMBERS := db-cli column-rs sqlite-rs loglume trigrep db-studio
+MEMBERS := db-cli column-rs column-ingest sqlite-rs loglume trigrep db-studio
 
 .DEFAULT_GOAL := help
 

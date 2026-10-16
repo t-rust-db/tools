@@ -6,6 +6,7 @@ in one Cargo workspace: one `Cargo.lock`, one db-core pin, one CI.
 | Tool | What it is |
 |---|---|
 | [column-rs](column-rs/) | SQL over Parquet files (CLI) |
+| [column-ingest](column-ingest/) | Pipe or follow events into a table directory (CLI) |
 | [sqlite-rs](sqlite-rs/) | Binary-compatible SQLite replica (library + CLI) |
 | [loglume](loglume/) | Log viewer with SQL filtering (TUI) |
 | [trigrep](trigrep/) | Trigram-indexed grep (`tg`) |
