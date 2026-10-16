@@ -38,6 +38,17 @@ jobs:
       - run: make -C column-rs lint
       - run: make -C column-rs test
 
+  column-ingest:
+    name: column-ingest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: make -C column-ingest check
+
   loglume:
     name: loglume
     runs-on: ubuntu-latest
