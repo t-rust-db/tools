@@ -12,7 +12,7 @@ use db_cli::{history_path, run_repl, OutputMode, ReplOptions};
 use handler::{ColumnHandler, Output};
 use stream_output::{print_chunk, print_result_streaming};
 
-const USAGE: &str = "[--version] [--help] [-c \"<SQL>\"] <file.parquet> [more.parquet ...]";
+const USAGE: &str = "[--version] [--help] [-c \"<SQL>\"] <file.parquet|table-dir> [more ...]";
 
 fn usage_error(expected: &str) -> ExitCode {
     eprintln!("usage: column-rs {expected}");
@@ -43,11 +43,11 @@ fn main() -> ExitCode {
         Some("--help" | "-h") => usage(),
         Some("-c") => {
             let Some(sql) = args.next() else {
-                return usage_error("-c \"<SQL>\" <file.parquet> [more.parquet ...]");
+                return usage_error("-c \"<SQL>\" <file.parquet|table-dir> [more ...]");
             };
             let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
             if paths.is_empty() {
-                return usage_error("-c \"<SQL>\" <file.parquet> [more.parquet ...]");
+                return usage_error("-c \"<SQL>\" <file.parquet|table-dir> [more ...]");
             }
             run_query(&paths, &sql)
         }

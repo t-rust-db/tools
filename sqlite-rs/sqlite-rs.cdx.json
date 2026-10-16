@@ -3,7 +3,7 @@
   "specVersion": "1.5",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-10-16T13:14:59.000000000Z",
+    "timestamp": "2026-10-16T17:46:05.000000000Z",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -75,9 +75,9 @@
   "components": [
     {
       "type": "library",
-      "bom-ref": "git+https://github.com/t-rust-db/db-core?tag=v0.133.0#0.133.0",
+      "bom-ref": "git+https://github.com/t-rust-db/db-core?tag=v0.134.0#0.134.0",
       "name": "db-core",
-      "version": "0.133.0",
+      "version": "0.134.0",
       "description": "Shared SQL language/execution layer for t-rust-db: types, expr, parser, join, vm, codegen, emit",
       "scope": "required",
       "licenses": [
@@ -85,7 +85,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/db-core@0.133.0?vcs_url=git%2Bhttps://github.com/t-rust-db/db-core%400e33d4117b6b2f668e2fb42da00201d0db1be2bc",
+      "purl": "pkg:cargo/db-core@0.134.0?vcs_url=git%2Bhttps://github.com/t-rust-db/db-core%4073eed6ff8cbf016fdd6c157943175d2d66caabd9",
       "externalReferences": [
         {
           "type": "vcs",
@@ -489,7 +489,7 @@
   ],
   "dependencies": [
     {
-      "ref": "git+https://github.com/t-rust-db/db-core?tag=v0.133.0#0.133.0",
+      "ref": "git+https://github.com/t-rust-db/db-core?tag=v0.134.0#0.134.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#memmap2@0.9.11",
         "registry+https://github.com/rust-lang/crates.io-index#ruzstd@0.9.1"
@@ -506,7 +506,7 @@
       "ref": "path+file://.#0.25.5",
       "dependsOn": [
         "path+file:///Users/iheitlager/wc/t-rust-db/tools/db-cli#0.5.0",
-        "git+https://github.com/t-rust-db/db-core?tag=v0.133.0#0.133.0",
+        "git+https://github.com/t-rust-db/db-core?tag=v0.134.0#0.134.0",
         "registry+https://github.com/rust-lang/crates.io-index#regex@1.13.1"
       ]
     },
