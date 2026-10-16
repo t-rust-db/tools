@@ -1054,10 +1054,14 @@ fn test_subquery_in_from_parses() {
     }
 }
 
+/// SQLite accepts a FROM subquery without an alias, and so does db-core's
+/// parser since v0.129.2 (db-core#611).
 #[test]
-fn test_subquery_in_from_without_alias_is_unsupported() {
-    let msg = unsupported("SELECT * FROM (SELECT * FROM t)");
-    assert!(msg.contains("alias"), "message: {msg}");
+fn test_subquery_in_from_without_alias_parses() {
+    let select = accept("SELECT * FROM (SELECT * FROM t)");
+    let from = select.from.expect("a FROM clause");
+    assert!(from.first.alias.is_none());
+    assert!(matches!(&from.first.kind, TableRefKind::Subquery(_)));
 }
 
 #[test]

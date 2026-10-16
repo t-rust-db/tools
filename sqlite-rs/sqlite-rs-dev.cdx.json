@@ -3,7 +3,7 @@
   "specVersion": "1.5",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-10-10T16:03:09.000000000Z",
+    "timestamp": "2026-10-16T13:14:59.000000000Z",
     "tools": [
       {
         "vendor": "sqlite-rs",
@@ -26,7 +26,7 @@
     "properties": [
       {
         "name": "sqlite-rs:generated-at-commit",
-        "value": "a94ff78660fc495f3514faa91fd8bff02733199e"
+        "value": "8bb147b83a98b82ab808f27401a23e8ad97cb6d3"
       }
     ]
   },
@@ -150,16 +150,16 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/db-core@0.122.0",
+      "bom-ref": "pkg:cargo/db-core@0.133.0",
       "name": "db-core",
-      "version": "0.122.0",
+      "version": "0.133.0",
       "scope": "required",
       "licenses": [
         {
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/db-core@0.122.0"
+      "purl": "pkg:cargo/db-core@0.133.0"
     },
     {
       "type": "library",
@@ -631,29 +631,16 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/ruzstd@0.7.3",
+      "bom-ref": "pkg:cargo/ruzstd@0.9.1",
       "name": "ruzstd",
-      "version": "0.7.3",
+      "version": "0.9.1",
       "scope": "required",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
-      "purl": "pkg:cargo/ruzstd@0.7.3"
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:cargo/static_assertions@1.1.0",
-      "name": "static_assertions",
-      "version": "1.1.0",
-      "scope": "required",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "purl": "pkg:cargo/static_assertions@1.1.0"
+      "purl": "pkg:cargo/ruzstd@0.9.1"
     },
     {
       "type": "library",
@@ -709,16 +696,16 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/twox-hash@1.6.3",
+      "bom-ref": "pkg:cargo/twox-hash@2.1.5",
       "name": "twox-hash",
-      "version": "1.6.3",
+      "version": "2.1.5",
       "scope": "required",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
-      "purl": "pkg:cargo/twox-hash@1.6.3"
+      "purl": "pkg:cargo/twox-hash@2.1.5"
     },
     {
       "type": "library",

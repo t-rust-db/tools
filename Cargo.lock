@@ -420,8 +420,8 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.122.0"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.122.0#031139ee9919d73a9c8647e70801172bdee41b28"
+version = "0.133.0"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.133.0#0e33d4117b6b2f668e2fb42da00201d0db1be2bc"
 dependencies = [
  "memmap2",
  "ruzstd",
@@ -1663,9 +1663,9 @@ dependencies = [
 
 [[package]]
 name = "ruzstd"
-version = "0.7.3"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fad02996bfc73da3e301efe90b1837be9ed8f4a462b6ed410aa35d00381de89f"
+checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
 dependencies = [
  "twox-hash",
 ]
@@ -2119,13 +2119,9 @@ dependencies = [
 
 [[package]]
 name = "twox-hash"
-version = "1.6.3"
+version = "2.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
-dependencies = [
- "cfg-if",
- "static_assertions",
-]
+checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
 
 [[package]]
 name = "typenum"

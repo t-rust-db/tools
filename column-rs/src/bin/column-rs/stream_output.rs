@@ -44,6 +44,10 @@ fn write_value(out: &mut impl Write, value: &Value) {
         Value::Null => {
             let _ = out.write_all(b"NULL");
         }
+        // db-core#621: a MAP value, printed as DuckDB prints it ({k=v, ...}).
+        Value::Map(_) => {
+            let _ = write!(out, "{value}");
+        }
     }
 }
 
