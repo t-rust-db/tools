@@ -6,11 +6,18 @@
 //!     loglume "select * from log where severity >= 'WARN' and facility = 'kern'" app.log
 //!     cat app.log | loglume "severity = ERROR"
 //!     loglume "severity >= WARN" --tui a.log b.log   # side-by-side panes
+//!     loglume "severity >= WARN" -f events/            # a table directory
+//!
+//! A table directory (one holding `manifest.json`, written by
+//! `column-ingest` or db-core's `Table`) is queried as the table `log`
+//! through db-core's snapshot reader, its Parquet files and WAL together.
+//! The one-shot and `--follow` modes take one; `--tui`, `--alert` and
+//! `--scope` are for log files only (tools#15).
 
 use clap::Parser;
 use loglume::{
-    BinaryOp, Cell, CompiledPredicate, EmitMode, Engine, EngineError, Facility, QueryResult,
-    ScopeReport, Severity, StandingQuery, StreamEngine,
+    query_snapshot, BinaryOp, Cell, CompiledPredicate, EmitMode, Engine, EngineError, Facility,
+    QueryResult, ScopeReport, Severity, StandingQuery, StreamEngine, TableEngine, MANIFEST_FILE,
 };
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -25,8 +32,9 @@ struct Args {
     #[arg(required = true)]
     filter: String,
 
-    /// Log file(s) to read (reads stdin if omitted). Multiple files require
-    /// --tui and open as side-by-side panes.
+    /// Log file(s) to read (reads stdin if omitted), or a table directory
+    /// (one holding manifest.json). Multiple files require --tui and open
+    /// as side-by-side panes.
     #[arg()]
     files: Vec<PathBuf>,
 
@@ -121,7 +129,20 @@ fn run(args: &Args) -> io::Result<()> {
         args.filter.clone()
     };
 
-    let scope = args.scope.clone().or_else(|| cfg.tui.default_scope.clone());
+    // SINCE/UNTIL is a stream-only clause: a table directory takes no
+    // scope, and ignores the configured default one.
+    let table_dir = args.files.iter().any(|p| is_table_dir(p));
+    if table_dir && args.scope.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--scope applies to log files, not table directories",
+        ));
+    }
+    let scope = if table_dir {
+        None
+    } else {
+        args.scope.clone().or_else(|| cfg.tui.default_scope.clone())
+    };
     let sql = build_sql(&filter, scope.as_deref(), args.max_lines)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
@@ -132,6 +153,13 @@ fn run(args: &Args) -> io::Result<()> {
     }
 
     let highlight = args.highlight.as_deref().map(resolve_highlight_expr);
+
+    if table_dir && (args.alert || args.tui) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--alert and --tui read log files only; a table directory takes the one-shot and --follow modes",
+        ));
+    }
 
     if args.alert {
         let exec = args.exec.as_deref().ok_or_else(|| {
@@ -260,10 +288,105 @@ fn compile_highlight(
         .map_err(engine_err)
 }
 
+/// Whether `path` is a table directory: a directory holding a manifest.
+pub(crate) fn is_table_dir(path: &Path) -> bool {
+    path.is_dir() && path.join(MANIFEST_FILE).is_file()
+}
+
+/// What the one-shot and `--follow` modes read: a log file's stream
+/// engine, or a table directory's snapshot reader.
+enum Source {
+    Stream(StreamEngine),
+    Table(TableEngine),
+}
+
+/// The table name loglume's SQL reads (`SELECT * FROM log ...`), which a
+/// table directory answers to whatever the directory is called.
+const TABLE: &str = "log";
+
+impl Source {
+    fn open(path: &Path) -> io::Result<Self> {
+        if is_table_dir(path) {
+            TableEngine::open(path)
+                .map(Source::Table)
+                .map_err(engine_err)
+        } else {
+            open_engine(path).map(Source::Stream)
+        }
+    }
+
+    fn compile_highlight(&self, highlight: Option<&str>) -> io::Result<Option<CompiledPredicate>> {
+        match self {
+            Source::Stream(e) => compile_highlight(e, highlight),
+            Source::Table(e) => compile_highlight(e, highlight),
+        }
+    }
+
+    /// `sql` over what the source holds now; a table directory reads its
+    /// snapshot as of the last [`refresh`](Self::refresh).
+    fn query(&mut self, sql: &str) -> io::Result<QueryResult> {
+        match self {
+            Source::Stream(e) => e.run_query(sql).map_err(engine_err),
+            Source::Table(e) => query_snapshot(e.snapshot(), TABLE, sql).map_err(engine_err),
+        }
+    }
+
+    /// Reads what was appended since; returns how many records that was (a
+    /// smaller table reads as a reload, like a truncated file).
+    fn refresh(&mut self) -> io::Result<usize> {
+        match self {
+            Source::Stream(e) => e.refresh().map_err(engine_err),
+            Source::Table(e) => {
+                let before = e.snapshot().rows();
+                e.refresh().map_err(engine_err)?;
+                let after = e.snapshot().rows();
+                Ok(usize::try_from(after.abs_diff(before)).unwrap_or(usize::MAX))
+            }
+        }
+    }
+}
+
+/// Signal every change to the table directory at `path`: its manifest
+/// (a flush or compaction) or its WAL (an append). Polls, like
+/// [`watch_file`].
+pub(crate) fn watch_table_dir(path: &Path) -> std::sync::mpsc::Receiver<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = path.to_path_buf();
+    std::thread::spawn(move || {
+        let fingerprint = |dir: &Path| {
+            let stat = |p: &Path| {
+                std::fs::metadata(p)
+                    .ok()
+                    .map(|m| (m.len(), m.modified().ok()))
+            };
+            let mut wal: Vec<_> = std::fs::read_dir(dir.join("wal"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| (e.file_name(), stat(&e.path())))
+                .collect();
+            wal.sort();
+            (stat(&dir.join(MANIFEST_FILE)), wal)
+        };
+        let mut last = fingerprint(&path);
+        loop {
+            std::thread::sleep(WATCH_POLL);
+            let now = fingerprint(&path);
+            if now != last {
+                last = now;
+                if tx.send(()).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    rx
+}
+
 fn run_once(path: &Path, sql: &str, tail: usize, highlight: Option<&str>) -> io::Result<()> {
-    let mut engine = open_engine(path)?;
-    let predicate = compile_highlight(&engine, highlight)?;
-    let result = engine.run_query(sql).map_err(engine_err)?;
+    let mut source = Source::open(path)?;
+    let predicate = source.compile_highlight(highlight)?;
+    let result = source.query(sql)?;
     print_result(&result, tail, predicate.as_ref());
     Ok(())
 }
@@ -324,20 +447,25 @@ pub(crate) fn watch_file(path: &Path) -> std::sync::mpsc::Receiver<()> {
 }
 
 fn run_follow(path: &Path, sql: &str, tail: usize, highlight: Option<&str>) -> io::Result<()> {
-    let mut engine = open_engine(path)?;
-    let predicate = compile_highlight(&engine, highlight)?;
-    let result = engine.run_query(sql).map_err(engine_err)?;
+    let mut source = Source::open(path)?;
+    let predicate = source.compile_highlight(highlight)?;
+    let result = source.query(sql)?;
     print_result(&result, tail, predicate.as_ref());
     let mut printed = result.rows.len();
 
-    for () in watch_file(path) {
+    let changes = if matches!(source, Source::Table(_)) {
+        watch_table_dir(path)
+    } else {
+        watch_file(path)
+    };
+    for () in changes {
         // Only newly appended lines enter the ring here, so the query
         // below applies the filter to those last lines; rows already
         // shown are skipped via `printed`.
-        if engine.refresh().map_err(engine_err)? == 0 {
+        if source.refresh()? == 0 {
             continue;
         }
-        let result = engine.run_query(sql).map_err(engine_err)?;
+        let result = source.query(sql)?;
 
         if result.rows.len() < printed {
             // File was truncated/rotated: engine.refresh() already reloaded

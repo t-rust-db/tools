@@ -1,6 +1,6 @@
 [package]
 name = "loglume"
-version = "0.12.2"
+version = "0.13.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
@@ -21,7 +21,7 @@ name = "loglume"
 path = "src/lib.rs"
 
 [dependencies]
-db-core = { workspace = true, features = ["engine-stream", "storage-stream", "vm-stream"] }
+db-core = { workspace = true, features = ["engine-stream", "storage-stream", "vm-stream", "engine-column", "ingest-read"] }
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30.2"
 crossterm = "0.29.0"
@@ -29,6 +29,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.6"
 
 [dev-dependencies]
+# Builds table directories for tests/cli.rs (loglume reads them with
+# ingest-read only).
+db-core = { workspace = true, features = ["ingest"] }
 # Only the tests/spikes/notify_probe.rs spike still uses notify: the live
 # view polls instead (FSEvents misses held-open-fd appends).
 notify = "8"

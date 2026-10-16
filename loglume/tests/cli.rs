@@ -547,3 +547,165 @@ fn tui_with_a_missing_file_errors_without_entering_the_alternate_screen() {
         // \x1b[?1049h == EnterAlternateScreen.
         .stdout(predicate::str::contains("[?1049h").not());
 }
+
+// Table directories (tools#15): a directory written by db-core's ingest
+// is queried like a log file in the one-shot and --follow modes.
+
+mod table_dir {
+    use super::*;
+    use db_core::storage::ingest::{Ack, TableOptions, TableWriter};
+    use db_core::storage::stream::detect::Format;
+    use std::io::{BufRead, BufReader};
+    use std::path::{Path, PathBuf};
+    use std::process::Stdio;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let dir =
+                std::env::temp_dir().join(format!("loglume-tabledir-{}-{n}", std::process::id()));
+            std::fs::remove_dir_all(&dir).ok();
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    fn syslog_table(dir: &Path) -> TableWriter {
+        let options = TableOptions {
+            format: Format::Syslog,
+            ..TableOptions::default()
+        };
+        TableWriter::open(dir, options).unwrap()
+    }
+
+    fn stdout_of(args: &[&str]) -> String {
+        let out = Command::cargo_bin("loglume")
+            .unwrap()
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    /// Output lines without the summary footer, which counts differently.
+    fn lines(stdout: &str) -> Vec<&str> {
+        stdout.lines().filter(|l| l.starts_with('<')).collect()
+    }
+
+    #[test]
+    fn a_table_directory_answers_like_the_log_file_it_was_ingested_from() {
+        let t = TempDir::new();
+        let dir = t.0.join("events");
+        let mut w = syslog_table(&dir);
+        for (i, line) in std::fs::read_to_string(SAMPLE_LOG)
+            .unwrap()
+            .lines()
+            .enumerate()
+        {
+            w.append(line.as_bytes(), Ack::Memory).unwrap();
+            // Half in a Parquet file, half still in the WAL.
+            if i == 500 {
+                w.flush_all().unwrap();
+            }
+        }
+        w.close().unwrap();
+        let dir = dir.to_str().unwrap();
+        for filter in [
+            "severity >= ERR",
+            "facility = kern",
+            "severity = WARN and facility = daemon",
+        ] {
+            let from_file = stdout_of(&[filter, SAMPLE_LOG]);
+            let from_dir = stdout_of(&[filter, dir]);
+            assert!(!lines(&from_file).is_empty(), "{filter}: matches something");
+            assert_eq!(lines(&from_dir), lines(&from_file), "{filter}");
+        }
+    }
+
+    #[test]
+    fn follow_prints_records_appended_to_a_table_directory() {
+        let t = TempDir::new();
+        let dir = t.0.join("live");
+        let mut w = syslog_table(&dir);
+        w.append(
+            b"<11>Sep 9 08:00:00 web01 app[1]: first error",
+            Ack::Durable,
+        )
+        .unwrap();
+        let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("loglume"))
+            .args(["-f", "severity >= ERR", dir.to_str().unwrap()])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let stdout = child.stdout.take().unwrap();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if tx.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        let wait_for = |needle: &str| {
+            let start = Instant::now();
+            loop {
+                let left = Duration::from_secs(10).saturating_sub(start.elapsed());
+                let line = rx
+                    .recv_timeout(left)
+                    .unwrap_or_else(|_| panic!("no {needle}"));
+                if line.contains(needle) {
+                    return;
+                }
+            }
+        };
+        wait_for("first error");
+        // An info line is filtered out; the next error is printed once.
+        w.append(b"<14>Sep 9 08:00:01 web01 app[1]: just info", Ack::Durable)
+            .unwrap();
+        w.append(
+            b"<11>Sep 9 08:00:02 web01 app[1]: second error",
+            Ack::Durable,
+        )
+        .unwrap();
+        wait_for("second error");
+        child.kill().unwrap();
+        child.wait().unwrap();
+        w.close().unwrap();
+    }
+
+    #[test]
+    fn scope_tui_and_alert_are_for_log_files() {
+        let t = TempDir::new();
+        let dir = t.0.join("events");
+        syslog_table(&dir).close().unwrap();
+        let dir = dir.to_str().unwrap();
+        for args in [
+            vec!["--scope", "1h", "severity >= ERR", dir],
+            vec!["--tui", "severity >= ERR", dir],
+            vec!["--alert", "--exec", "true", "severity >= ERR", dir],
+        ] {
+            Command::cargo_bin("loglume")
+                .unwrap()
+                .args(&args)
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains("table director"));
+        }
+    }
+}
