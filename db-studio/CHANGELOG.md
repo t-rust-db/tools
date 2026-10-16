@@ -2,6 +2,12 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.14.0] - 2026-10-16
+
+### Added
+
+- **Table directories** (t-rust-db/tools#15, db-core ADR 0029): a directory holding a `manifest.json` (written by `column-ingest` or db-core's `Table`) opens in batch mode through db-core's `TableEngine`, named after the directory. Its Parquet files and the records still in its WAL read as one table, and every query reads a fresh snapshot, so re-running a query shows what was appended since.
+
 ## [0.13.0] - 2026-09-14
 
 ### Added

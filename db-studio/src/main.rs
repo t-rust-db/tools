@@ -32,7 +32,7 @@ use open::open_by_extension;
 fn main() -> ExitCode {
     let paths: Vec<String> = std::env::args().skip(1).collect();
     if paths.is_empty() {
-        eprintln!("usage: db-studio <path.sqlite|path.parquet|path.log> [more ...]");
+        eprintln!("usage: db-studio <path.sqlite|path.parquet|path.log|table-dir> [more ...]");
         return ExitCode::FAILURE;
     }
 
