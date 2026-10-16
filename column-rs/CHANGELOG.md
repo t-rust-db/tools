@@ -2,6 +2,16 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.21.0] - 2026-10-16
+
+### Added
+
+- **Table directories** (#13, db-core ADR 0029): `column-rs <dir>` and `.open <dir>` load a directory holding a `manifest.json` (written by `column-ingest` or db-core's `Table`) as a table named after the directory. Each query reads a fresh snapshot: every Parquet file's row groups and the records still in the WAL, with a column a file lacks read as NULL and one a file stores with another type cast to the table's (db-core's `snapshot_segments`/`read_snapshot`, v0.134.0). Joins, `IN (SELECT ...)` semi-joins and window functions work over a directory as over a file, and mix with Parquet files. `.schema` shows a directory's current columns.
+
+### Changed
+
+- db-core pin v0.134.0; column-rs now uses its `engine-column` and `ingest-read` features.
+
 ## [0.20.4] - 2026-09-18
 
 ### Fixed
