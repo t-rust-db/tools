@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-10-16
+
+### Added
+
+- **Table directories in the TUI** (#45): `loglume --tui "<filter>" <dir> [more ...]` opens a table directory as a pane, beside log-file panes. It follows appended records as the file panes do, by watching the directory's manifest and WAL. Its title says "table directory" where a file pane shows its SINCE scope report. Filters, highlights, colour rules and pane state work as in a file pane.
+
+### Changed
+
+- `--tui` now accepts a table directory; `--scope` and `--alert` still read log files only.
+- A full-SQL filter that compares `severity` with a quoted name (`severity >= 'WARN'`) works on log files only. Over a table directory `severity` is a number. loglume's short forms (`severity >= WARN`) compile to numbers and work on both.
+
 ## [0.13.0] - 2026-10-16
 
 ### Added

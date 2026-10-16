@@ -11,8 +11,8 @@
 //! A table directory (one holding `manifest.json`, written by
 //! `column-ingest` or db-core's `Table`) is queried as the table `log`
 //! through db-core's snapshot reader, its Parquet files and WAL together.
-//! The one-shot and `--follow` modes take one; `--tui`, `--alert` and
-//! `--scope` are for log files only (tools#15).
+//! The one-shot, `--follow` and `--tui` modes take one (tools#15, #45);
+//! `--alert` and `--scope` are for log files only.
 
 use clap::Parser;
 use loglume::{
@@ -154,10 +154,10 @@ fn run(args: &Args) -> io::Result<()> {
 
     let highlight = args.highlight.as_deref().map(resolve_highlight_expr);
 
-    if table_dir && (args.alert || args.tui) {
+    if table_dir && args.alert {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "--alert and --tui read log files only; a table directory takes the one-shot and --follow modes",
+            "--alert reads log files only (standing queries are a stream-engine feature), not table directories",
         ));
     }
 
@@ -278,24 +278,14 @@ pub(crate) fn open_engine(path: &Path) -> io::Result<StreamEngine> {
     StreamEngine::open(path).map_err(engine_err)
 }
 
-fn compile_highlight(
-    engine: &impl Engine,
-    highlight: Option<&str>,
-) -> io::Result<Option<CompiledPredicate>> {
-    highlight
-        .map(|expr| engine.compile_predicate(expr))
-        .transpose()
-        .map_err(engine_err)
-}
-
 /// Whether `path` is a table directory: a directory holding a manifest.
 pub(crate) fn is_table_dir(path: &Path) -> bool {
     path.is_dir() && path.join(MANIFEST_FILE).is_file()
 }
 
-/// What the one-shot and `--follow` modes read: a log file's stream
-/// engine, or a table directory's snapshot reader.
-enum Source {
+/// What a view reads (the one-shot and `--follow` modes, a TUI pane): a
+/// log file's stream engine, or a table directory's snapshot reader.
+pub(crate) enum Source {
     Stream(StreamEngine),
     Table(TableEngine),
 }
@@ -305,7 +295,7 @@ enum Source {
 const TABLE: &str = "log";
 
 impl Source {
-    fn open(path: &Path) -> io::Result<Self> {
+    pub(crate) fn open(path: &Path) -> io::Result<Self> {
         if is_table_dir(path) {
             TableEngine::open(path)
                 .map(Source::Table)
@@ -315,34 +305,58 @@ impl Source {
         }
     }
 
-    fn compile_highlight(&self, highlight: Option<&str>) -> io::Result<Option<CompiledPredicate>> {
+    pub(crate) fn compile_predicate(&self, expr: &str) -> Result<CompiledPredicate, EngineError> {
         match self {
-            Source::Stream(e) => compile_highlight(e, highlight),
-            Source::Table(e) => compile_highlight(e, highlight),
+            Source::Stream(e) => e.compile_predicate(expr),
+            Source::Table(e) => e.compile_predicate(expr),
         }
+    }
+
+    fn compile_highlight(&self, highlight: Option<&str>) -> io::Result<Option<CompiledPredicate>> {
+        highlight
+            .map(|expr| self.compile_predicate(expr))
+            .transpose()
+            .map_err(engine_err)
     }
 
     /// `sql` over what the source holds now; a table directory reads its
     /// snapshot as of the last [`refresh`](Self::refresh).
-    fn query(&mut self, sql: &str) -> io::Result<QueryResult> {
+    pub(crate) fn run_query(&mut self, sql: &str) -> Result<QueryResult, EngineError> {
         match self {
-            Source::Stream(e) => e.run_query(sql).map_err(engine_err),
-            Source::Table(e) => query_snapshot(e.snapshot(), TABLE, sql).map_err(engine_err),
+            Source::Stream(e) => e.run_query(sql),
+            Source::Table(e) => query_snapshot(e.snapshot(), TABLE, sql),
         }
+    }
+
+    fn query(&mut self, sql: &str) -> io::Result<QueryResult> {
+        self.run_query(sql).map_err(engine_err)
     }
 
     /// Reads what was appended since; returns how many records that was (a
     /// smaller table reads as a reload, like a truncated file).
-    fn refresh(&mut self) -> io::Result<usize> {
+    pub(crate) fn refresh(&mut self) -> Result<usize, EngineError> {
         match self {
-            Source::Stream(e) => e.refresh().map_err(engine_err),
+            Source::Stream(e) => e.refresh(),
             Source::Table(e) => {
                 let before = e.snapshot().rows();
-                e.refresh().map_err(engine_err)?;
+                e.refresh()?;
                 let after = e.snapshot().rows();
                 Ok(usize::try_from(after.abs_diff(before)).unwrap_or(usize::MAX))
             }
         }
+    }
+
+    /// A signal per change to what the source reads (`path`).
+    pub(crate) fn watch(&self, path: &Path) -> std::sync::mpsc::Receiver<()> {
+        match self {
+            Source::Stream(_) => watch_file(path),
+            Source::Table(_) => watch_table_dir(path),
+        }
+    }
+
+    /// Whether this is a table directory (no scope report, no SINCE).
+    pub(crate) fn is_table(&self) -> bool {
+        matches!(self, Source::Table(_))
     }
 }
 
@@ -453,16 +467,11 @@ fn run_follow(path: &Path, sql: &str, tail: usize, highlight: Option<&str>) -> i
     print_result(&result, tail, predicate.as_ref());
     let mut printed = result.rows.len();
 
-    let changes = if matches!(source, Source::Table(_)) {
-        watch_table_dir(path)
-    } else {
-        watch_file(path)
-    };
-    for () in changes {
+    for () in source.watch(path) {
         // Only newly appended lines enter the ring here, so the query
         // below applies the filter to those last lines; rows already
         // shown are skipped via `printed`.
-        if source.refresh()? == 0 {
+        if source.refresh().map_err(engine_err)? == 0 {
             continue;
         }
         let result = source.query(sql)?;
@@ -1406,15 +1415,15 @@ mod tui {
     use super::cache::{self, History};
     use super::config::{ColorRuleConfig, ThemeConfig};
     use super::{
-        engine_err, format_cell, format_row, format_scope_report, open_engine,
-        resolve_highlight_expr, rewrite_filter_to_sql,
+        engine_err, format_cell, format_row, format_scope_report, resolve_highlight_expr,
+        rewrite_filter_to_sql, Source,
     };
     use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
     use crossterm::execute;
     use crossterm::terminal::{
         disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
     };
-    use loglume::{Cell, CompiledPredicate, Engine, QueryResult, Severity};
+    use loglume::{Cell, CompiledPredicate, QueryResult, Severity};
     use ratatui::backend::CrosstermBackend;
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::style::{Color, Modifier, Style};
@@ -1525,7 +1534,7 @@ mod tui {
     /// any entry with an unparsable expression or invalid color -- a typo
     /// in one rule must not prevent the TUI from starting, matching
     /// `Theme::resolve`'s tolerance for a bad hex value (#55).
-    fn compile_color_rules(engine: &impl Engine, rules: &[ColorRuleConfig]) -> Vec<ColorRule> {
+    fn compile_color_rules(engine: &Source, rules: &[ColorRuleConfig]) -> Vec<ColorRule> {
         rules
             .iter()
             .filter_map(|rule| {
@@ -1622,7 +1631,8 @@ mod tui {
     /// independent of every other pane.
     struct Pane {
         path: PathBuf,
-        engine: loglume::StreamEngine,
+        /// A log file's stream engine or a table directory's reader.
+        engine: Source,
         sql: String,
         result: QueryResult,
         list_state: ListState,
@@ -1838,7 +1848,7 @@ mod tui {
             color_rules_cfg: &[ColorRuleConfig],
             pane_state_cache_path: &Path,
         ) -> io::Result<Self> {
-            let mut engine = open_engine(path)?;
+            let mut engine = Source::open(path)?;
 
             // Restore this file's last-applied filter/highlight, if any
             // (#72). A persisted entry that no longer compiles/runs
@@ -1856,7 +1866,7 @@ mod tui {
             let result = engine.run_query(&sql).map_err(engine_err)?;
             let color_rules = compile_color_rules(&engine, color_rules_cfg);
 
-            let rx = super::watch_file(path);
+            let rx = engine.watch(path);
 
             let mut list_state = ListState::default();
             if !result.rows.is_empty() {
@@ -2292,12 +2302,14 @@ mod tui {
             } else {
                 ""
             };
-            let title = self
-                .result
-                .scope_report
-                .as_ref()
-                .map(|r| format!("{name}{order_tag}{bars_tag} — {}", format_scope_report(r)))
-                .unwrap_or_else(|| format!("{name}{order_tag}{bars_tag}"));
+            let title = match self.result.scope_report.as_ref() {
+                Some(r) => format!("{name}{order_tag}{bars_tag} — {}", format_scope_report(r)),
+                // A table directory has no SINCE scope: say what it is.
+                None if self.engine.is_table() => {
+                    format!("{name}{order_tag}{bars_tag} — table directory")
+                }
+                None => format!("{name}{order_tag}{bars_tag}"),
+            };
 
             let list = List::new(items)
                 .block(
@@ -2598,6 +2610,116 @@ mod tui {
                 &temp_pane_state_path(),
             )
             .expect("open one pane")
+        }
+
+        /// A syslog table directory holding `tests/logs/sample.log`'s first `n`
+        /// lines, flushed in two files with the rest in the WAL.
+        fn sample_table_dir(n: usize) -> (PathBuf, db_core::storage::ingest::TableWriter) {
+            use db_core::storage::ingest::{Ack, TableOptions, TableWriter};
+            use db_core::storage::stream::detect::Format;
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let k = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir()
+                .join(format!("loglume-tui-table-{}-{k}", std::process::id()))
+                .join("events");
+            std::fs::remove_dir_all(&dir).ok();
+            let options = TableOptions {
+                format: Format::Syslog,
+                ..TableOptions::default()
+            };
+            let mut w = TableWriter::open(&dir, options).expect("open table");
+            let text = std::fs::read_to_string(SAMPLE_LOG).expect("sample log");
+            for (i, line) in text.lines().take(n).enumerate() {
+                w.append(line.as_bytes(), Ack::Durable).expect("append");
+                if i == n / 3 || i == 2 * n / 3 {
+                    w.flush_all().expect("flush");
+                }
+            }
+            (dir, w)
+        }
+
+        #[test]
+        fn a_table_directory_pane_opens_beside_a_file_pane() {
+            let (dir, w) = sample_table_dir(60);
+            let app = App::new(
+                &[dir.clone(), PathBuf::from(SAMPLE_LOG)],
+                "SELECT * FROM log".to_string(),
+                Theme::default(),
+                &[],
+                &temp_pane_state_path(),
+            )
+            .expect("open a table directory pane and a file pane");
+            assert!(app.panes[0].engine.is_table());
+            assert!(!app.panes[1].engine.is_table());
+            let raw = app.panes[0]
+                .result
+                .columns
+                .iter()
+                .position(|c| c == "raw")
+                .unwrap();
+            let mut shown: Vec<String> = app.panes[0]
+                .result
+                .rows
+                .iter()
+                .map(|r| format_row(r, Some(raw)))
+                .collect();
+            let mut expected: Vec<String> = std::fs::read_to_string(SAMPLE_LOG)
+                .unwrap()
+                .lines()
+                .take(60)
+                .map(str::to_string)
+                .collect();
+            shown.sort();
+            expected.sort();
+            assert_eq!(
+                shown, expected,
+                "the directory's records, files and WAL together"
+            );
+            drop(w);
+            std::fs::remove_dir_all(dir.parent().unwrap()).ok();
+        }
+
+        #[test]
+        fn a_table_directory_pane_shows_appended_records() {
+            use db_core::storage::ingest::Ack;
+            let (dir, mut w) = sample_table_dir(30);
+            let mut app = App::new(
+                std::slice::from_ref(&dir),
+                "SELECT * FROM log".to_string(),
+                Theme::default(),
+                &[],
+                &temp_pane_state_path(),
+            )
+            .expect("open a table directory pane");
+            assert_eq!(app.panes[0].result.rows.len(), 30);
+            w.append(
+                b"<11>Sep 9 09:00:00 web01 app[7]: appended later",
+                Ack::Durable,
+            )
+            .unwrap();
+            let start = std::time::Instant::now();
+            while !app.panes[0].drain_file_events().unwrap() {
+                assert!(
+                    start.elapsed() < std::time::Duration::from_secs(10),
+                    "no change seen"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            app.panes[0].requery(true).unwrap();
+            assert_eq!(app.panes[0].result.rows.len(), 31);
+            let raw = app.panes[0]
+                .result
+                .columns
+                .iter()
+                .position(|c| c == "raw")
+                .unwrap();
+            assert!(app.panes[0]
+                .result
+                .rows
+                .iter()
+                .any(|r| format_row(r, Some(raw)).contains("appended later")));
+            w.close().unwrap();
+            std::fs::remove_dir_all(dir.parent().unwrap()).ok();
         }
 
         fn one_pane_app_with_cache(cache_path: &Path) -> App {
@@ -3612,7 +3734,7 @@ mod tui {
 
         #[test]
         fn compile_color_rules_skips_invalid_expression() {
-            let engine = open_engine(Path::new(SAMPLE_LOG)).unwrap();
+            let engine = Source::open(Path::new(SAMPLE_LOG)).unwrap();
             let rules = compile_color_rules(
                 &engine,
                 &[ColorRuleConfig {
@@ -3625,7 +3747,7 @@ mod tui {
 
         #[test]
         fn compile_color_rules_skips_invalid_color() {
-            let engine = open_engine(Path::new(SAMPLE_LOG)).unwrap();
+            let engine = Source::open(Path::new(SAMPLE_LOG)).unwrap();
             let rules = compile_color_rules(
                 &engine,
                 &[ColorRuleConfig {
@@ -3638,7 +3760,7 @@ mod tui {
 
         #[test]
         fn compile_color_rules_compiles_valid_entries() {
-            let engine = open_engine(Path::new(SAMPLE_LOG)).unwrap();
+            let engine = Source::open(Path::new(SAMPLE_LOG)).unwrap();
             let rules = compile_color_rules(
                 &engine,
                 &[ColorRuleConfig {
@@ -3652,7 +3774,7 @@ mod tui {
 
         #[test]
         fn color_rule_fg_returns_first_match_in_order() {
-            let engine = open_engine(Path::new(SAMPLE_LOG)).unwrap();
+            let engine = Source::open(Path::new(SAMPLE_LOG)).unwrap();
             let rules = compile_color_rules(
                 &engine,
                 &[
@@ -3677,7 +3799,7 @@ mod tui {
 
         #[test]
         fn color_rule_fg_is_none_when_nothing_matches() {
-            let engine = open_engine(Path::new(SAMPLE_LOG)).unwrap();
+            let engine = Source::open(Path::new(SAMPLE_LOG)).unwrap();
             let rules = compile_color_rules(
                 &engine,
                 &[ColorRuleConfig {
