@@ -24,7 +24,7 @@ db-core = { workspace = true, features = ["storage-row"] }
 # this is a binary, not a library (sqlite-rs ADR-0040 does not apply).
 regex = "1"
 regex-syntax = "0.8"
-dirs = "5"
+dirs = "7"
 
 [dev-dependencies]
 # Property tests only (#14): never in the shipped binary's closure.
