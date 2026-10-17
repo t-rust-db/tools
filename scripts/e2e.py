@@ -12,7 +12,8 @@ column-rs, checked against DuckDB.
 
 column-ingest tiers by arrival time, so a run never closes a day: the
 oracle reads the flat tables' `data/`, and the tiered one checks reads
-while ingest runs.
+while ingest runs. Cells compare as text: since db-core v0.135.0 integer
+aggregates are integers, as in DuckDB.
 
 Usage: scripts/e2e.py [--bin target/release]   (run by `make e2e`)
 """
@@ -38,19 +39,6 @@ ORACLE_QUERIES = [
     "ON {events}.session_id = {txns}.session_id GROUP BY {txns}.channel ORDER BY {txns}.channel",
     "SELECT event_id, COUNT(*) OVER (PARTITION BY event_id) FROM {events} ORDER BY event_id",
 ]
-
-
-def normalized(rows):
-    """Cells compared by value: db-core's batch engine returns MIN/MAX/SUM
-    of an integer column as a float (`0.0`), DuckDB as an integer (`0`)."""
-
-    def cell(text):
-        try:
-            return ("number", round(float(text), 9))
-        except ValueError:
-            return ("text", text)
-
-    return [[cell(c) for c in row] for row in rows]
 
 
 def fail(message):
@@ -127,7 +115,7 @@ def flat_oracle(bin_dir, work):
         theirs = duckdb(sql)
         if not theirs:
             fail(f"an empty oracle proves nothing: {sql}")
-        if normalized(ours) != normalized(theirs):
+        if ours != theirs:
             fail(f"column-rs and DuckDB disagree on {template}:\n  ours   {ours[:5]}\n  theirs {theirs[:5]}")
         print(f"e2e: agrees with DuckDB ({len(ours)} rows): {template[:60]}...")
 
