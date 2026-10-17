@@ -3,7 +3,7 @@
   "specVersion": "1.5",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-10-17T14:48:02.000000000Z",
+    "timestamp": "2026-10-17T15:39:35.000000000Z",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -140,16 +140,16 @@
     },
     {
       "type": "library",
-      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#dirs-sys@0.4.1",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#dirs-sys@0.5.0",
       "author": "Simon Ochsenreither <simon@ochsenreither.de>",
       "name": "dirs-sys",
-      "version": "0.4.1",
+      "version": "0.5.0",
       "description": "System-level helper functions for the dirs and directories crates.",
       "scope": "required",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
+          "content": "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
         }
       ],
       "licenses": [
@@ -157,7 +157,7 @@
           "expression": "MIT OR Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/dirs-sys@0.4.1",
+      "purl": "pkg:cargo/dirs-sys@0.5.0",
       "externalReferences": [
         {
           "type": "vcs",
@@ -167,16 +167,16 @@
     },
     {
       "type": "library",
-      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#dirs@5.0.1",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#dirs@7.0.0",
       "author": "Simon Ochsenreither <simon@ochsenreither.de>",
       "name": "dirs",
-      "version": "5.0.1",
+      "version": "7.0.0",
       "description": "A tiny low-level library that provides platform-specific standard locations of directories for config, cache and other data on Linux, Windows, macOS and Redox by leveraging the mechanisms defined by the XDG base/user directory specifications on Linux, the Known Folder API on Windows, and the Standard Directory guidelines on macOS.",
       "scope": "required",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "44c45a9d03d6676652bcb5e724c7e988de1acad23a711b5217ab9cbecbec2225"
+          "content": "8d57d423b3c82e89b9a24ca3091fee61f456a26edbd28d26c65906f4bc1dcd8f"
         }
       ],
       "licenses": [
@@ -184,11 +184,11 @@
           "expression": "MIT OR Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/dirs@5.0.1",
+      "purl": "pkg:cargo/dirs@7.0.0",
       "externalReferences": [
         {
           "type": "vcs",
-          "url": "https://github.com/soc/dirs-rs"
+          "url": "https://codeberg.org/dirs/dirs-rs"
         }
       ]
     },
@@ -498,7 +498,7 @@
     {
       "ref": "path+file:///Users/iheitlager/wc/t-rust-db/tools/db-cli#0.5.0",
       "dependsOn": [
-        "registry+https://github.com/rust-lang/crates.io-index#dirs@5.0.1",
+        "registry+https://github.com/rust-lang/crates.io-index#dirs@7.0.0",
         "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.190"
       ]
     },
@@ -517,16 +517,16 @@
       ]
     },
     {
-      "ref": "registry+https://github.com/rust-lang/crates.io-index#dirs-sys@0.4.1",
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#dirs-sys@0.5.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.190",
         "registry+https://github.com/rust-lang/crates.io-index#option-ext@0.2.0"
       ]
     },
     {
-      "ref": "registry+https://github.com/rust-lang/crates.io-index#dirs@5.0.1",
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#dirs@7.0.0",
       "dependsOn": [
-        "registry+https://github.com/rust-lang/crates.io-index#dirs-sys@0.4.1"
+        "registry+https://github.com/rust-lang/crates.io-index#dirs-sys@0.5.0"
       ]
     },
     {
