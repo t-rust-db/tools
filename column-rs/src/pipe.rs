@@ -98,6 +98,10 @@ impl ColType {
         match values.find(|v| !matches!(v, Value::Null)) {
             Some(Value::Int(_)) => ColType::Int,
             Some(Value::Float(_)) => ColType::Double,
+            Some(Value::Decimal { scale, .. }) => ColType::Decimal {
+                precision: 38,
+                scale: *scale,
+            },
             Some(Value::Bool(_)) => ColType::Bool,
             Some(Value::Map(_)) => ColType::Map,
             Some(Value::Str(_)) => ColType::Text,
@@ -113,6 +117,8 @@ const EXACT: u64 = 1 << 53;
 pub fn encode(value: &Value, ty: ColType) -> Json {
     match (value, ty) {
         (Value::Null, _) => Json::Null,
+        // db-core#632: exact, printed at its own scale.
+        (Value::Decimal { .. }, _) => Json::String(value.to_string()),
         (Value::Int(i), ColType::Timestamp(unit)) => Json::String(iso8601(*i, unit)),
         (Value::Float(f), ColType::Decimal { scale, .. }) => {
             Json::String(format!("{f:.prec$}", prec = usize::from(scale)))
@@ -333,6 +339,18 @@ mod tests {
             scale: 0,
         };
         assert_eq!(encode(&Value::Int(7), whole), json!("7"));
+        let exact = Value::Decimal {
+            unscaled: 12_345_678_901_234_567_890,
+            scale: 2,
+        };
+        assert_eq!(encode(&exact, ty), json!("123456789012345678.90"));
+        assert_eq!(
+            ColType::infer([Value::Null, exact].iter()),
+            ColType::Decimal {
+                precision: 38,
+                scale: 2
+            }
+        );
     }
 
     #[test]
