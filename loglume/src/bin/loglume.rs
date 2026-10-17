@@ -667,6 +667,7 @@ pub(crate) fn format_cell(cell: &Cell) -> String {
         Cell::Real(r) => r.to_string(),
         Cell::Bool(b) => b.to_string(),
         Cell::Text(s) => s.clone(),
+        Cell::Decimal { .. } => cell.to_string(),
         Cell::Blob(b) => format!("<{} bytes>", b.len()),
     }
 }
