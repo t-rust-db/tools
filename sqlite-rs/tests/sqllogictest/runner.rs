@@ -286,6 +286,9 @@ fn run_query(db_path: &Path, record: &QueryRecord) -> Outcome {
             | CodegenError::Unsupported { .. }
             | CodegenError::AmbiguousColumn { .. }
             | CodegenError::CompoundColumnMismatch { .. }
+            // A query sqlite3 itself refuses when preparing it (an unknown
+            // function, db-core#562).
+            | CodegenError::Rejected(_)
             // `compile_select` never actually returns these — one's an
             // INSERT-only variant (#195), the other's a view-expansion-
             // only variant (#403 follow-up) that only ever surfaces from

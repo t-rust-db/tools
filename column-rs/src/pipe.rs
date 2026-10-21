@@ -406,10 +406,7 @@ mod tests {
 
     #[test]
     fn maps_nulls_and_inferred_types() {
-        let entries = std::sync::Arc::new(vec![
-            ("a".to_string(), Some("1".to_string())),
-            ("b".to_string(), None),
-        ]);
+        let entries = std::sync::Arc::new(vec![("a".into(), Some("1".into())), ("b".into(), None)]);
         assert_eq!(
             encode(&Value::Map(entries), ColType::Map),
             json!({"a": "1", "b": null})
