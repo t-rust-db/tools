@@ -1115,22 +1115,17 @@ CTE already shadows a same-named real table. `DROP VIEW` is parsed
 
 **Tests:** `tests/corpus/view_test.rs::create_view_joined_and_filtered_matches_oracle`
 
-#### Scenario: DROP VIEW fails cleanly rather than being silently ignored
+#### Scenario: DROP VIEW removes the view and keeps its base table
 
-- GIVEN `DROP VIEW v` run against a real connection, with `DROP VIEW`
-  parsed (#379) but not dispatched to any codegen path (this
-  requirement's own out-of-scope note above)
-- THEN the statement MUST be rejected with a clean error (`statement
-  dispatch` reports it as unrecognized) rather than panicking or
-  silently no-opping, and `v` remains queryable afterward — #382
-  verified this end-to-end and found the existing behavior already
-  clean (no codegen path is reached at all: `compile_statement`'s
-  keyword dispatch has no `"DROP" if kw(1) == "VIEW"` arm, so it falls
-  through to `DispatchError::Unrecognized` before ever touching a
-  parser or opcode). Wiring an actual `Opcode::DropView` remains a
-  fast-follow, tracked separately from this scenario.
+- GIVEN a view `v` over table `t`
+- WHEN `DROP VIEW v` runs against a real connection
+- THEN `v`'s `sqlite_master` row is removed and only that row: `t`
+  stays, stock sqlite3 reads the file's schema without `v` and
+  `PRAGMA integrity_check` is `ok`, and selecting from `v` fails.
+  Dispatch was wired in db-core (#658 matches the row by type and
+  name); until then this scenario pinned a clean rejection (#382).
 
-**Tests:** `tests/corpus/view_test.rs::drop_view_fails_cleanly_not_wired_into_codegen`
+**Tests:** `tests/corpus/view_test.rs::drop_view_removes_the_view_and_keeps_the_table`
 
 ### Requirement 16: Covering-Index Scan and Index-Only COUNT(*) [MUST]
 

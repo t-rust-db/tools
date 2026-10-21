@@ -232,42 +232,43 @@ fn with_clause_cte_selects_from_view_matches_oracle() {
     );
 }
 
-/// `DROP VIEW` (#379's parser support) is not yet wired into codegen
-/// (Requirement 15 explicitly scopes it out) — running it end-to-end
-/// against a real connection MUST fail cleanly (a rejected/unsupported
-/// statement error) rather than panicking or silently no-opping. This
-/// pins that current behavior so a future #380 follow-on that wires
-/// `Opcode::DropView` has a test to flip instead of a silent gap.
+/// `DROP VIEW` (#379's parser support) is wired into codegen since
+/// db-core v0.155.0 (this test used to pin its rejection). It removes the
+/// view's `sqlite_master` row only: the base table stays, and the file's
+/// schema matches what stock sqlite3 reads from it.
 #[test]
-fn drop_view_fails_cleanly_not_wired_into_codegen() {
+fn drop_view_removes_the_view_and_keeps_the_table() {
     let db = view_fixture_db("drop_view");
     run_exec_ok(&db, "CREATE VIEW v AS SELECT id, x FROM t");
-    let output = run_exec(&db, "DROP VIEW v");
-    assert!(
-        !output.status.success(),
-        "expected DROP VIEW to be rejected (not yet wired into codegen), \
-         got success: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.is_empty(),
-        "expected a clean rejection message on stderr, got none"
-    );
-    // The view must be unaffected — still queryable after the rejected
-    // DROP VIEW attempt.
+    run_exec_ok(&db, "DROP VIEW v");
+    if let Some(oracle) = pinned_oracle() {
+        let schema = oracle_select(
+            &oracle,
+            &db,
+            "SELECT type || ':' || name FROM sqlite_master ORDER BY 1",
+        );
+        assert!(!schema.lines().any(|l| l == "view:v"), "{schema}");
+        assert!(schema.lines().any(|l| l == "table:t"), "{schema}");
+        assert_eq!(
+            oracle_select(&oracle, &db, "PRAGMA integrity_check").trim(),
+            "ok"
+        );
+    } else {
+        skip_no_oracle("drop_view_removes_the_view_and_keeps_the_table (schema)");
+    }
     assert_matches_oracle(
         &db,
-        "SELECT * FROM v ORDER BY id",
-        "drop_view_fails_cleanly_not_wired_into_codegen (view still queryable)",
+        "SELECT id, x FROM t ORDER BY id",
+        "drop_view_removes_the_view_and_keeps_the_table (table)",
+    );
+    let output = run_query(&db, "SELECT id FROM v");
+    assert!(
+        !output.status.success(),
+        "a dropped view must be gone, got: {}",
+        String::from_utf8_lossy(&output.stdout)
     );
 }
 
-/// A view whose body is itself a compound `UNION` `SELECT` — the same
-/// `materialize_from_subquery` guard that rejects a compound CTE body
-/// (`cte_test.rs::with_clause_cte_body_is_union_is_rejected_cleanly`)
-/// is shared by view expansion, so this must fail cleanly too rather
-/// than silently scanning only the view's first arm.
 #[test]
 fn create_view_body_is_union_is_rejected_cleanly() {
     let db = view_fixture_db("union_body");
