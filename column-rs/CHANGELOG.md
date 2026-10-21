@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.22.1] - 2026-10-21
+
+### Fixed
+
+- `--pipe` renders a MAP's entries through `to_string()`, so it compiles both against the pinned db-core (owned `String` entries) and against db-core#687, which makes map keys and values shared `Arc<str>`. No output change.
+
 ## [0.22.0] - 2026-10-16
 
 ### Added

@@ -147,7 +147,13 @@ pub fn encode(value: &Value, ty: ColType) -> Json {
         (Value::Map(entries), _) => Json::Object(
             entries
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone().map_or(Json::Null, Json::String)))
+                .map(|(k, v)| {
+                    (
+                        k.to_string(),
+                        v.as_ref()
+                            .map_or(Json::Null, |v| Json::String(v.to_string())),
+                    )
+                })
                 .collect::<Map<_, _>>(),
         ),
     }
