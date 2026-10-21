@@ -150,7 +150,8 @@ pub fn encode(value: &Value, ty: ColType) -> Json {
                 .map(|(k, v)| {
                     (
                         k.to_string(),
-                        v.as_ref().map_or(Json::Null, |v| Json::String(v.to_string())),
+                        v.as_ref()
+                            .map_or(Json::Null, |v| Json::String(v.to_string())),
                     )
                 })
                 .collect::<Map<_, _>>(),
