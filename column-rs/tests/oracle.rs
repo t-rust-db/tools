@@ -458,10 +458,10 @@ fn nested_list_column_reconstructs_correctly() {
         letters,
         vec![
             NestedValue::List(vec![
-                NestedValue::Scalar(LeafScalar::Str("a".to_string())),
-                NestedValue::Scalar(LeafScalar::Str("b".to_string()))
+                NestedValue::Scalar(LeafScalar::Str("a".into())),
+                NestedValue::Scalar(LeafScalar::Str("b".into()))
             ]),
-            NestedValue::List(vec![NestedValue::Scalar(LeafScalar::Str("c".to_string()))]),
+            NestedValue::List(vec![NestedValue::Scalar(LeafScalar::Str("c".into()))]),
             NestedValue::Null,
         ]
     );
@@ -484,7 +484,7 @@ fn nested_map_column_reconstructs_correctly() {
         NestedValue::Struct(vec![
             (
                 "key".to_string(),
-                NestedValue::Scalar(LeafScalar::Str(k.to_string())),
+                NestedValue::Scalar(LeafScalar::Str(k.into())),
             ),
             (
                 "value".to_string(),

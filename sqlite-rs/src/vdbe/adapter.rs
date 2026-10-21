@@ -633,8 +633,8 @@ impl SchemaStorage for BtreeSchemaStorage {
         .map_err(schema_err)
     }
 
-    fn delete_master_row(&mut self, name: &str) -> Result<(), SchemaStorageError> {
-        btree::delete_master_row(&mut self.pager.borrow_mut(), &self.header, name)
+    fn delete_master_row(&mut self, kind: &str, name: &str) -> Result<(), SchemaStorageError> {
+        btree::delete_master_row(&mut self.pager.borrow_mut(), &self.header, kind, name)
             .map_err(schema_err)
     }
 
