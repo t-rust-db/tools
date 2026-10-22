@@ -60,8 +60,9 @@ sql-stmt        ::= select-stmt        (* V2/V6 -- select-stmt now carries an
                      below, #388); ANALYZE's bare-name/no-argument forms landed
                      at V7 (#461) -- see analyze-stmt below *)
 
-explain-stmt    ::= "EXPLAIN" [ "QUERY" "PLAN" ] sql-stmt ;
+explain-stmt    ::= explain-prefix sql-stmt ;
                      (* V4 [parse.y:173 explain] *)
+explain-prefix  ::= "EXPLAIN" [ "QUERY" "PLAN" ] ;   (* db-core grammar.ebnf SHARED, db-core#565 *)
 
 (* ===================== SELECT (V2 slice, FROM/JOIN + GROUP BY/HAVING + UNION/UNION ALL V4/V6 slice) =====================
  * [parse.y:520 cmd, :654 oneselect, :710 selcollist, :750 from, :925 orderby_opt, :967 limit_opt, :1002 where_opt]
@@ -138,11 +139,12 @@ result-column   ::= "*"                                   (* V2 [parse.y:717 sel
 
 table-ref       ::= table-name [ [ "AS" ] identifier ]    (* V2 [parse.y:762 seltablist, single-table shape only --
                                                               no schema-qualifier or INDEXED BY/NOT INDEXED] *)
-                  | "(" select-stmt ")" [ "AS" ] identifier ;
+                  | "(" select-stmt ")" [ "AS" ] identifier
                                                            (* V4 [parse.y:762 seltablist LP select RP as, #257 --
                                                               this codebase requires the alias SQLite itself
                                                               leaves optional, since column resolution needs a
                                                               qualifier] *)
+                  | "(" "VALUES" "(" expr-list ")" { "," "(" expr-list ")" } ")" [ [ "AS" ] identifier ] ;
 
 (* #237 landed the INNER/plain JOIN, LEFT [OUTER] JOIN, and CROSS JOIN
  * subset of this chain; #250 extended it with NATURAL, RIGHT [OUTER]/
@@ -411,7 +413,12 @@ rollback-stmt   ::= "ROLLBACK" [ "TRANSACTION" ] ;
 
 table-name      ::= identifier ;                                          (* V2 *)
 column-name     ::= identifier ;                                          (* V2 *)
-identifier      ::= ID ;   (* bare, "double-quoted", [bracketed], `backticked` -- V2 tokenizer (#60) *)
+identifier      ::= ident-chars                                           (* bare -- see ident-chars below *)
+                   | quoted-identifier ;                                  (* V2 tokenizer (#60) *)
+quoted-identifier ::= '"' { any character, `""` escapes a literal `"` } '"'
+                     | "[" { any character except "]" } "]"
+                     | "`" { any character, "``" escapes a literal "`" } "`" ;
+ident-chars     ::= ( ALPHA | "_" ) { ALPHA | DIGIT | "_" } ;   (* db-core grammar.ebnf SHARED, db-core#565 *)
 
 (* ===================== Future blocks (stubs -- the denominator) =====================
  * V4:  subqueries in FROM (table-valued)
