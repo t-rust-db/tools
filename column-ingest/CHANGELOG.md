@@ -2,6 +2,12 @@
 
 All notable changes to column-ingest. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [0.3.0] - 2026-10-22
+
+### Changed
+
+- db-core pin v0.157.0 (was v0.156.0). zstd pages are decoded by db-core's own decoder (db-core#700), about 2x ruzstd, so a day merge of a zstd table reads its hour files faster.
+
 ## [0.2.0] - 2026-10-22
 
 ### Changed
