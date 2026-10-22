@@ -2,6 +2,12 @@
 
 All notable changes to column-ingest. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [0.2.0] - 2026-10-22
+
+### Changed
+
+- db-core pin v0.156.0 (was v0.137.0). Tables with a sort key record per-file key ranges in manifest version 4, so readers skip files on the key (db-core#589); the writer can write zstd pages (db-core#622), and a day merge keeps the table's codec choice.
+
 ## [0.1.0] - 2026-10-16
 
 ### Added

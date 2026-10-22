@@ -2,11 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
-## [Unreleased]
+## [0.23.0] - 2026-10-22
 
 ### Changed
 
-- db-core pin v0.155.0 (was v0.137.0). Table directories with a sort key (manifest version 4, db-core#589) open again, and their filters skip files and row groups on the key; Parquet decoding is bounded by each column chunk's metadata, and dictionary strings are shared, not copied per row (db-core#671).
+- db-core pin v0.156.0 (was v0.137.0). A free-text search (`LIKE '%…%'`, `ILIKE`, `GLOB`) compiles its pattern once and matches in place, 3-4x faster on a full scan (db-core#691); tables written with zstd read as before (db-core#622).
+- From db-core v0.155.0: Table directories with a sort key (manifest version 4, db-core#589) open again, and their filters skip files and row groups on the key; Parquet decoding is bounded by each column chunk's metadata, and dictionary strings are shared, not copied per row (db-core#671).
 
 
 ## [0.22.1] - 2026-10-21
