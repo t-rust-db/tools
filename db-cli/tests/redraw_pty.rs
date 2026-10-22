@@ -76,9 +76,11 @@ impl Pty {
     }
 
     /// Drain whatever the child has written so far: poll for up to
-    /// `timeout` total, stopping early once a short quiet gap follows some
+    /// `timeout` total, stopping early once a quiet gap follows some
     /// output (the child writes asynchronously in response to each input
-    /// byte, so there's no fixed message boundary to wait for).
+    /// byte, so there's no fixed message boundary to wait for). The gap is
+    /// 50 ms: on a busy machine a redraw can pause for more than 20 ms
+    /// mid-line, and a shorter gap read half a screen.
     fn read_available(&self, timeout: Duration) -> Vec<u8> {
         unsafe {
             let flags = libc::fcntl(self.master, libc::F_GETFL);
@@ -95,7 +97,7 @@ impl Pty {
                 quiet_polls_since_data = 0;
             } else if !out.is_empty() {
                 quiet_polls_since_data += 1;
-                if quiet_polls_since_data >= 2 {
+                if quiet_polls_since_data >= 5 {
                     break;
                 }
             }
