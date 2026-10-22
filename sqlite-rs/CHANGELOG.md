@@ -4,11 +4,11 @@ All notable changes to sqlite-rs. Format follows [Keep a Changelog](https://keep
 
 **Versioning policy:** one minor version per completed plan phase — the version number tells the plan's story, sub-steps stay inside a phase. V1 (READ CORE) = 0.1.0 through 0.4.0. *(History note: internal iterations briefly numbered 0.4.0–0.6.0 were renumbered into the phase scheme on 14 Aug 2026, before any tag or publication of those versions existed.)*
 
-## [Unreleased]
+## [0.26.0] - 2026-10-22
 
 ### Changed
 
-- db-core pin v0.155.0 (was v0.137.0). `DROP TABLE`/`INDEX`/`VIEW` removes the `sqlite_master` row of that type only, so a same-named object of another kind (a trigger) stays (db-core#658).
+- db-core pin v0.156.0 (was v0.137.0). `DROP TABLE`/`INDEX`/`VIEW` removes the `sqlite_master` row of that type only, so a same-named object of another kind (a trigger) stays (db-core#658).
 
 
 ## [0.25.5] - 2026-09-20
