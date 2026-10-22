@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.24.0] - 2026-10-22
+
+### Changed
+
+- db-core pin v0.157.0 (was v0.156.0). zstd pages are decoded by db-core's own decoder (db-core#700), about 2x ruzstd: a full scan of a zstd file is about 8% faster end to end.
+
 ## [0.23.0] - 2026-10-22
 
 ### Changed
