@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [Unreleased]
+
+### Changed
+
+- A Parquet file's row groups load through db-core's `file_segments` (db-core#699), as table directories already did: a filtered query decodes its other columns only at the matching rows, and a top-N fetches only the winning rows. `SELECT id, user_name … WHERE note LIKE '%…%'` on 2M rows no longer pays about 10-30 ms for `user_name`. Needs a db-core release with db-core#702.
+
 ## [0.24.0] - 2026-10-22
 
 ### Changed

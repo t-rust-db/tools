@@ -22,7 +22,9 @@
 use crate::vm::{Batch, Opcode, Program, Segment, Value};
 use db_core::codegen::batch::{self as planner, PlanError, TableStats};
 use db_core::engine::column::table::read_snapshot;
-use db_core::engine::column::{snapshot_files, snapshot_segments, SnapshotSegment};
+use db_core::engine::column::{
+    file_segments, snapshot_files, snapshot_segments, FileSegment, SnapshotSegment,
+};
 use db_core::engine::{EngineError, ErrorKind};
 use db_core::parser::ast::{Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
 use db_core::storage::column::parquet::footer::PhysicalType;
@@ -243,24 +245,10 @@ fn resolve_columns(
         .collect()
 }
 
-/// Every row group of `file` as a [`Segment`] over `columns`.
-fn row_group_segments<'f>(
-    file: &'f ParquetFile<'f>,
-    columns: &[(String, usize, PhysicalType)],
-) -> Vec<RowGroupSegment<'f, 'f>> {
-    (0..file.num_row_groups())
-        .map(|i| RowGroupSegment {
-            file,
-            row_group_index: i,
-            columns: columns.to_vec(),
-        })
-        .collect()
-}
-
 /// One segment of a query's table: a Parquet file's row group, or a table
 /// directory's row group or WAL page.
 enum AnySegment<'a, 'm> {
-    File(RowGroupSegment<'a, 'm>),
+    File(FileSegment<'a, 'm>),
     Dir(SnapshotSegment<'a, 'm>),
 }
 
@@ -332,21 +320,19 @@ impl<'h> Opened<'h> {
     }
 
     /// One segment per row group (and, for a directory, per page) over
-    /// `names`. A directory's segments run `program`'s late
-    /// materialization; a file's decode eagerly, as before.
+    /// `names`, running `program`'s late materialization: a filtered
+    /// query decodes its other columns only at the matching rows
+    /// (db-core#699).
     fn segments<'s>(
         &'s self,
         names: &[String],
         program: &'s Program,
     ) -> Result<Vec<AnySegment<'s, 's>>> {
         Ok(match self {
-            Opened::File(file) => {
-                let columns = resolve_columns(&leaf_columns(file), names)?;
-                row_group_segments(file, &columns)
-                    .into_iter()
-                    .map(AnySegment::File)
-                    .collect()
-            }
+            Opened::File(file) => file_segments(file, names, program)?
+                .into_iter()
+                .map(AnySegment::File)
+                .collect(),
             Opened::Dir(snapshot, files) => snapshot_segments(snapshot, files, names, program)?
                 .into_iter()
                 .map(AnySegment::Dir)
