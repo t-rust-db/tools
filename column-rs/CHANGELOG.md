@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.27.0] - 2026-10-24
+
+### Changed
+
+- db-core pin v0.173.0 (was v0.172.1). From db-core v0.173.0: `ORDER BY` accepts column positions (`ORDER BY 2 DESC, 1`, db-core#752), and an out-of-range position or other unsupported construct is reported as `unsupported at L:C`, not as a syntax error. Dictionary-encoded numeric columns decode straight into typed columns (db-core#753).
+
 ## [0.26.0] - 2026-10-24
 
 ### Changed
