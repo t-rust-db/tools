@@ -743,7 +743,7 @@ enum TableData {
 /// What a query holds for one table while it runs: a file's `ParquetFile`
 /// over the engine's mapping, or a directory's snapshot.
 enum Held<'d> {
-    File(ParquetFile<'d>),
+    File(Box<ParquetFile<'d>>),
     Dir(Snapshot),
 }
 
@@ -856,7 +856,7 @@ impl QueryEngine {
             .find(|t| t.name == name)
             .ok_or_else(|| QueryError::UnknownTable(name.to_string()))?;
         Ok(match &table.data {
-            TableData::File(data) => Held::File(ParquetFile::open(data)?),
+            TableData::File(data) => Held::File(Box::new(ParquetFile::open(data)?)),
             TableData::Dir(path) => Held::Dir(open_snapshot(path)?),
         })
     }
