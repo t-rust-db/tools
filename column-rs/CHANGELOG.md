@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [Unreleased]
+
+### Changed
+
+- A Parquet file's WHERE clause goes to db-core's `file_segments` (db-core#747), which skips row groups its footer statistics rule out (db-core#458). `WHERE id < 100000` over a 20M-row, 163-row-group file reads 1 group: 51 -> 6 ms wall, 428 -> 4 ms CPU. Needs the db-core release with #747 (`file_segments` takes the clause); the pin bump follows it.
+
 ## [0.25.0] - 2026-10-22
 
 ### Changed

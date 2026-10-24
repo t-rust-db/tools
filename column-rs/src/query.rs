@@ -326,10 +326,11 @@ impl<'h> Opened<'h> {
     fn segments<'s>(
         &'s self,
         names: &[String],
+        where_clause: Option<&Expr>,
         program: &'s Program,
     ) -> Result<Vec<AnySegment<'s, 's>>> {
         Ok(match self {
-            Opened::File(file) => file_segments(file, names, program)?
+            Opened::File(file) => file_segments(file, names, where_clause, program)?
                 .into_iter()
                 .map(AnySegment::File)
                 .collect(),
@@ -557,11 +558,12 @@ pub fn run_program(file: &ParquetFile, program: &[Opcode]) -> Result<QueryOutput
     run(
         &Opened::File(file),
         &Program::from_opcodes(program.iter().cloned()),
+        None,
     )
 }
 
-fn run(table: &Opened<'_>, program: &Program) -> Result<QueryOutput> {
-    let segments = table.segments(&program.columns_to_load(), program)?;
+fn run(table: &Opened<'_>, program: &Program, where_clause: Option<&Expr>) -> Result<QueryOutput> {
+    let segments = table.segments(&program.columns_to_load(), where_clause, program)?;
     Ok(engine::run(&segments, program)?)
 }
 
@@ -571,7 +573,11 @@ pub fn execute(file: &ParquetFile, query: &Select) -> Result<QueryOutput> {
 }
 
 fn execute_on(table: &Opened<'_>, query: &Select) -> Result<QueryOutput> {
-    run(table, &planner::compile(query)?)
+    run(
+        table,
+        &planner::compile(query)?,
+        query.where_clause.as_ref(),
+    )
 }
 
 /// Streaming counterpart to [`run`] (db-core#456): hands each emitted
@@ -581,8 +587,13 @@ fn execute_on(table: &Opened<'_>, query: &Select) -> Result<QueryOutput> {
 /// existing convention of writing best-effort and ignoring I/O errors --
 /// so its `Result` only ever carries [`db_core::vm::engine::run_streaming`]'s
 /// own [`VmError::NotStreamable`] back out, unmodified.
-fn run_streaming(table: &Opened<'_>, program: &Program, sink: impl FnMut(Chunk)) -> Result<()> {
-    let segments = table.segments(&program.columns_to_load(), program)?;
+fn run_streaming(
+    table: &Opened<'_>,
+    program: &Program,
+    where_clause: Option<&Expr>,
+    sink: impl FnMut(Chunk),
+) -> Result<()> {
+    let segments = table.segments(&program.columns_to_load(), where_clause, program)?;
     let mut sink = sink;
     Ok(engine::run_streaming(&segments, program, move |chunk| {
         sink(chunk);
@@ -596,7 +607,12 @@ pub fn execute_streaming(
     query: &Select,
     sink: impl FnMut(Chunk),
 ) -> Result<()> {
-    run_streaming(&Opened::File(file), &planner::compile(query)?, sink)
+    run_streaming(
+        &Opened::File(file),
+        &planner::compile(query)?,
+        query.where_clause.as_ref(),
+        sink,
+    )
 }
 
 /// Execute a query with exactly one `JOIN` (INNER or LEFT): the right
@@ -620,7 +636,7 @@ fn execute_joined_on(left: &Opened<'_>, right: &Opened<'_>, query: &Select) -> R
     let plan = planner::compile_join(query, planner::BuildSourceKind::InMemory)?;
     // The probe side decodes eagerly, as a file's row groups always have.
     let eager = Program::from_opcodes([]);
-    let probe = left.segments(&plan.left_columns, &eager)?;
+    let probe = left.segments(&plan.left_columns, None, &eager)?;
     let build = right.whole(&plan.right_columns)?;
     Ok(engine::run_join_segments(
         probe,
@@ -895,7 +911,7 @@ impl QueryEngine {
             ));
         }
         on_event(StreamEvent::Columns(planner::output_column_names(&query)));
-        run_streaming(&table, &program, |chunk| {
+        run_streaming(&table, &program, query.where_clause.as_ref(), |chunk| {
             on_event(StreamEvent::Chunk(chunk))
         })
     }
@@ -1065,6 +1081,31 @@ mod tests {
 
     fn details(nodes: &[PlanNode]) -> Vec<&str> {
         nodes.iter().map(|n| n.detail.as_str()).collect()
+    }
+
+    /// db-core#747: the query's WHERE clause goes to `file_segments`, which
+    /// leaves out row groups its footer statistics rule out. `production`
+    /// has three, with `id` ascending (1..=2048, 2049..=4096, 4097..=5000);
+    /// the counts are what every group would give.
+    #[test]
+    fn where_clause_prunes_row_groups_without_changing_results() {
+        let mut engine = QueryEngine::default();
+        engine
+            .add_table(&fixture_path("production.parquet"), None)
+            .unwrap();
+        for (clause, expected) in [
+            ("id < 100", 99),
+            ("id > 4500", 500),
+            ("id BETWEEN 2000 AND 2100", 101),
+            ("id > 99999", 0),
+            ("id >= 1", 5000),
+        ] {
+            let result = engine
+                .execute(&format!("SELECT COUNT(*) FROM production WHERE {clause}"))
+                .unwrap();
+            let rows: Vec<_> = result.rows().collect();
+            assert_eq!(rows, vec![vec![Value::Int(expected)]], "{clause}");
+        }
     }
 
     #[test]
