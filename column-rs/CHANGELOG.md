@@ -2,6 +2,13 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.26.0] - 2026-10-24
+
+### Changed
+
+- db-core pin v0.172.1 (was v0.159.0). `Held` boxes its `ParquetFile`, which grew past clippy's large-variant limit.
+- A Parquet file's WHERE clause goes to db-core's `file_segments` (db-core#747), which skips row groups its footer statistics rule out (db-core#458). `WHERE id < 100000` over a 20M-row, 163-row-group file reads 1 group: 51 -> 6 ms wall, 428 -> 4 ms CPU. `file_segments` takes the clause from db-core v0.172.1.
+
 ## [0.25.0] - 2026-10-22
 
 ### Changed
