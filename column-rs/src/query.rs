@@ -95,6 +95,10 @@ pub enum QueryError {
     /// The query isn't SQL column-rs reads (tools#74): a syntax error, or
     /// a construct or function the column dialect doesn't support.
     Parse(db_core::parser::ParseError),
+    /// A joined query whose column names don't resolve (db-core#778): a bare
+    /// name that several tables have, or `t.*` for a table the query does
+    /// not name.
+    JoinColumns(planner::JoinColumnsError),
 }
 
 impl fmt::Display for QueryError {
@@ -135,6 +139,7 @@ impl fmt::Display for QueryError {
             QueryError::TableDirectory(why) => write!(f, "table directory: {why}"),
             QueryError::Lookup(_, why) => write!(f, "{why}"),
             QueryError::Parse(e) => write!(f, "{e}"),
+            QueryError::JoinColumns(e) => write!(f, "{e}"),
         }
     }
 }
@@ -164,6 +169,15 @@ impl From<PlanError> for QueryError {
             PlanError::NoJoinClause => QueryError::NoJoinClause,
             PlanError::Internal(msg) => QueryError::PlannerInvariant(msg),
             PlanError::ScopeClauseUnsupported => QueryError::ScopeClauseUnsupported,
+        }
+    }
+}
+
+impl From<planner::JoinColumnsError> for QueryError {
+    fn from(e: planner::JoinColumnsError) -> Self {
+        match e {
+            planner::JoinColumnsError::Plan(e) => e.into(),
+            other => QueryError::JoinColumns(other),
         }
     }
 }
@@ -1344,23 +1358,22 @@ impl QueryEngine {
             .map(|join| join_table(join).and_then(|name| self.hold(name)))
             .transpose()?;
         let right = right_held.as_ref().map(Held::open).transpose()?;
-        let schema: Vec<String> = match (first_join(&query), &right) {
+        // A join resolves every name the way SQLite and DuckDB do
+        // (db-core#778): `*`/`t.*` in the order written, a bare name the
+        // one table that has it, an error when several do. The result's
+        // headers are what the query wrote, not the qualified names.
+        let (query, headers) = match (first_join(&query), &right) {
             (Some(join), Some(right)) => {
-                let right_name = join_table(join)?;
-                main.column_names()?
-                    .iter()
-                    .map(|c| format!("{from}.{c}"))
-                    .chain(
-                        right
-                            .column_names()?
-                            .iter()
-                            .map(|c| format!("{right_name}.{c}")),
-                    )
-                    .collect()
+                let tables = vec![
+                    (from.to_string(), main.column_names()?),
+                    (join_table(join)?.to_string(), right.column_names()?),
+                ];
+                let planner::ResolvedJoin { select, headers } =
+                    planner::resolve_join_columns(&query, &tables)?;
+                (select, Some(headers))
             }
-            _ => main.column_names()?,
+            _ => (planner::expand_star(&query, &main.column_names()?)?, None),
         };
-        let query = planner::expand_star(&query, &schema)?;
 
         let has_window = query.columns.iter().any(is_window_column);
         let rows = if let Some(subquery) = in_subquery(&query) {
@@ -1403,7 +1416,7 @@ impl QueryEngine {
 
         Ok((
             QueryResult {
-                columns: planner::output_column_names(&query),
+                columns: headers.unwrap_or_else(|| planner::output_column_names(&query)),
                 output: rows,
             },
             types,

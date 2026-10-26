@@ -1514,3 +1514,151 @@ fn oracle_concat_and_unary_minus_match_duckdb() {
         assert_eq!(row[2].as_f64().unwrap() as i64, *expr);
     }
 }
+
+// --- Join name resolution (db-core#778): the rule SQLite and DuckDB apply
+// to the bare column names of a join, over two Parquet files. `orders`
+// (id, region_key) and `production` (region, amount, id) share only `id`.
+
+/// DuckDB's answer to `sql`: its CSV, or `Err` with its message; `None`
+/// when `duckdb` is not on PATH.
+fn duckdb_try(sql: &str) -> Option<Result<String, String>> {
+    let output = Command::new("duckdb")
+        .args(["-csv", "-c", sql])
+        .output()
+        .ok()?;
+    Some(if output.status.success() {
+        Ok(String::from_utf8(output.stdout).expect("duckdb output is valid UTF-8"))
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).into_owned())
+    })
+}
+
+/// A cell as text, numbers normalised so `100.0` and `100` compare equal.
+fn norm(cell: &str) -> String {
+    cell.parse::<f64>()
+        .map_or_else(|_| cell.to_string(), |f| f.to_string())
+}
+
+/// `sql` through DuckDB, `orders` and `production` the two fixtures:
+/// `(header cells, rows of normalised cells)`.
+fn duckdb_join_rows(sql: &str) -> Option<(Vec<String>, Vec<Vec<String>>)> {
+    let orders = fixture_path("orders.parquet");
+    let production = fixture_path("production.parquet");
+    let wrapped = format!(
+        "CREATE VIEW orders AS SELECT * FROM '{orders}'; \
+         CREATE VIEW production AS SELECT * FROM '{production}'; {sql}"
+    );
+    let csv = duckdb_try(&wrapped)?.unwrap_or_else(|e| panic!("duckdb: {sql}: {e}"));
+    let header = csv.lines().next()?.split(',').map(str::to_string).collect();
+    let rows = parse_csv_rows(&csv)
+        .into_iter()
+        .map(|r| r.iter().map(|c| norm(c)).collect())
+        .collect();
+    Some((header, rows))
+}
+
+fn join_engine() -> column_rs::query::QueryEngine {
+    use std::path::PathBuf;
+    column_rs::query::QueryEngine::open_many(&[
+        PathBuf::from(fixture_path("orders.parquet")),
+        PathBuf::from(fixture_path("production.parquet")),
+    ])
+    .unwrap()
+}
+
+/// column-rs's headers and rows for `sql`, numbers normalised.
+fn column_rs_join_rows(sql: &str) -> (Vec<String>, Vec<Vec<String>>) {
+    let result = join_engine()
+        .execute(sql)
+        .unwrap_or_else(|e| panic!("column-rs: {sql}: {e}"));
+    let rows = result
+        .rows()
+        .map(|r| r.iter().map(|v| norm(&v.to_string())).collect())
+        .collect();
+    (result.columns.clone(), rows)
+}
+
+/// Queries both engines answer; headers and rows must agree.
+#[test]
+fn oracle_join_name_resolution_matches_duckdb() {
+    let queries = [
+        // a name only one table has, whichever is written first
+        "SELECT region_key, amount FROM orders JOIN production ON orders.id = production.id ORDER BY orders.id",
+        "SELECT region_key, amount FROM production JOIN orders ON production.id = orders.id ORDER BY orders.id",
+        // a USING key is the FROM table's value
+        "SELECT id, region_key FROM orders JOIN production USING (id) ORDER BY id",
+        "SELECT id FROM production JOIN orders USING (id) ORDER BY id DESC",
+        // `*` and `t.*`, the USING key once under `*`
+        "SELECT * FROM orders JOIN production USING (id) ORDER BY id",
+        "SELECT * FROM orders JOIN production ON orders.id = production.id ORDER BY orders.id",
+        "SELECT * FROM production JOIN orders ON production.id = orders.id ORDER BY orders.id",
+        "SELECT orders.* FROM orders JOIN production ON orders.id = production.id ORDER BY orders.id",
+        "SELECT production.* FROM orders JOIN production USING (id) ORDER BY id",
+        "SELECT orders.*, amount FROM orders JOIN production ON orders.id = production.id ORDER BY orders.id",
+        // a bare name in WHERE, GROUP BY and ORDER BY
+        "SELECT region_key, count(*) AS n FROM orders JOIN production ON orders.id = production.id WHERE amount >= 0 GROUP BY region_key ORDER BY region_key",
+    ];
+    for sql in queries {
+        let Some((want_header, want_rows)) = duckdb_join_rows(sql) else {
+            eprintln!("duckdb not found on PATH; skipping oracle test");
+            return;
+        };
+        let (header, rows) = column_rs_join_rows(sql);
+        assert_eq!(header, want_header, "headers of {sql}");
+        assert_eq!(rows, want_rows, "rows of {sql}");
+        assert!(!rows.is_empty(), "{sql} should return rows");
+    }
+}
+
+/// Queries both engines refuse: a bare name two tables have is ambiguous
+/// (unless the join is `USING` it), and so is an unknown one.
+#[test]
+fn oracle_join_refusals_match_duckdb() {
+    let queries = [
+        "SELECT id FROM orders JOIN production ON orders.id = production.id",
+        "SELECT region_key FROM orders JOIN production ON orders.id = production.id WHERE id = 2",
+        "SELECT region_key FROM orders JOIN production ON orders.id = production.id ORDER BY id",
+        "SELECT nope FROM orders JOIN production USING (id)",
+        "SELECT missing.* FROM orders JOIN production USING (id)",
+    ];
+    for sql in queries {
+        let orders = fixture_path("orders.parquet");
+        let production = fixture_path("production.parquet");
+        let wrapped = format!(
+            "CREATE VIEW orders AS SELECT * FROM '{orders}'; \
+             CREATE VIEW production AS SELECT * FROM '{production}'; {sql}"
+        );
+        if let Some(duck) = duckdb_try(&wrapped) {
+            assert!(duck.is_err(), "duckdb should refuse {sql}");
+        }
+        assert!(
+            join_engine().execute(sql).is_err(),
+            "column-rs should refuse {sql}"
+        );
+    }
+}
+
+/// The ambiguity message says which column and which tables, and `--pipe`
+/// reports it as its own kind.
+#[test]
+fn an_ambiguous_join_column_names_the_column_and_the_tables() {
+    let sql = "SELECT id FROM orders JOIN production ON orders.id = production.id";
+    let err = join_engine().execute(sql).map(|_| ()).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "ambiguous column name: id (in orders, production); qualify it with its table"
+    );
+    let request = format!(r#"{{"sql":"{sql}"}}"#);
+    let mut out = Vec::new();
+    column_rs::pipe::run(&join_engine(), request.as_bytes(), &mut out).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains(r#""kind":"ambiguous_column""#), "{out}");
+}
+
+/// A single-table query is unaffected: a bare name is still the table's.
+#[test]
+fn a_single_table_query_still_takes_bare_names() {
+    let (header, rows) = column_rs_join_rows("SELECT id, region_key FROM orders ORDER BY id");
+    assert_eq!(header, vec!["id", "region_key"]);
+    assert!(!rows.is_empty());
+}

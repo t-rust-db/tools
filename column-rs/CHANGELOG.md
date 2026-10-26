@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.30.0] - 2026-10-26
+
+### Changed
+
+- Joins resolve column names like SQLite and DuckDB: a name only one table has is that table's, a name several have is an `ambiguous column name` error (a `USING` key is the `FROM` table's), and `*`/`t.*` list each table's columns in the order written, a `USING` key once. A join that silently read a bare name from the `FROM` table now reports the ambiguity. `--pipe` reports it as `ambiguous_column` (db-core#778).
+
 ## [0.29.0] - 2026-10-26
 
 ### Added
