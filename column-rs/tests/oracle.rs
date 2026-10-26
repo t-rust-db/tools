@@ -648,6 +648,41 @@ fn query_engine_runs_join_across_two_loaded_tables() {
     assert_eq!(result.columns, vec!["orders.id", "regions.budget"]);
 }
 
+/// tools#71: a second `JOIN` between Parquet tables is refused, not
+/// dropped -- the batch planner joins two tables, and used to answer the
+/// two-table query in its place, in a run, a plan and an opcode listing.
+#[test]
+fn query_engine_refuses_a_second_parquet_join() {
+    use column_rs::query::QueryEngine;
+    use std::path::PathBuf;
+
+    let paths = vec![
+        PathBuf::from(fixture_path("orders.parquet")),
+        PathBuf::from(fixture_path("regions.parquet")),
+        PathBuf::from(fixture_path("region.parquet")),
+    ];
+    let engine = QueryEngine::open_many(&paths).unwrap();
+    let sql = "SELECT COUNT(*) FROM orders JOIN regions ON orders.region_key = regions.key \
+               JOIN region ON regions.key = region.region";
+
+    let expected = "this query has 2 joins";
+    let Err(err) = engine.execute(sql) else {
+        panic!("{sql}: expected an error")
+    };
+    assert!(err.to_string().contains(expected), "{err}");
+    let parsed = sql::parse(sql).unwrap();
+    let err = engine.explain(&parsed).unwrap_err().to_string();
+    assert!(err.contains(expected), "{err}");
+    let err = engine.explain_opcodes(&parsed).unwrap_err().to_string();
+    assert!(err.contains(expected), "{err}");
+
+    let request = format!(r#"{{"sql":"{sql}"}}"#);
+    let mut out = Vec::new();
+    column_rs::pipe::run(&engine, request.as_bytes(), &mut out).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains(r#""kind":"unsupported""#), "{out}");
+}
+
 /// #94: loading the same table name twice is a clear error, not a silent
 /// replace.
 #[test]
