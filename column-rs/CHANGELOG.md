@@ -2,6 +2,11 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.29.0] - 2026-10-26
+
+### Added
+- A join on a `UINT_64` key above `i64::MAX` (a session id after 2038) matches on both sides, in Parquet files and table directories: a join key reads as its signed bit pattern, the same one a SQLite row key is stored as. A `UINT_64` outside a join key above `i64::MAX` is still an error (db-core#786, #600).
+
 ## [0.28.3] - 2026-10-26
 
 ### Fixed
