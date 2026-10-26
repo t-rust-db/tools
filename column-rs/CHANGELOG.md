@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.28.2] - 2026-10-26
+
+### Fixed
+
+- Compiles against db-core releases that add a `Value` variant (`Value::Bytes`, db-core#603); such values are treated as NULL.
+
 ## [0.28.1] - 2026-10-26
 
 ### Fixed
