@@ -116,7 +116,7 @@ impl fmt::Display for QueryError {
             QueryError::TooManyJoins(n) => write!(
                 f,
                 "column-rs joins two Parquet tables; this query has {n} joins \
-                 (multi-table joins: t-rust-db/db-core#782)"
+                 (a star join around SQLite lookup tables may name more)"
             ),
             QueryError::StarWithAggregation => write!(
                 f,
@@ -876,8 +876,9 @@ impl Held<'_> {
 enum LookupEngine {
     /// Only SQLite tables.
     Row(RowEngine),
-    /// One Parquet file joined to SQLite tables (db-core#598). Boxed: it
-    /// holds a row engine and a batch engine.
+    /// Parquet files and table directories joined to SQLite tables
+    /// (db-core#598, #772, #782). Boxed: it holds a row engine and the
+    /// column engines.
     Cross(Box<CrossModeEngine>),
 }
 
@@ -1163,50 +1164,36 @@ impl QueryEngine {
             .into_iter()
             .filter(|t| !matches!(t.data, TableData::Lookup))
             .collect();
-        match columns.as_slice() {
-            [] => Ok(Some(LookupEngine::Row(
+        if columns.is_empty() {
+            return Ok(Some(LookupEngine::Row(
                 RowEngine::open(lookup).map_err(lookup_error)?,
-            ))),
-            [table] => match &table.data {
-                TableData::File(_) => {
-                    let stem = table.path.file_stem().and_then(|s| s.to_str());
-                    if stem != Some(table.name.as_str()) {
-                        return Err(QueryError::Lookup(
-                            ErrorKind::Unsupported,
-                            format!(
-                                "{} is loaded as {}; joined to SQLite tables, a Parquet table \
-                             is named after its file ({})",
-                                table.path.display(),
-                                table.name,
-                                stem.unwrap_or("?")
-                            ),
-                        ));
-                    }
-                    Ok(Some(LookupEngine::Cross(Box::new(
-                        CrossModeEngine::open_column_sqlite(&table.path, lookup)
-                            .map_err(lookup_error)?,
-                    ))))
-                }
-                _ => Err(QueryError::Lookup(
+            )));
+        }
+        // db-core names a Parquet table after its file's stem and a table
+        // directory after the directory (db-core#782).
+        for table in &columns {
+            let own = match table.data {
+                TableData::File(_) => table.path.file_stem(),
+                _ => table.path.file_name(),
+            }
+            .and_then(|s| s.to_str());
+            if own != Some(table.name.as_str()) {
+                return Err(QueryError::Lookup(
                     ErrorKind::Unsupported,
                     format!(
-                        "joining the table directory {} to SQLite tables is not supported yet \
-                     (t-rust-db/db-core#772); join a Parquet file",
-                        table.name
+                        "{} is loaded as {}; joined to SQLite tables, a table is named \
+                         after its file or directory ({})",
+                        table.path.display(),
+                        table.name,
+                        own.unwrap_or("?")
                     ),
-                )),
-            },
-            more => Err(QueryError::Lookup(
-                ErrorKind::Unsupported,
-                format!(
-                    "a query joins one Parquet table to SQLite tables; this one names {}",
-                    more.iter()
-                        .map(|t| t.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            )),
+                ));
+            }
         }
+        let paths: Vec<&std::path::Path> = columns.iter().map(|t| t.path.as_path()).collect();
+        Ok(Some(LookupEngine::Cross(Box::new(
+            CrossModeEngine::open_column_tables_sqlite(&paths, lookup).map_err(lookup_error)?,
+        ))))
     }
 
     /// `EXPLAIN QUERY PLAN` for a query that names a SQLite table, or

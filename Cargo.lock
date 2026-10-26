@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "column-rs"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "db-cli",
  "db-core",
@@ -431,8 +431,8 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.182.0"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.182.0#bdb7b8530ac3fc1cbf7ead4a5d1b3c1f6b280fdf"
+version = "0.188.0"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.188.0#ec5cbcd33b61612a18336e6067ac086e1689d934"
 dependencies = [
  "memmap2",
  "ruzstd",

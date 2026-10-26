@@ -102,9 +102,14 @@ fn table_info_reports_notnull_default_and_pk() {
 /// `WITHOUT ROWID` composite-key columns are implicitly `NOT NULL`, and
 /// `pk` carries the column's 1-based position within the key (not a
 /// bare boolean) — verified against a real `sqlite3` (see
-/// `pragma_query.rs`'s module-level research notes).
+/// `pragma_query.rs`'s module-level research notes). Only the oracle can
+/// seed the table: sqlite-rs refuses to create `WITHOUT ROWID` tables.
 #[test]
 fn table_info_without_rowid_composite_pk() {
+    if pinned_oracle().is_none() {
+        eprintln!("skipping table_info_without_rowid_composite_pk: no pinned oracle sqlite3");
+        return;
+    }
     let db = seed_db(
         "table-info-wr",
         &["CREATE TABLE w (x INTEGER, y TEXT, PRIMARY KEY(x, y)) WITHOUT ROWID"],
