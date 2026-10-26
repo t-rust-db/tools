@@ -42,7 +42,8 @@ pub enum EngineHandle {
     Stream(StreamEngine),
     /// A table directory: its Parquet files and WAL pages as one batch
     /// table, read from a fresh snapshot on every query.
-    Table(TableEngine),
+    // Boxed: a table directory's reader is much larger than the others (clippy::large_enum_variant).
+    Table(Box<TableEngine>),
 }
 
 impl EngineHandle {
@@ -126,7 +127,7 @@ impl EngineHandle {
 /// file extensions aren't a place users expect case to matter.
 pub fn open_by_extension(path: &Path) -> Result<EngineHandle, EngineError> {
     if path.is_dir() && path.join(MANIFEST_FILE).is_file() {
-        return TableEngine::open(path).map(EngineHandle::Table);
+        return TableEngine::open(path).map(|e| EngineHandle::Table(Box::new(e)));
     }
     let ext = path
         .extension()

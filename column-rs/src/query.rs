@@ -21,18 +21,21 @@
 
 use crate::vm::{Batch, Opcode, Program, Segment, Value};
 use db_core::codegen::batch::{self as planner, PlanError, TableStats};
-use db_core::engine::column::table::read_snapshot;
+use db_core::engine::column::table::read_snapshot_with_bit_patterns;
 use db_core::engine::column::{
-    file_segments, snapshot_files, snapshot_segments, FileSegment, SnapshotSegment,
+    file_segments_with_bit_patterns, snapshot_files, snapshot_segments_with_bit_patterns,
+    FileSegment, SnapshotSegment,
 };
 use db_core::engine::resolve::CrossModeEngine;
 use db_core::engine::row::RowEngine;
 use db_core::engine::{Cell, Engine, EngineError, ErrorKind};
-use db_core::parser::ast::{ExplainBody, Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
+use db_core::parser::ast::{
+    ExplainBody, Expr, ExprKind, Join, JoinConstraint, JoinOp, ResultColumn, Select,
+};
 use db_core::parser::row::ParseOutcome;
 use db_core::parser::Explain;
 use db_core::storage::column::parquet::footer::PhysicalType;
-use db_core::storage::column::{decode_column_full, Decoded};
+use db_core::storage::column::{decode_column_full, decode_column_full_bit_pattern, Decoded};
 use db_core::storage::ingest::{Snapshot, MANIFEST_FILE};
 use db_core::storage::{ParquetFile, Vfs, VfsFile};
 use db_core::vm::batch::{Chunk, QueryOutput, ScanSource, VmError};
@@ -200,6 +203,9 @@ struct RowGroupSegment<'a, 'm> {
     file: &'m ParquetFile<'a>,
     row_group_index: usize,
     columns: Vec<(String, usize, PhysicalType)>,
+    /// Columns (by batch key) whose `UINT_64` above `i64::MAX` reads as its
+    /// signed bit pattern instead of an error (db-core#786): join keys.
+    bit_pattern: Vec<String>,
 }
 
 impl<'a, 'm> Segment for RowGroupSegment<'a, 'm> {
@@ -227,11 +233,14 @@ impl<'a, 'm> Segment for RowGroupSegment<'a, 'm> {
         let num_rows = rg.num_rows() as usize;
         let mut batch = Batch::new(num_rows);
         for (name, index, physical_type) in &self.columns {
+            let decode = if self.bit_pattern.contains(name) {
+                decode_column_full_bit_pattern
+            } else {
+                decode_column_full
+            };
             let Decoded::Column(column) =
-                decode_column_full(&rg, *index, *physical_type).map_err(|e| {
-                    VmError::SegmentLoad {
-                        reason: format!("row group {}: column `{name}`: {e}", self.row_group_index),
-                    }
+                decode(&rg, *index, *physical_type).map_err(|e| VmError::SegmentLoad {
+                    reason: format!("row group {}: column `{name}`: {e}", self.row_group_index),
                 })?;
             batch = batch.with_typed_column(name.clone(), column);
         }
@@ -355,26 +364,39 @@ impl<'h> Opened<'h> {
         names: &[String],
         where_clause: Option<&Expr>,
         program: &'s Program,
+        bit_pattern: &[String],
     ) -> Result<Vec<AnySegment<'s, 's>>> {
         Ok(match self {
-            Opened::File(file) => file_segments(file, names, where_clause, program)?
-                .into_iter()
-                .map(AnySegment::File)
-                .collect(),
-            Opened::Dir(snapshot, files) => snapshot_segments(snapshot, files, names, program)?
-                .into_iter()
-                .map(AnySegment::Dir)
-                .collect(),
+            Opened::File(file) => {
+                file_segments_with_bit_patterns(file, names, where_clause, program, bit_pattern)?
+                    .into_iter()
+                    .map(AnySegment::File)
+                    .collect()
+            }
+            Opened::Dir(snapshot, files) => {
+                snapshot_segments_with_bit_patterns(snapshot, files, names, program, bit_pattern)?
+                    .into_iter()
+                    .map(AnySegment::Dir)
+                    .collect()
+            }
         })
     }
 
-    /// The whole table's `names`, as one batch.
-    fn whole(&self, names: &[String]) -> Result<Batch> {
+    /// The whole table's `names`, as one batch. The `bit_pattern` columns
+    /// (join keys) read a `UINT_64` above `i64::MAX` as its signed bit
+    /// pattern instead of an error (db-core#786).
+    fn whole(&self, names: &[String], bit_pattern: &[String]) -> Result<Batch> {
         match self {
-            Opened::File(file) => {
-                read_whole_table(file, &resolve_columns(&leaf_columns(file), names)?)
-            }
-            Opened::Dir(snapshot, _) => Ok(read_snapshot(snapshot, names)?),
+            Opened::File(file) => read_whole_table(
+                file,
+                &resolve_columns(&leaf_columns(file), names)?,
+                bit_pattern,
+            ),
+            Opened::Dir(snapshot, _) => Ok(read_snapshot_with_bit_patterns(
+                snapshot,
+                names,
+                bit_pattern,
+            )?),
         }
     }
 
@@ -488,6 +510,7 @@ impl<'h> Opened<'h> {
 fn read_whole_table(
     file: &ParquetFile,
     columns: &[(String, usize, PhysicalType)],
+    bit_pattern: &[String],
 ) -> Result<Batch> {
     // Accumulate per column, then hand each finished `Vec` to the batch
     // (db-core 0.76.2 shares columns as `Arc<Vec<Value>>`, so they are
@@ -502,6 +525,7 @@ fn read_whole_table(
             file,
             row_group_index,
             columns: columns.to_vec(),
+            bit_pattern: bit_pattern.to_vec(),
         };
         let batch = segment.load()?;
         num_rows += batch.num_rows;
@@ -598,7 +622,7 @@ pub fn run_program(file: &ParquetFile, program: &[Opcode]) -> Result<QueryOutput
 }
 
 fn run(table: &Opened<'_>, program: &Program, where_clause: Option<&Expr>) -> Result<QueryOutput> {
-    let segments = table.segments(&program.columns_to_load(), where_clause, program)?;
+    let segments = table.segments(&program.columns_to_load(), where_clause, program, &[])?;
     Ok(engine::run(&segments, program)?)
 }
 
@@ -628,7 +652,7 @@ fn run_streaming(
     where_clause: Option<&Expr>,
     sink: impl FnMut(Chunk),
 ) -> Result<()> {
-    let segments = table.segments(&program.columns_to_load(), where_clause, program)?;
+    let segments = table.segments(&program.columns_to_load(), where_clause, program, &[])?;
     let mut sink = sink;
     Ok(engine::run_streaming(&segments, program, move |chunk| {
         sink(chunk);
@@ -667,12 +691,38 @@ pub fn execute_joined(
     execute_joined_on(&Opened::File(left_file), &Opened::File(right_file), query)
 }
 
+/// The `columns` named in a `JOIN`'s `ON`/`USING`: the ones that may read a
+/// `UINT_64` above `i64::MAX` as its signed bit pattern (db-core#786).
+fn join_key_columns(select: &Select, columns: &[String]) -> Vec<String> {
+    let mut named: Vec<String> = Vec::new();
+    for join in select.from.iter().flat_map(|f| &f.joins) {
+        match &join.constraint {
+            Some(JoinConstraint::On(expr)) => named.extend(planner::bool_expr_columns(expr)),
+            Some(JoinConstraint::Using(names)) => named.extend(names.iter().cloned()),
+            None => {}
+        }
+    }
+    columns
+        .iter()
+        .filter(|c| {
+            named.iter().any(|n| {
+                n.eq_ignore_ascii_case(c) || n.eq_ignore_ascii_case(planner::split_qualified(c).1)
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 fn execute_joined_on(left: &Opened<'_>, right: &Opened<'_>, query: &Select) -> Result<QueryOutput> {
     let plan = planner::compile_join(query, planner::BuildSourceKind::InMemory)?;
     // The probe side decodes eagerly, as a file's row groups always have.
     let eager = Program::from_opcodes([]);
-    let probe = left.segments(&plan.left_columns, None, &eager)?;
-    let build = right.whole(&plan.right_columns)?;
+    // A join key is only compared for equality, so a `UINT_64` above
+    // `i64::MAX` reads as its signed bit pattern on both sides (db-core#786).
+    let left_keys = join_key_columns(query, &plan.left_columns);
+    let right_keys = join_key_columns(query, &plan.right_columns);
+    let probe = left.segments(&plan.left_columns, None, &eager, &left_keys)?;
+    let build = right.whole(&plan.right_columns, &right_keys)?;
     Ok(engine::run_join_segments(
         probe,
         ScanSource::InMemory(build),
@@ -713,7 +763,7 @@ fn execute_semi_join_on(
     if !needed.contains(&plan.key_column) {
         needed.push(plan.key_column.clone());
     }
-    let batch = main.whole(&needed)?;
+    let batch = main.whole(&needed, &[])?;
     let filtered = engine::semi_filter(&batch, &plan.key_column, &allowed)?;
 
     let segments = [InMemorySegment(filtered)];
@@ -729,7 +779,7 @@ pub fn execute_windowed(file: &ParquetFile, query: &Select) -> Result<QueryOutpu
 
 fn execute_windowed_on(table: &Opened<'_>, query: &Select) -> Result<QueryOutput> {
     let program = planner::compile_window(query)?;
-    let batch = table.whole(&program.columns_to_load())?;
+    let batch = table.whole(&program.columns_to_load(), &[])?;
     let segments = [InMemorySegment(batch)];
     Ok(engine::run(&segments, &program)?)
 }
