@@ -286,8 +286,9 @@ pub(crate) fn is_table_dir(path: &Path) -> bool {
 /// What a view reads (the one-shot and `--follow` modes, a TUI pane): a
 /// log file's stream engine, or a table directory's snapshot reader.
 pub(crate) enum Source {
-    Stream(StreamEngine),
-    Table(TableEngine),
+    // Both boxed: a table directory's reader is much larger than the others (clippy::large_enum_variant).
+    Stream(Box<StreamEngine>),
+    Table(Box<TableEngine>),
 }
 
 /// The table name loglume's SQL reads (`SELECT * FROM log ...`), which a
@@ -298,10 +299,10 @@ impl Source {
     pub(crate) fn open(path: &Path) -> io::Result<Self> {
         if is_table_dir(path) {
             TableEngine::open(path)
-                .map(Source::Table)
+                .map(|e| Source::Table(Box::new(e)))
                 .map_err(engine_err)
         } else {
-            open_engine(path).map(Source::Stream)
+            open_engine(path).map(|e| Source::Stream(Box::new(e)))
         }
     }
 
