@@ -28,7 +28,9 @@ use db_core::engine::column::{
 use db_core::engine::resolve::CrossModeEngine;
 use db_core::engine::row::RowEngine;
 use db_core::engine::{Cell, Engine, EngineError, ErrorKind};
-use db_core::parser::ast::{Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
+use db_core::parser::ast::{ExplainBody, Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
+use db_core::parser::row::ParseOutcome;
+use db_core::parser::Explain;
 use db_core::storage::column::parquet::footer::PhysicalType;
 use db_core::storage::column::{decode_column_full, Decoded};
 use db_core::storage::ingest::{Snapshot, MANIFEST_FILE};
@@ -87,6 +89,9 @@ pub enum QueryError {
     /// kind and message, or why column-rs can't hand the query to db-core
     /// (`Unsupported`).
     Lookup(ErrorKind, String),
+    /// The query isn't SQL column-rs reads (tools#74): a syntax error, or
+    /// a construct or function the column dialect doesn't support.
+    Parse(db_core::parser::ParseError),
 }
 
 impl fmt::Display for QueryError {
@@ -126,6 +131,7 @@ impl fmt::Display for QueryError {
             QueryError::NotStreamable(reason) => write!(f, "cannot stream this query: {reason}"),
             QueryError::TableDirectory(why) => write!(f, "table directory: {why}"),
             QueryError::Lookup(_, why) => write!(f, "{why}"),
+            QueryError::Parse(e) => write!(f, "{e}"),
         }
     }
 }
@@ -1039,6 +1045,41 @@ impl QueryEngine {
     /// to its cross-mode engine (db-core#598), which builds the SQLite
     /// side, probes the file row group by row group and prunes row groups
     /// from a filter on a lookup table.
+    /// Parse `sql` in the column dialect, or, when that refuses it, as
+    /// [`Self::parse_lookup`] reads it.
+    pub fn parse(&self, sql: &str) -> Result<Select> {
+        match db_core::parser::parse(sql) {
+            Ok(query) => Ok(query),
+            Err(e) => match self.parse_lookup(sql) {
+                Some((Explain::None, query)) => Ok(query),
+                _ => Err(QueryError::Parse(e)),
+            },
+        }
+    }
+
+    /// `sql` (`EXPLAIN [QUERY PLAN]` included) in sqlite3's own grammar, if
+    /// every table it names is a SQLite table (tools#74). Such a query runs
+    /// in db-core's row engine, which takes sqlite3's functions, so the
+    /// column dialect's narrower list doesn't apply to it.
+    pub fn parse_lookup(&self, sql: &str) -> Option<(Explain, Select)> {
+        let (explain, query) = match db_core::parser::row::parse_explain(sql) {
+            ParseOutcome::Accepted(explain) => match explain.body {
+                ExplainBody::Select(query) if explain.query_plan => (Explain::QueryPlan, *query),
+                ExplainBody::Select(query) => (Explain::Opcodes, *query),
+                _ => return None,
+            },
+            _ => match db_core::parser::row::parse_select(sql) {
+                ParseOutcome::Accepted(query) => (Explain::None, *query),
+                _ => return None,
+            },
+        };
+        let lookups_only = named_tables(&query)
+            .ok()?
+            .iter()
+            .all(|name| matches!(self.table(name).map(|t| &t.data), Ok(TableData::Lookup)));
+        lookups_only.then_some((explain, query))
+    }
+
     fn lookup_engine(&self, query: &Select) -> Result<Option<LookupEngine>> {
         let mut named: Vec<&Table> = Vec::new();
         for name in named_tables(query)? {
@@ -1162,8 +1203,7 @@ impl QueryEngine {
         sql: &str,
         mut on_event: impl FnMut(StreamEvent),
     ) -> Result<()> {
-        let query =
-            db_core::parser::parse(sql).map_err(|e| QueryError::UnknownColumn(e.to_string()))?;
+        let query = self.parse(sql)?;
         let from = from_table(&query)?;
         if first_join(&query).is_some() {
             return Err(QueryError::NotStreamable("query has a JOIN".to_string()));
@@ -1217,8 +1257,7 @@ impl QueryEngine {
         &self,
         sql: &str,
     ) -> Result<(QueryResult, Vec<Option<crate::pipe::ColType>>)> {
-        let query =
-            db_core::parser::parse(sql).map_err(|e| QueryError::UnknownColumn(e.to_string()))?;
+        let query = self.parse(sql)?;
 
         // A query that names a SQLite table runs in db-core (tools#69).
         // `--pipe` infers its column types from the values.

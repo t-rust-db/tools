@@ -166,6 +166,60 @@ fn a_lookup_table_alone_is_queried_in_the_row_engine() {
     );
 }
 
+/// tools#74: a query over SQLite tables alone is read as sqlite3 reads it,
+/// functions the column dialect lacks included; one that names a Parquet
+/// table is still held to the column dialect.
+#[test]
+fn a_lookup_only_query_takes_sqlite3_functions() {
+    let engine = engine();
+    assert_eq!(
+        rows(
+            &engine,
+            "SELECT UPPER(label), ROUND(id * 1.5, 1) FROM labels WHERE id <= 2 ORDER BY id"
+        ),
+        [
+            vec![text("ONE"), Value::Float(1.5)],
+            vec![text("TWO"), Value::Float(3.0)],
+        ]
+    );
+    for sql in [
+        "SELECT UPPER(region) FROM production",
+        "SELECT UPPER(labels.label) FROM production JOIN labels ON production.id = labels.id",
+    ] {
+        let message = error(&engine, sql);
+        assert_eq!(
+            message, "unsupported at 1:8: unknown function UPPER",
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn cli_reads_a_lookup_only_query_and_its_plan() {
+    for (sql, expected) in [
+        ("SELECT UPPER(label) FROM labels WHERE id = 1", "ONE"),
+        (
+            "EXPLAIN QUERY PLAN SELECT UPPER(label) FROM labels",
+            "SCAN labels",
+        ),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_column-rs"))
+            .arg("-c")
+            .arg(sql)
+            .arg(fixture("production.parquet"))
+            .arg(fixture("lookups.db"))
+            .output()
+            .expect("spawn column-rs");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{sql}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(stdout.contains(expected), "{sql}: {stdout}");
+    }
+}
+
 #[test]
 fn queries_without_a_lookup_table_are_unchanged() {
     let engine = engine();

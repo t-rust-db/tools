@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.28.3] - 2026-10-26
+
+### Fixed
+- A query over SQLite tables alone is read as sqlite3 reads it, so the row engine's functions (`UPPER`, `ROUND`, `ABS`, ...) work there, in a query and in `EXPLAIN [QUERY PLAN]`; a query that names a Parquet table is still held to the column dialect (#74).
+- A query that doesn't parse is no longer reported as an unknown column: `--pipe` gives it kind `parse` (syntax error) or `unsupported` (a construct or function column-rs doesn't run), and the message has no `unknown column:` prefix (#74).
+
 ## [0.28.2] - 2026-10-26
 
 ### Fixed
