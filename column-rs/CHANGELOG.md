@@ -2,6 +2,13 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.31.0] - 2026-10-26
+
+### Added
+
+- A query joining SQLite lookup tables may name a table directory, including rows still in its live pages (db-core#772), and a star join may name a second Parquet table or directory (db-core#782). db-core v0.188.0.
+- `ROUND`, `ABS`, `CASE`, `COALESCE`, `IFNULL` and `NULLIF` in the column dialect, from db-core 0.184 and 0.186.
+
 ## [0.30.0] - 2026-10-26
 
 ### Changed
