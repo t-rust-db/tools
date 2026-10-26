@@ -227,6 +227,7 @@ fn kind(e: &QueryError) -> &'static str {
         QueryError::UnsupportedSemiJoin(_)
         | QueryError::UnsupportedSelectItem(_)
         | QueryError::UnsupportedJoinKind(_)
+        | QueryError::TooManyJoins(_)
         | QueryError::StarWithAggregation
         | QueryError::ScopeClauseUnsupported
         | QueryError::NotStreamable(_) => "unsupported",

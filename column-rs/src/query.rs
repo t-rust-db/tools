@@ -54,6 +54,9 @@ pub enum QueryError {
     /// `Right`/`Full`/`Cross` are parseable (`db_core::parser::ast::JoinOp`) but
     /// only `Inner`/`Left` hash-join execution exists so far.
     UnsupportedJoinKind(JoinOp),
+    /// More than one `JOIN` between Parquet tables (tools#71): the batch
+    /// planner joins exactly two tables.
+    TooManyJoins(usize),
     /// `SELECT *` (or a mixed `SELECT col, *`) combined with `GROUP BY`, an
     /// aggregate, or a window function.
     StarWithAggregation,
@@ -98,6 +101,11 @@ impl fmt::Display for QueryError {
                     "join kind {kind:?} is not yet executable (only Inner/Left are implemented)"
                 )
             }
+            QueryError::TooManyJoins(n) => write!(
+                f,
+                "column-rs joins two Parquet tables; this query has {n} joins \
+                 (multi-table joins: t-rust-db/db-core#782)"
+            ),
             QueryError::StarWithAggregation => write!(
                 f,
                 "SELECT * cannot be combined with GROUP BY, an aggregate, or a window function"
@@ -531,6 +539,14 @@ fn from_table(select: &Select) -> Result<&str> {
 /// The first (and, for the batch planner, only) `JOIN` of a `SELECT`.
 fn first_join(select: &Select) -> Option<&Join> {
     select.from.as_ref().and_then(|f| f.joins.first())
+}
+
+/// Refuse a second `JOIN` the batch planner would otherwise drop (tools#71).
+fn one_join(select: &Select) -> Result<()> {
+    match select.from.as_ref().map_or(0, |f| f.joins.len()) {
+        0 | 1 => Ok(()),
+        n => Err(QueryError::TooManyJoins(n)),
+    }
 }
 
 /// A join's right-hand table name (see [`from_table`] for the same rule).
@@ -1226,6 +1242,8 @@ impl QueryEngine {
             ));
         }
 
+        one_join(&query)?;
+
         // Resolve `*` against the queried table(s)' schema before anything
         // else touches `query.columns` -- a `JOIN` expands against both
         // sides, qualified `table.column` per the naming convention
@@ -1333,6 +1351,7 @@ impl QueryEngine {
     /// (#99): the planner's [`db_core::codegen::batch::explain`], fed each
     /// referenced table's row-group/row counts from its Parquet footer.
     pub fn explain(&self, query: &Select) -> Result<Vec<PlanNode>> {
+        one_join(query)?;
         let mut tables = vec![from_table(query)?];
         if let Some(subquery) = in_subquery(query) {
             tables.push(from_table(subquery)?);
@@ -1357,6 +1376,7 @@ impl QueryEngine {
     /// planner's [`db_core::codegen::batch::explain_opcodes`], one section
     /// per phase the executor actually runs.
     pub fn explain_opcodes(&self, query: &Select) -> Result<Vec<OpcodeSection>> {
+        one_join(query)?;
         Ok(planner::explain_opcodes(query)?)
     }
 }
