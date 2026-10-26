@@ -34,6 +34,7 @@ use serde_json::{json, Map, Number, Value as Json};
 
 use crate::query::{QueryEngine, QueryError};
 use crate::vm::Value;
+use db_core::engine::ErrorKind;
 
 /// A result column's type, as the pipe encodes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,6 +232,11 @@ fn kind(e: &QueryError) -> &'static str {
         | QueryError::NotStreamable(_) => "unsupported",
         QueryError::TableDirectory(_) | QueryError::File(_) | QueryError::Io(_) => "storage",
         QueryError::Vm(_) => "execution",
+        QueryError::Lookup(kind, _) => match kind {
+            ErrorKind::Unsupported => "unsupported",
+            ErrorKind::Open => "storage",
+            ErrorKind::Parse | ErrorKind::Compile | ErrorKind::Execute => "execution",
+        },
         QueryError::NoJoinClause
         | QueryError::PlannerInvariant(_)
         | QueryError::DuplicateTable(_) => "internal",

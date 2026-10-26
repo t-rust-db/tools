@@ -1,6 +1,6 @@
 [package]
 name = "column-rs"
-version = "0.27.0"
+version = "0.28.0"
 edition = "2021"
 
 [lib]
@@ -12,7 +12,7 @@ name = "column-rs"
 path = "src/bin/column-rs/main.rs"
 
 [dependencies]
-db-core = { workspace = true, features = ["parser-column", "vm-batch", "codegen-batch", "emit-batch", "storage-column", "engine-column", "ingest-read"] }
+db-core = { workspace = true, features = ["parser-column", "vm-batch", "codegen-batch", "emit-batch", "storage-column", "engine-column", "engine-row", "engine-stream", "ingest-read"] }
 db-cli = { workspace = true }
 itoa = "1"
 ryu = "1"

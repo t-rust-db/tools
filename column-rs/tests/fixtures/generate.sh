@@ -106,6 +106,17 @@ COPY (SELECT (TIMESTAMP '2024-01-15 10:30:00' + INTERVAL (i) SECOND)::TIMESTAMP_
 TO 'logical_types_millis.parquet' (FORMAT PARQUET, COMPRESSION UNCOMPRESSED);
 "
 
+# SQLite lookup tables for tests/sqlite_join.rs (tools#69), joined to
+# production.parquet (ids 1..=5000 in three row groups): labels hits the
+# first and the last group, tiers only the first.
+rm -f lookups.db
+sqlite3 lookups.db "
+CREATE TABLE labels(id INTEGER PRIMARY KEY, label TEXT);
+INSERT INTO labels VALUES (1, 'one'), (2, 'two'), (3, 'three'), (4500, 'late');
+CREATE TABLE tiers(id INTEGER PRIMARY KEY, tier TEXT);
+INSERT INTO tiers VALUES (1, 'gold'), (2, 'silver');
+"
+
 echo "Fixtures written to $DIR"
 echo "Note: the 100K+ row fixture used by the large-file oracle test is"
 echo "generated on the fly by tests/oracle.rs (not checked into git)."

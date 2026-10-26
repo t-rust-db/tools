@@ -25,7 +25,9 @@ use db_core::engine::column::table::read_snapshot;
 use db_core::engine::column::{
     file_segments, snapshot_files, snapshot_segments, FileSegment, SnapshotSegment,
 };
-use db_core::engine::{EngineError, ErrorKind};
+use db_core::engine::resolve::CrossModeEngine;
+use db_core::engine::row::RowEngine;
+use db_core::engine::{Cell, Engine, EngineError, ErrorKind};
 use db_core::parser::ast::{Expr, ExprKind, Join, JoinOp, ResultColumn, Select};
 use db_core::storage::column::parquet::footer::PhysicalType;
 use db_core::storage::column::{decode_column_full, Decoded};
@@ -78,6 +80,10 @@ pub enum QueryError {
     /// A table directory could not be read (tools#13): its manifest,
     /// WAL or one of its files.
     TableDirectory(String),
+    /// A SQLite file or a query over its tables (tools#69): db-core's own
+    /// kind and message, or why column-rs can't hand the query to db-core
+    /// (`Unsupported`).
+    Lookup(ErrorKind, String),
 }
 
 impl fmt::Display for QueryError {
@@ -111,6 +117,7 @@ impl fmt::Display for QueryError {
             }
             QueryError::NotStreamable(reason) => write!(f, "cannot stream this query: {reason}"),
             QueryError::TableDirectory(why) => write!(f, "table directory: {why}"),
+            QueryError::Lookup(_, why) => write!(f, "{why}"),
         }
     }
 }
@@ -155,6 +162,12 @@ impl From<EngineError> for QueryError {
             _ => QueryError::TableDirectory(e.message),
         }
     }
+}
+
+/// db-core's message for a query over SQLite tables, unchanged: it says
+/// what was refused and how to write it instead.
+fn lookup_error(e: EngineError) -> QueryError {
+    QueryError::Lookup(e.kind, e.message)
 }
 
 pub type Result<T> = std::result::Result<T, QueryError>;
@@ -728,6 +741,8 @@ impl QueryResult {
 /// to re-parse the footer.
 struct Table {
     name: String,
+    /// The file or directory it was loaded from.
+    path: std::path::PathBuf,
     data: TableData,
     column_names: Vec<String>,
 }
@@ -738,6 +753,21 @@ enum TableData {
     File(db_core::storage::MmapRegion),
     /// A table directory (tools#13), read as a fresh snapshot per query.
     Dir(std::path::PathBuf),
+    /// A table in a SQLite file (tools#69), queried through db-core's row
+    /// engine, or its cross-mode engine when joined to a Parquet file.
+    Lookup,
+}
+
+/// The first 16 bytes of every SQLite database file.
+const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
+
+/// Whether `path` is a SQLite database, by its header.
+fn is_sqlite_file(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut header = [0u8; 16];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut header))
+        .is_ok_and(|()| &header == SQLITE_HEADER)
 }
 
 /// What a query holds for one table while it runs: a file's `ParquetFile`
@@ -754,6 +784,66 @@ impl Held<'_> {
             Held::Dir(snapshot) => Opened::dir(snapshot),
         }
     }
+}
+
+/// db-core's engine for a query that names a SQLite table (tools#69).
+enum LookupEngine {
+    /// Only SQLite tables.
+    Row(RowEngine),
+    /// One Parquet file joined to SQLite tables (db-core#598). Boxed: it
+    /// holds a row engine and a batch engine.
+    Cross(Box<CrossModeEngine>),
+}
+
+impl LookupEngine {
+    fn as_engine(&self) -> &dyn Engine {
+        match self {
+            LookupEngine::Row(e) => e,
+            LookupEngine::Cross(e) => e.as_ref(),
+        }
+    }
+
+    fn as_engine_mut(&mut self) -> &mut dyn Engine {
+        match self {
+            LookupEngine::Row(e) => e,
+            LookupEngine::Cross(e) => e.as_mut(),
+        }
+    }
+}
+
+/// db-core's result cell as column-rs's value. A blob becomes the hex
+/// string column-rs uses for Parquet byte arrays.
+fn cell_value(cell: Cell) -> Value {
+    match cell {
+        Cell::Null => Value::Null,
+        Cell::Int(i) => Value::Int(i),
+        Cell::Real(f) => Value::Float(f),
+        Cell::Bool(b) => Value::Bool(b),
+        Cell::Text(s) => Value::Str(s.into()),
+        Cell::Blob(bytes) => Value::Str(
+            bytes
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+                .into(),
+        ),
+        Cell::Decimal { unscaled, scale } => Value::Decimal { unscaled, scale },
+    }
+}
+
+/// Every table a query names: its `FROM`, each `JOIN`, and an
+/// `IN (SELECT ...)` subquery's `FROM`.
+fn named_tables(query: &Select) -> Result<Vec<&str>> {
+    let mut names = vec![from_table(query)?];
+    if let Some(from) = &query.from {
+        for join in &from.joins {
+            names.push(join_table(join)?);
+        }
+    }
+    if let Some(subquery) = in_subquery(query) {
+        names.push(from_table(subquery)?);
+    }
+    Ok(names)
 }
 
 /// Whether `path` is a table directory: a directory holding a manifest.
@@ -812,10 +902,14 @@ impl QueryEngine {
             }
             self.tables.push(Table {
                 name: table_name,
+                path: path.to_path_buf(),
                 data: TableData::Dir(path.to_path_buf()),
                 column_names,
             });
             return Ok(());
+        }
+        if is_sqlite_file(path) {
+            return self.add_lookups(path, name);
         }
         let data = db_core::storage::PosixVfs
             .open(path)
@@ -841,24 +935,196 @@ impl QueryEngine {
             .collect();
         self.tables.push(Table {
             name: table_name,
+            path: path.to_path_buf(),
             data: TableData::File(data),
             column_names,
         });
         Ok(())
     }
 
+    /// Loads every table of the SQLite file at `path` under its own name
+    /// (tools#69). One SQLite file per session: db-core's cross-mode
+    /// engine joins a Parquet file to the tables of one SQLite file.
+    fn add_lookups(&mut self, path: &std::path::Path, name: Option<String>) -> Result<()> {
+        if name.is_some() {
+            return Err(QueryError::Lookup(
+                ErrorKind::Unsupported,
+                format!(
+                    "{}: a SQLite file's tables keep their own names (drop AS)",
+                    path.display()
+                ),
+            ));
+        }
+        if let Some(loaded) = self.lookup_file() {
+            return Err(QueryError::Lookup(
+                ErrorKind::Unsupported,
+                format!(
+                    "{}: one SQLite file per session, and {} is loaded",
+                    path.display(),
+                    loaded.display()
+                ),
+            ));
+        }
+        let tables = RowEngine::open(path)
+            .and_then(|engine| engine.tables())
+            .map_err(lookup_error)?;
+        if let Some(t) = tables
+            .iter()
+            .find(|t| self.tables.iter().any(|loaded| loaded.name == t.name))
+        {
+            return Err(QueryError::DuplicateTable(t.name.clone()));
+        }
+        for t in tables {
+            self.tables.push(Table {
+                name: t.name,
+                path: path.to_path_buf(),
+                data: TableData::Lookup,
+                column_names: t.columns.into_iter().map(|c| c.name).collect(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The SQLite file loaded into this session, if any.
+    fn lookup_file(&self) -> Option<&std::path::Path> {
+        self.tables
+            .iter()
+            .find(|t| matches!(t.data, TableData::Lookup))
+            .map(|t| t.path.as_path())
+    }
+
+    fn table(&self, name: &str) -> Result<&Table> {
+        self.tables
+            .iter()
+            .find(|t| t.name == name)
+            .ok_or_else(|| QueryError::UnknownTable(name.to_string()))
+    }
+
     /// Opens table `name` for one query: a file's footer, a directory's
     /// fresh snapshot.
     fn hold(&self, name: &str) -> Result<Held<'_>> {
-        let table = self
-            .tables
-            .iter()
-            .find(|t| t.name == name)
-            .ok_or_else(|| QueryError::UnknownTable(name.to_string()))?;
+        let table = self.table(name)?;
         Ok(match &table.data {
             TableData::File(data) => Held::File(Box::new(ParquetFile::open(data)?)),
             TableData::Dir(path) => Held::Dir(open_snapshot(path)?),
+            // `lookup_engine` takes every query that names one first.
+            TableData::Lookup => {
+                return Err(QueryError::Lookup(
+                    ErrorKind::Unsupported,
+                    format!("{name} is a SQLite table; column-rs reads it through db-core"),
+                ))
+            }
         })
+    }
+
+    /// The engine for a query that names a SQLite table (tools#69), or
+    /// `None` when it names none and column-rs runs it itself. Lookup
+    /// tables alone go to db-core's row engine; joined to one Parquet file,
+    /// to its cross-mode engine (db-core#598), which builds the SQLite
+    /// side, probes the file row group by row group and prunes row groups
+    /// from a filter on a lookup table.
+    fn lookup_engine(&self, query: &Select) -> Result<Option<LookupEngine>> {
+        let mut named: Vec<&Table> = Vec::new();
+        for name in named_tables(query)? {
+            let table = self.table(name)?;
+            if !named.iter().any(|t| t.name == table.name) {
+                named.push(table);
+            }
+        }
+        let Some(lookup) = named
+            .iter()
+            .find(|t| matches!(t.data, TableData::Lookup))
+            .map(|t| t.path.as_path())
+        else {
+            return Ok(None);
+        };
+        let columns: Vec<&Table> = named
+            .into_iter()
+            .filter(|t| !matches!(t.data, TableData::Lookup))
+            .collect();
+        match columns.as_slice() {
+            [] => Ok(Some(LookupEngine::Row(
+                RowEngine::open(lookup).map_err(lookup_error)?,
+            ))),
+            [table] => match &table.data {
+                TableData::File(_) => {
+                    let stem = table.path.file_stem().and_then(|s| s.to_str());
+                    if stem != Some(table.name.as_str()) {
+                        return Err(QueryError::Lookup(
+                            ErrorKind::Unsupported,
+                            format!(
+                                "{} is loaded as {}; joined to SQLite tables, a Parquet table \
+                             is named after its file ({})",
+                                table.path.display(),
+                                table.name,
+                                stem.unwrap_or("?")
+                            ),
+                        ));
+                    }
+                    Ok(Some(LookupEngine::Cross(Box::new(
+                        CrossModeEngine::open_column_sqlite(&table.path, lookup)
+                            .map_err(lookup_error)?,
+                    ))))
+                }
+                _ => Err(QueryError::Lookup(
+                    ErrorKind::Unsupported,
+                    format!(
+                        "joining the table directory {} to SQLite tables is not supported yet \
+                     (t-rust-db/db-core#772); join a Parquet file",
+                        table.name
+                    ),
+                )),
+            },
+            more => Err(QueryError::Lookup(
+                ErrorKind::Unsupported,
+                format!(
+                    "a query joins one Parquet table to SQLite tables; this one names {}",
+                    more.iter()
+                        .map(|t| t.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )),
+        }
+    }
+
+    /// `EXPLAIN QUERY PLAN` for a query that names a SQLite table, or
+    /// `None` when column-rs plans it itself ([`Self::explain`]). `sql` is
+    /// the query without its `EXPLAIN` prefix. db-core's plan includes a
+    /// `PRUNE ROW GROUPS` row (`N of M kept`) when a lookup filter prunes.
+    pub fn explain_lookup(&self, query: &Select, sql: &str) -> Result<Option<Vec<PlanNode>>> {
+        let Some(engine) = self.lookup_engine(query)? else {
+            return Ok(None);
+        };
+        let rows = engine.as_engine().explain_plan(sql).map_err(lookup_error)?;
+        Ok(Some(
+            rows.into_iter()
+                .map(|row| PlanNode {
+                    id: u32::try_from(row.id).unwrap_or(u32::MAX),
+                    parent: u32::try_from(row.parent).unwrap_or(u32::MAX),
+                    detail: row.detail,
+                })
+                .collect(),
+        ))
+    }
+
+    /// A bare `EXPLAIN`'s opcode listing for a query that names a SQLite
+    /// table, as db-core labels it (build, probe and body sections), or
+    /// `None` when column-rs plans it itself ([`Self::explain_opcodes`]).
+    pub fn explain_opcodes_lookup(
+        &self,
+        query: &Select,
+        sql: &str,
+    ) -> Result<Option<Vec<db_core::engine::OpcodeSection>>> {
+        let Some(engine) = self.lookup_engine(query)? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            engine
+                .as_engine()
+                .explain_opcodes(sql)
+                .map_err(lookup_error)?,
+        ))
     }
 
     /// Streaming counterpart to [`Self::execute`] (db-core#456): only the
@@ -885,6 +1151,11 @@ impl QueryEngine {
         let from = from_table(&query)?;
         if first_join(&query).is_some() {
             return Err(QueryError::NotStreamable("query has a JOIN".to_string()));
+        }
+        if matches!(self.table(from)?.data, TableData::Lookup) {
+            return Err(QueryError::NotStreamable(
+                "query reads a SQLite table".to_string(),
+            ));
         }
         if in_subquery(&query).is_some() {
             return Err(QueryError::NotStreamable(
@@ -932,6 +1203,28 @@ impl QueryEngine {
     ) -> Result<(QueryResult, Vec<Option<crate::pipe::ColType>>)> {
         let query =
             db_core::parser::parse(sql).map_err(|e| QueryError::UnknownColumn(e.to_string()))?;
+
+        // A query that names a SQLite table runs in db-core (tools#69).
+        // `--pipe` infers its column types from the values.
+        if let Some(mut engine) = self.lookup_engine(&query)? {
+            let result = engine
+                .as_engine_mut()
+                .run_query(sql)
+                .map_err(lookup_error)?;
+            let types = vec![None; result.columns.len()];
+            let rows = result
+                .rows
+                .into_iter()
+                .map(|row| row.into_iter().map(cell_value).collect())
+                .collect();
+            return Ok((
+                QueryResult {
+                    columns: result.columns,
+                    output: QueryOutput::from_rows(rows),
+                },
+                types,
+            ));
+        }
 
         // Resolve `*` against the queried table(s)' schema before anything
         // else touches `query.columns` -- a `JOIN` expands against both
@@ -1026,7 +1319,7 @@ impl QueryEngine {
                         .hold(&t.name)
                         .and_then(|held| held.open()?.column_names())
                         .ok(),
-                    TableData::File(_) => None,
+                    TableData::File(_) | TableData::Lookup => None,
                 };
                 (
                     t.name.as_str(),
