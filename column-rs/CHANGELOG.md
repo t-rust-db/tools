@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.28.1] - 2026-10-26
+
+### Fixed
+
+- A query with more than one `JOIN` between Parquet tables is refused (`this query has N joins`) instead of silently running as its first join; this applies to the query itself, `EXPLAIN QUERY PLAN`, `EXPLAIN` and `--pipe` (#71).
+
 ## [0.28.0] - 2026-10-26
 
 ### Added
