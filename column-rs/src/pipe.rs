@@ -106,7 +106,9 @@ impl ColType {
             Some(Value::Bool(_)) => ColType::Bool,
             Some(Value::Map(_)) => ColType::Map,
             Some(Value::Str(_)) => ColType::Text,
-            Some(Value::Null) | None => ColType::Null,
+            // `NULL`, or a value no column type describes (an aggregate's
+            // internal sketch partial never reaches a result).
+            Some(_) | None => ColType::Null,
         }
     }
 }
@@ -117,7 +119,6 @@ const EXACT: u64 = 1 << 53;
 /// `value` as JSON, by `ty`.
 pub fn encode(value: &Value, ty: ColType) -> Json {
     match (value, ty) {
-        (Value::Null, _) => Json::Null,
         // db-core#632: exact, printed at its own scale.
         (Value::Decimal { .. }, _) => Json::String(value.to_string()),
         (Value::Int(i), ColType::Timestamp(unit)) => Json::String(iso8601(*i, unit)),
@@ -157,6 +158,8 @@ pub fn encode(value: &Value, ty: ColType) -> Json {
                 })
                 .collect::<Map<_, _>>(),
         ),
+        // `NULL`, and any value with no JSON form.
+        _ => Json::Null,
     }
 }
 
