@@ -2,6 +2,17 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.28.0] - 2026-10-26
+
+### Added
+
+- A SQLite file loads like a Parquet file or table directory, recognised by its header; its tables keep their own names and show in `.tables` and `.schema` (tools#69). A query that names one runs in db-core: lookup tables alone in the row engine, joined to one Parquet file in the cross-mode engine (db-core#598). Inner, left and star joins, `JOIN ... USING` and either column first in `ON` (db-core#771). A filter on a lookup table skips the Parquet row groups whose keys can't match; `EXPLAIN QUERY PLAN` shows it as `PRUNE ROW GROUPS ... (N of M kept)`, and `EXPLAIN` lists db-core's build, probe and body sections.
+- Refused with a reason rather than answered wrongly: a table directory joined to SQLite tables (db-core#772), two Parquet tables plus SQLite tables in one query, a second SQLite file, `AS` on a SQLite file, and a Parquet file loaded under another name. db-core's own refusals (`lookup LEFT JOIN parquet`) pass through as they are; `--pipe` reports them with db-core's error kind.
+
+### Changed
+
+- db-core pin v0.178.0 (was v0.173.0), with the `engine-row` and `engine-stream` features its cross-mode engine needs.
+
 ## [0.27.0] - 2026-10-24
 
 ### Changed
