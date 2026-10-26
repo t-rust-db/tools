@@ -160,6 +160,31 @@ fn a_bad_request_is_answered_and_the_next_one_works() {
     pipe.finish();
 }
 
+/// tools#74: SQL that doesn't parse is `parse`, a function the column
+/// dialect lacks is `unsupported`, neither one `unknown_column`; and a
+/// query over SQLite tables alone takes sqlite3's functions.
+#[test]
+fn parse_errors_have_their_own_kind() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut pipe = Pipe::start(&[
+        &fixtures.join("production.parquet"),
+        &fixtures.join("lookups.db"),
+    ]);
+    let err = pipe.query(json!(1), "SELEC id FROM labels").unwrap_err();
+    assert_eq!(err["error"]["kind"], json!("parse"), "{err}");
+    let err = pipe
+        .query(json!(2), "SELECT UPPER(region) FROM production")
+        .unwrap_err();
+    assert_eq!(err["error"]["kind"], json!("unsupported"), "{err}");
+    let message = err["error"]["message"].as_str().unwrap();
+    assert!(!message.starts_with("unknown column"), "{message}");
+    let (_, rows, _) = pipe
+        .query(json!(3), "SELECT UPPER(label) FROM labels WHERE id = 1")
+        .unwrap();
+    assert_eq!(rows, [json!(["ONE"])]);
+    pipe.finish();
+}
+
 #[test]
 fn values_are_encoded_by_their_column_type() {
     let t = TempDir::new();

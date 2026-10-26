@@ -27,7 +27,15 @@ impl ReplHandler for ColumnHandler {
     type Output = Output;
 
     fn execute(&mut self, input: &str) -> Result<Self::Output, String> {
-        let (explain, query) = column_rs::sql::parse_explain(input).map_err(|e| e.to_string())?;
+        let (explain, query) = match column_rs::sql::parse_explain(input) {
+            Ok(parsed) => parsed,
+            // A query over SQLite tables only is read as sqlite3 reads it
+            // (tools#74).
+            Err(e) => self
+                .engine
+                .parse_lookup(input)
+                .ok_or_else(|| e.to_string())?,
+        };
         match explain {
             Explain::QueryPlan => {
                 let plan = match self

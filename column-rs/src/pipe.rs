@@ -12,7 +12,9 @@
 //!
 //! or `{"id":1,"error":{"kind":"...","message":"..."}}` in place of the
 //! header, rows and `done`. The process then reads the next request. End of
-//! input exits.
+//! input exits. `kind` is `parse` for SQL that doesn't parse, `unsupported`
+//! for SQL column-rs doesn't run, and `unknown_column`, `unknown_table`,
+//! `storage`, `execution`, `request` or `internal` otherwise.
 //!
 //! Values are typed by the column they come from. A bare column reference
 //! takes its table's type: a Parquet file's schema, or a table directory's
@@ -35,6 +37,7 @@ use serde_json::{json, Map, Number, Value as Json};
 use crate::query::{QueryEngine, QueryError};
 use crate::vm::Value;
 use db_core::engine::ErrorKind;
+use db_core::parser::ParseError;
 
 /// A result column's type, as the pipe encodes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,6 +244,8 @@ fn kind(e: &QueryError) -> &'static str {
             ErrorKind::Open => "storage",
             ErrorKind::Parse | ErrorKind::Compile | ErrorKind::Execute => "execution",
         },
+        QueryError::Parse(ParseError::Unsupported { .. }) => "unsupported",
+        QueryError::Parse(_) => "parse",
         QueryError::NoJoinClause
         | QueryError::PlannerInvariant(_)
         | QueryError::DuplicateTable(_) => "internal",
