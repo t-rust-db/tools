@@ -54,9 +54,10 @@ column-rs -c "SELECT id, amount FROM orders WHERE amount > 1000" orders.parquet
 # A table directory (written by column-ingest) is a table named after it
 column-rs -c "SELECT event_id, COUNT(*) FROM events GROUP BY event_id" events/
 
-# A SQLite file's tables load under their own names; joined to one Parquet
-# file they run in db-core's cross-mode engine, and a filter on a lookup
-# table skips the file's row groups that can't match
+# A SQLite file's tables load under their own names; joined to Parquet
+# files or table directories (a star join may name two) they run in
+# db-core's cross-mode engine, and a filter on a lookup table skips the
+# row groups that can't match
 column-rs -c "SELECT event_def.name, COUNT(*) FROM events JOIN event_def ON events.event_id = event_def.event_id GROUP BY event_def.name" events.parquet lookups.db
 
 # Pipe mode: JSON Lines requests on stdin, typed JSON Lines results

@@ -234,20 +234,85 @@ fn queries_without_a_lookup_table_are_unchanged() {
         .is_none());
 }
 
+/// db-core#782: a star join around a lookup table may name a second
+/// Parquet table. Expected rows from DuckDB over the same files.
 #[test]
-fn two_parquet_tables_with_a_lookup_are_refused() {
+fn a_star_join_names_two_parquet_tables_and_a_lookup() {
     let engine = QueryEngine::open_many(&[
         fixture("production.parquet"),
         fixture("orders.parquet"),
         fixture("lookups.db"),
     ])
     .unwrap();
-    let message = error(
-        &engine,
-        "SELECT COUNT(*) FROM production JOIN labels ON production.id = labels.id \
-         JOIN orders ON orders.id = production.id",
+    assert_eq!(
+        rows(
+            &engine,
+            "SELECT production.id, labels.label, orders.region_key FROM production \
+             JOIN labels ON production.id = labels.id \
+             JOIN orders ON orders.id = production.id ORDER BY production.id"
+        ),
+        [
+            vec![int(1), text("one"), text("west")],
+            vec![int(2), text("two"), text("north")],
+            vec![int(3), text("three"), text("east")],
+        ]
     );
-    assert!(message.contains("names production, orders"), "{message}");
+}
+
+/// db-core#772: a table directory joins the lookup tables, rows in its
+/// live pages included.
+#[test]
+fn a_table_directory_joins_a_lookup_table() {
+    use db_core::storage::ingest::{Ack, TableOptions, TableWriter};
+    let root = std::env::temp_dir().join(format!("column-rs-sqlite-join-{}", std::process::id()));
+    std::fs::remove_dir_all(&root).ok();
+    let dir = root.join("events");
+    let mut w = TableWriter::open(&dir, TableOptions::default()).unwrap();
+    for id in [1, 2] {
+        w.append(format!(r#"{{"id":{id}}}"#).as_bytes(), Ack::Durable)
+            .unwrap();
+    }
+    w.flush_all().unwrap();
+    for id in [3, 4] {
+        w.append(format!(r#"{{"id":{id}}}"#).as_bytes(), Ack::Durable)
+            .unwrap();
+    }
+    let engine = QueryEngine::open_many(&[dir.clone(), fixture("lookups.db")]).unwrap();
+    let got = rows(
+        &engine,
+        "SELECT events.id, labels.label FROM events \
+         JOIN labels ON events.id = labels.id ORDER BY events.id",
+    );
+    w.close().unwrap();
+    std::fs::remove_dir_all(&root).ok();
+    assert_eq!(
+        got,
+        [
+            vec![int(1), text("one")],
+            vec![int(2), text("two")],
+            vec![int(3), text("three")],
+        ]
+    );
+}
+
+/// db-core 0.184/0.186: ROUND, ABS and CASE run over a Parquet table
+/// joined to a lookup. Expected rows from DuckDB.
+#[test]
+fn round_abs_and_case_over_a_cross_mode_join() {
+    assert_eq!(
+        rows(
+            &engine(),
+            "SELECT production.id, CASE WHEN production.id < 3 THEN 'low' ELSE 'high' END, \
+             ROUND(production.id / 4.0, 1), ABS(production.id - 4) FROM production \
+             JOIN labels ON production.id = labels.id ORDER BY production.id"
+        ),
+        [
+            vec![int(1), text("low"), Value::Float(0.3), int(3)],
+            vec![int(2), text("low"), Value::Float(0.5), int(2)],
+            vec![int(3), text("high"), Value::Float(0.8), int(1)],
+            vec![int(4500), text("high"), Value::Float(1125.0), int(4496)],
+        ]
+    );
 }
 
 #[test]
@@ -281,7 +346,7 @@ fn a_parquet_table_under_another_name_is_refused() {
         "SELECT COUNT(*) FROM prod JOIN labels ON prod.id = labels.id",
     );
     assert!(
-        message.contains("named after its file (production)"),
+        message.contains("named after its file or directory (production)"),
         "{message}"
     );
 }
