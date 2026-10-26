@@ -15,6 +15,8 @@ pub enum Output {
     Rows(QueryResult),
     Plan(Vec<PlanNode>),
     Opcodes(Vec<OpcodeSection>),
+    /// A query over SQLite tables, listed by db-core (tools#69).
+    LookupOpcodes(Vec<db_core::engine::OpcodeSection>),
 }
 
 pub struct ColumnHandler {
@@ -28,10 +30,24 @@ impl ReplHandler for ColumnHandler {
         let (explain, query) = column_rs::sql::parse_explain(input).map_err(|e| e.to_string())?;
         match explain {
             Explain::QueryPlan => {
-                let plan = self.engine.explain(&query).map_err(|e| e.to_string())?;
+                let plan = match self
+                    .engine
+                    .explain_lookup(&query, strip_explain(input))
+                    .map_err(|e| e.to_string())?
+                {
+                    Some(plan) => plan,
+                    None => self.engine.explain(&query).map_err(|e| e.to_string())?,
+                };
                 Ok(Output::Plan(plan))
             }
             Explain::Opcodes => {
+                if let Some(sections) = self
+                    .engine
+                    .explain_opcodes_lookup(&query, strip_explain(input))
+                    .map_err(|e| e.to_string())?
+                {
+                    return Ok(Output::LookupOpcodes(sections));
+                }
                 let sections = self
                     .engine
                     .explain_opcodes(&query)
@@ -57,6 +73,7 @@ impl ReplHandler for ColumnHandler {
             }
             Output::Plan(nodes) => format_plan(nodes),
             Output::Opcodes(sections) => format_opcodes(sections),
+            Output::LookupOpcodes(sections) => format_opcodes(sections),
         }
     }
 
@@ -109,9 +126,9 @@ impl ReplHandler for ColumnHandler {
 
     fn help_extra(&self) -> Vec<String> {
         vec![
-            ".tables     List tables (Parquet files)".to_string(),
+            ".tables     List tables (Parquet files, table directories, SQLite tables)".to_string(),
             ".schema     Show column schema".to_string(),
-            ".open <path> [AS <name>]  Load another Parquet file or table directory into this session".to_string(),
+            ".open <path> [AS <name>]  Load another Parquet file, table directory or SQLite file into this session".to_string(),
         ]
     }
 
@@ -120,6 +137,69 @@ impl ReplHandler for ColumnHandler {
             "column-rs {} — Parquet analytics\nEnter SQL queries ending with `;`. Type .help for commands.\n",
             env!("CARGO_PKG_VERSION")
         ))
+    }
+}
+
+/// `input` without its leading `EXPLAIN` or `EXPLAIN QUERY PLAN`, the
+/// form db-core's engines take for their own `explain_*` calls.
+fn strip_explain(input: &str) -> &str {
+    let mut rest = input.trim_start();
+    for word in ["EXPLAIN", "QUERY", "PLAN"] {
+        match rest.get(..word.len()) {
+            Some(head) if head.eq_ignore_ascii_case(word) => {
+                rest = rest[word.len()..].trim_start();
+            }
+            _ => break,
+        }
+    }
+    rest
+}
+
+/// One section of an opcode listing, from column-rs's planner or from
+/// db-core's engines (a query over SQLite tables): both render alike.
+trait Listing {
+    fn label(&self) -> &str;
+    /// `(addr, opcode, operands, comment, is_finalize)` per instruction.
+    fn instructions(&self) -> Vec<(usize, &str, &str, &str, bool)>;
+}
+
+impl Listing for OpcodeSection {
+    fn label(&self) -> &str {
+        &self.label
+    }
+    fn instructions(&self) -> Vec<(usize, &str, &str, &str, bool)> {
+        self.rows
+            .iter()
+            .map(|r| {
+                (
+                    r.addr,
+                    r.opcode,
+                    r.operands.as_str(),
+                    r.comment.as_str(),
+                    r.is_finalize,
+                )
+            })
+            .collect()
+    }
+}
+
+impl Listing for db_core::engine::OpcodeSection {
+    fn label(&self) -> &str {
+        &self.label
+    }
+    fn instructions(&self) -> Vec<(usize, &str, &str, &str, bool)> {
+        self.rows
+            .iter()
+            .map(|r| {
+                (
+                    r.addr,
+                    r.opcode.as_str(),
+                    r.operands.as_str(),
+                    r.comment.as_str(),
+                    r.is_finalize,
+                )
+            })
+            .collect()
     }
 }
 
@@ -147,26 +227,26 @@ fn format_plan(nodes: &[PlanNode]) -> String {
 /// `Combine` row (db-core#48 split the old `Finalize` into `Combine`/`Sort`/`Limit`) -- the barrier between the parallel per-segment phase
 /// and the sequential merge phase (ADR 0007) -- gets a separator above it
 /// so the boundary is visible.
-fn format_opcodes(sections: &[OpcodeSection]) -> String {
+fn format_opcodes<S: Listing>(sections: &[S]) -> String {
     let mut out = String::new();
     for (i, section) in sections.iter().enumerate() {
         if sections.len() > 1 {
             if i > 0 {
                 out.push('\n');
             }
-            out.push_str(&section.label);
+            out.push_str(section.label());
             out.push('\n');
         }
         let headers = ["addr", "opcode", "operands", "comment"].map(str::to_string);
-        let rows: Vec<Vec<String>> = section
-            .rows
+        let instructions = section.instructions();
+        let rows: Vec<Vec<String>> = instructions
             .iter()
-            .map(|r| {
+            .map(|(addr, opcode, operands, comment, _)| {
                 vec![
-                    r.addr.to_string(),
-                    r.opcode.to_string(),
-                    r.operands.clone(),
-                    r.comment.clone(),
+                    addr.to_string(),
+                    opcode.to_string(),
+                    operands.to_string(),
+                    comment.to_string(),
                 ]
             })
             .collect();
@@ -199,11 +279,11 @@ fn format_opcodes(sections: &[OpcodeSection]) -> String {
         push_border(&mut out, "┌", "┬", "┐");
         push_row(&mut out, &headers);
         push_border(&mut out, "├", "┼", "┤");
-        for (row, opcode_row) in rows.iter().zip(&section.rows) {
+        for (row, (.., is_finalize)) in rows.iter().zip(&instructions) {
             // The Combine barrier (ADR 0007): everything above ran per
             // segment in parallel, everything here runs once over the
             // merged output -- draw a divider so the boundary is visible.
-            if opcode_row.is_finalize {
+            if *is_finalize {
                 push_border(&mut out, "├", "┼", "┤");
             }
             push_row(&mut out, row);
