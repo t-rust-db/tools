@@ -2,6 +2,17 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.33.0] - 2026-10-28
+
+### Added
+
+- `UNNEST` of a list column (db-core#802): `FROM t, UNNEST(col) AS u(x)`, `CROSS JOIN UNNEST(...)` and `SELECT UNNEST(col)`, also over `string_split` (db-core#803). They failed with `unknown table: <no table>`. db-core v0.192.0.
+
+### Fixed
+
+- `SELECT *` over a Parquet file with a `LIST` or `MAP` column named the group's inner nodes as columns and failed with `unknown column: list`. A file's columns are its top-level fields.
+- A window or join query read a column that follows a `LIST` or `MAP` column from the wrong chunk (`column index out of range`).
+
 ## [0.32.0] - 2026-10-28
 
 ### Added
