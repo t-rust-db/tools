@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.34.0] - 2026-10-28
+
+### Added
+
+- `.schema` shows each column's type (#83), aligned per table: a Parquet file's or table directory's type as `--pipe` names it (`BIGINT`, `DECIMAL(10,2)`, `VARCHAR[]`, ...), a SQLite table's declared type. A column with no type shows its name only. `QueryEngine::schemas()` now returns each column as `(name, type)`.
+
 ## [0.33.0] - 2026-10-28
 
 ### Added

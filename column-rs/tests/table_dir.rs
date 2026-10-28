@@ -273,7 +273,16 @@ fn files_with_different_columns_read_as_one_table() {
     let engine = QueryEngine::open(&dir).unwrap();
     let schema = &engine.schemas()[0];
     assert_eq!(schema.0, "mixed");
-    assert!(schema.1.iter().any(|c| c == "m"), "{:?}", schema.1);
+    assert!(
+        schema.1.contains(&("m".into(), "VARCHAR".into())),
+        "{:?}",
+        schema.1
+    );
+    assert!(
+        schema.1.contains(&("n".into(), "DOUBLE".into())),
+        "{:?}",
+        schema.1
+    );
     assert_eq!(
         ours(&engine, "SELECT n, m FROM mixed ORDER BY n"),
         [["1", "NULL"], ["2.5", "x"]]

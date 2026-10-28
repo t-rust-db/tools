@@ -37,3 +37,27 @@ fn version_exits_zero_with_name_and_version() {
         format!("column-rs {}", env!("CARGO_PKG_VERSION"))
     );
 }
+
+/// #83: `.schema` lists each column with its type, aligned per table.
+#[test]
+fn schema_lists_each_columns_type() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tagged.parquet");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_column-rs"))
+        .arg(fixture)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn column-rs");
+    child.stdin.take().unwrap().write_all(b".schema\n").unwrap();
+    let out = child.wait_with_output().expect("wait for column-rs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(
+            "tagged:\n  id       BIGINT\n  product  VARCHAR\n  tags     VARCHAR[]\n  amount   DOUBLE\n"
+        ),
+        "{stdout}"
+    );
+}
