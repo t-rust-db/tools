@@ -2,6 +2,12 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.14.1] - 2026-10-28
+
+### Fixed
+
+- **`db-studio --version` / `-V`** prints `db-studio <version>` instead of trying to open `--version` as a file, so db-core's `examples/lib/tool.sh` can report and check the version it uses.
+
 ## [0.14.0] - 2026-10-16
 
 ### Added
