@@ -484,6 +484,7 @@ impl<'h> Opened<'h> {
                             ColType::Decimal { precision, scale }
                         }
                         ColumnType::MapUtf8 => ColType::Map,
+                        ColumnType::ListUtf8 => ColType::List,
                     };
                     (c.name, ty)
                 })

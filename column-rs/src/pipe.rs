@@ -67,6 +67,8 @@ pub enum ColType {
     Timestamp(TimeUnit),
     /// A `MAP<VARCHAR, VARCHAR>`.
     Map,
+    /// A `LIST<VARCHAR>` (db-core#801).
+    List,
     /// Every value NULL: no type to tell.
     Null,
 }
@@ -95,6 +97,7 @@ impl ColType {
             ColType::Blob => "BLOB".into(),
             ColType::Timestamp(_) => "TIMESTAMP".into(),
             ColType::Map => "MAP(VARCHAR, VARCHAR)".into(),
+            ColType::List => "VARCHAR[]".into(),
             ColType::Null => "NULL".into(),
         }
     }
@@ -110,6 +113,7 @@ impl ColType {
             },
             Some(Value::Bool(_)) => ColType::Bool,
             Some(Value::Map(_)) => ColType::Map,
+            Some(Value::List(_)) => ColType::List,
             Some(Value::Str(_)) => ColType::Text,
             // `NULL`, or a value no column type describes (an aggregate's
             // internal sketch partial never reaches a result).
@@ -162,6 +166,15 @@ pub fn encode(value: &Value, ty: ColType) -> Json {
                     )
                 })
                 .collect::<Map<_, _>>(),
+        ),
+        (Value::List(items), _) => Json::Array(
+            items
+                .iter()
+                .map(|v| {
+                    v.as_ref()
+                        .map_or(Json::Null, |v| Json::String(v.to_string()))
+                })
+                .collect(),
         ),
         // `NULL`, and any value with no JSON form.
         _ => Json::Null,
@@ -431,6 +444,16 @@ mod tests {
             encode(&Value::Map(entries), ColType::Map),
             json!({"a": "1", "b": null})
         );
+        let items = std::sync::Arc::new(vec![Some("a".into()), None]);
+        assert_eq!(
+            encode(&Value::List(items.clone()), ColType::List),
+            json!(["a", null])
+        );
+        assert_eq!(
+            ColType::infer([Value::Null, Value::List(items)].iter()),
+            ColType::List
+        );
+        assert_eq!(ColType::List.name(), "VARCHAR[]");
         assert_eq!(encode(&Value::Null, ColType::Int), Json::Null);
         assert_eq!(
             ColType::infer([Value::Null, Value::Float(1.0)].iter()),

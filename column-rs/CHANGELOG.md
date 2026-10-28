@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.32.0] - 2026-10-28
+
+### Added
+
+- `LIST<VARCHAR>` columns (db-core#801): a list is a `VARCHAR[]` result column, a JSON array (`["a",null]`) in `--pipe` output and in the CLI's printed rows. db-core v0.189.0.
+
 ## [0.31.0] - 2026-10-26
 
 ### Added
