@@ -36,6 +36,11 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    if paths == ["--version"] || paths == ["-V"] {
+        println!("db-studio {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
+
     // `db-studio config` (no file args) is special-cased as a subcommand
     // rather than a real file to open (db-studio#61, mirroring loglume's
     // own `loglume config`) -- "config" was never a valid file path to
