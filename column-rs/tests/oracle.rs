@@ -1662,3 +1662,109 @@ fn a_single_table_query_still_takes_bare_names() {
     assert_eq!(header, vec!["id", "region_key"]);
     assert!(!rows.is_empty());
 }
+
+/// A result's rows as printed text.
+type Printed = Vec<Vec<String>>;
+
+/// Every row of `sql` over the `tagged.parquet` fixture (a LIST<VARCHAR>
+/// column `tags` with `amount` after it), as column-rs and as DuckDB print
+/// them; `None` when `duckdb` is not on PATH.
+fn tagged_rows(sql: &str) -> Option<(Printed, Printed)> {
+    use column_rs::query::QueryEngine;
+    use std::path::PathBuf;
+
+    let path = fixture_path("tagged.parquet");
+    let csv = duckdb_csv(&format!(
+        "CREATE VIEW tagged AS SELECT * FROM '{path}'; {sql}"
+    ))?;
+    let engine = QueryEngine::open_many(&[PathBuf::from(&path)]).unwrap();
+    let result = engine
+        .execute(sql)
+        .unwrap_or_else(|e| panic!("column-rs failed on `{sql}`: {e}"));
+    let actual = result
+        .output
+        .into_rows()
+        .into_iter()
+        .map(|row| row.iter().map(ToString::to_string).collect())
+        .collect();
+    Some((actual, parse_csv_rows(&csv)))
+}
+
+/// tools#80: the UNNEST forms of the column dialect (db-core#802), and
+/// `string_split` unnesting (db-core#803), give DuckDB's rows. They used
+/// to fail with `unknown table: <no table>`: the UNNEST join was taken for
+/// a join with a second table.
+#[test]
+fn oracle_unnest_matches_duckdb() {
+    for sql in [
+        "SELECT id, tag FROM tagged, UNNEST(tags) AS t(tag) ORDER BY id, tag",
+        "SELECT id, tag FROM tagged CROSS JOIN UNNEST(tags) AS t(tag) ORDER BY id, tag",
+        "SELECT id, UNNEST(tags) FROM tagged ORDER BY 1, 2",
+        "SELECT tag, count(*) FROM tagged, UNNEST(tags) AS t(tag) GROUP BY tag ORDER BY tag",
+        "SELECT id, tag FROM tagged, UNNEST(tags) AS t(tag) WHERE amount > 2 ORDER BY id, tag",
+        "SELECT word, count(*) FROM tagged, UNNEST(string_split(product, ' ')) AS w(word) \
+         GROUP BY word ORDER BY word",
+    ] {
+        let Some((actual, expected)) = tagged_rows(sql) else {
+            eprintln!("duckdb not found on PATH; skipping oracle test");
+            return;
+        };
+        assert_eq!(actual, expected, "{sql}");
+    }
+}
+
+/// tools#80: a file's columns are its top-level fields. `SELECT *` over a
+/// list column used to name the list's inner `list`/`element` nodes as
+/// columns and fail with `unknown column: list`.
+#[test]
+fn select_star_over_a_list_column_names_the_top_level_columns() {
+    use column_rs::query::QueryEngine;
+    use std::path::PathBuf;
+
+    let engine = QueryEngine::open_many(&[PathBuf::from(fixture_path("tagged.parquet"))]).unwrap();
+    assert_eq!(
+        engine.schemas(),
+        vec![(
+            "tagged",
+            vec![
+                "id".into(),
+                "product".into(),
+                "tags".into(),
+                "amount".into()
+            ]
+        )]
+    );
+    let result = engine
+        .execute("SELECT * FROM tagged, UNNEST(tags) AS t(tag) ORDER BY id LIMIT 1")
+        .unwrap();
+    assert_eq!(result.columns, ["id", "product", "tags", "amount", "tag"]);
+    let rows: Printed = result
+        .output
+        .into_rows()
+        .into_iter()
+        .map(|row| row.iter().map(ToString::to_string).collect())
+        .collect();
+    assert_eq!(
+        rows[0][..4],
+        ["1", "red widget", r#"["gift","express"]"#, "1.5"]
+    );
+}
+
+/// tools#80: a window query reads a column that follows a list from its
+/// own chunk. Its index counted the list's schema nodes, so it read past
+/// the last chunk (`column index 4 out of range`).
+#[test]
+fn oracle_window_over_a_column_after_a_list_matches_duckdb() {
+    let sql = "SELECT id, amount, sum(amount) OVER (ORDER BY id) FROM tagged ORDER BY id";
+    let Some((actual, expected)) = tagged_rows(sql) else {
+        eprintln!("duckdb not found on PATH; skipping oracle test");
+        return;
+    };
+    // Compared as numbers: column-rs prints `4.0` as `4`, DuckDB as `4.0`.
+    let numbers = |rows: Printed| -> Vec<Vec<f64>> {
+        rows.iter()
+            .map(|row| row.iter().map(|cell| cell.parse().unwrap()).collect())
+            .collect()
+    };
+    assert_eq!(numbers(actual), numbers(expected));
+}

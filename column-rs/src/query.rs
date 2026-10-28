@@ -30,13 +30,14 @@ use db_core::engine::resolve::CrossModeEngine;
 use db_core::engine::row::RowEngine;
 use db_core::engine::{Cell, Engine, EngineError, ErrorKind};
 use db_core::parser::ast::{
-    ExplainBody, Expr, ExprKind, Join, JoinConstraint, JoinOp, ResultColumn, Select,
+    ExplainBody, Expr, ExprKind, Join, JoinConstraint, JoinOp, ResultColumn, Select, TableRefKind,
 };
 use db_core::parser::row::ParseOutcome;
 use db_core::parser::Explain;
 use db_core::storage::column::parquet::footer::PhysicalType;
 use db_core::storage::column::{decode_column_full, decode_column_full_bit_pattern, Decoded};
 use db_core::storage::ingest::{Snapshot, MANIFEST_FILE};
+use db_core::storage::parquet::Field;
 use db_core::storage::{ParquetFile, Vfs, VfsFile};
 use db_core::vm::batch::{Chunk, QueryOutput, ScanSource, VmError};
 use db_core::vm::engine::{self, InMemorySegment, NoResolver};
@@ -262,14 +263,39 @@ impl<'a, 'm> Segment for RowGroupSegment<'a, 'm> {
     }
 }
 
-/// Leaf schema columns as `(name, column_index, physical_type)`, in file order.
+/// Top-level flat columns as `(name, column_index, physical_type)`, in
+/// file order. `column_index` counts leaves, so a column after a nested
+/// one (a list's `list`/`element` nodes) reads its own chunk (tools#80).
+/// Nested columns are left out: the whole-table reader cannot decode them.
 fn leaf_columns(file: &ParquetFile) -> Vec<(String, usize, PhysicalType)> {
-    file.metadata()
-        .schema
-        .iter()
-        .skip(1)
-        .enumerate()
-        .filter_map(|(i, s)| s.physical_type.map(|pt| (s.name.clone(), i, pt)))
+    file.fields()
+        .into_iter()
+        .filter(|f| !f.nested)
+        .filter_map(|f| {
+            f.element
+                .physical_type
+                .map(|pt| (f.name, f.leaves.start, pt))
+        })
+        .collect()
+}
+
+/// The kind of a top-level nested column column-rs reads, by its group's
+/// converted type: `MAP` (1) or `LIST` (3). Other groups are not columns.
+fn nested_type(field: &Field) -> Option<crate::pipe::ColType> {
+    use db_core::storage::column::parquet::footer::ConvertedType;
+    match field.element.converted_type {
+        Some(ConvertedType::Other(1)) => Some(crate::pipe::ColType::Map),
+        Some(ConvertedType::Other(3)) => Some(crate::pipe::ColType::List),
+        _ => None,
+    }
+}
+
+/// A file's columns: its top-level fields, flat or a `MAP`/`LIST`, never
+/// the nodes inside a group (tools#80).
+fn file_columns(file: &ParquetFile) -> Vec<Field> {
+    file.fields()
+        .into_iter()
+        .filter(|f| !f.nested || nested_type(f).is_some())
         .collect()
 }
 
@@ -349,17 +375,11 @@ impl<'h> Opened<'h> {
         Ok(Opened::Dir(snapshot, snapshot_files(snapshot)?))
     }
 
-    /// The table's column names: a file's schema leaves (as loaded), a
+    /// The table's column names: a file's top-level columns, a
     /// directory's union of every file's and page's columns.
     fn column_names(&self) -> Result<Vec<String>> {
         Ok(match self {
-            Opened::File(file) => file
-                .metadata()
-                .schema
-                .iter()
-                .skip(1)
-                .map(|e| e.name.clone())
-                .collect(),
+            Opened::File(file) => file_columns(file).into_iter().map(|f| f.name).collect(),
             Opened::Dir(snapshot, _) => snapshot
                 .schema()
                 .map_err(|e| QueryError::TableDirectory(e.to_string()))?
@@ -422,12 +442,13 @@ impl<'h> Opened<'h> {
         use db_core::storage::column::parquet::footer::ConvertedType;
         use db_core::storage::parquet::schema::ColumnType;
         match self {
-            Opened::File(file) => file
-                .metadata()
-                .schema
-                .iter()
-                .skip(1)
-                .filter_map(|e| {
+            Opened::File(file) => file_columns(file)
+                .into_iter()
+                .filter_map(|f| {
+                    if f.nested {
+                        return nested_type(&f).map(|ty| (f.name, ty));
+                    }
+                    let e = &f.element;
                     let decimal = || ColType::Decimal {
                         precision: u8::try_from(e.precision.unwrap_or(0)).unwrap_or(0),
                         scale: u8::try_from(e.scale.unwrap_or(0)).unwrap_or(0),
@@ -460,7 +481,7 @@ impl<'h> Opened<'h> {
                         (PhysicalType::ByteArray, Some(_)) => ColType::Text,
                         (PhysicalType::Unknown(_), _) => return None,
                     };
-                    Some((e.name.clone(), ty))
+                    Some((f.name, ty))
                 })
                 .collect(),
             Opened::Dir(snapshot, _) => snapshot
@@ -581,14 +602,24 @@ fn from_table(select: &Select) -> Result<&str> {
         .ok_or_else(|| QueryError::UnknownTable("<no table>".to_string()))
 }
 
+/// A `SELECT`'s joins with another table. An `UNNEST` join (tools#80) is
+/// not one: the planner unnests the list inside the table's own program.
+fn table_joins(select: &Select) -> impl Iterator<Item = &Join> {
+    select
+        .from
+        .iter()
+        .flat_map(|f| &f.joins)
+        .filter(|j| !matches!(j.table.kind, TableRefKind::Unnest { .. }))
+}
+
 /// The first (and, for the batch planner, only) `JOIN` of a `SELECT`.
 fn first_join(select: &Select) -> Option<&Join> {
-    select.from.as_ref().and_then(|f| f.joins.first())
+    table_joins(select).next()
 }
 
 /// Refuse a second `JOIN` the batch planner would otherwise drop (tools#71).
 fn one_join(select: &Select) -> Result<()> {
-    match select.from.as_ref().map_or(0, |f| f.joins.len()) {
+    match table_joins(select).count() {
         0 | 1 => Ok(()),
         n => Err(QueryError::TooManyJoins(n)),
     }
@@ -923,10 +954,8 @@ fn cell_value(cell: Cell) -> Value {
 /// `IN (SELECT ...)` subquery's `FROM`.
 fn named_tables(query: &Select) -> Result<Vec<&str>> {
     let mut names = vec![from_table(query)?];
-    if let Some(from) = &query.from {
-        for join in &from.joins {
-            names.push(join_table(join)?);
-        }
+    for join in table_joins(query) {
+        names.push(join_table(join)?);
     }
     if let Some(subquery) = in_subquery(query) {
         names.push(from_table(subquery)?);
@@ -1013,14 +1042,7 @@ impl QueryEngine {
         if self.tables.iter().any(|t| t.name == table_name) {
             return Err(QueryError::DuplicateTable(table_name));
         }
-        // Skip first element (schema root).
-        let column_names = file
-            .metadata()
-            .schema
-            .iter()
-            .skip(1)
-            .map(|e| e.name.clone())
-            .collect();
+        let column_names = Opened::File(&file).column_names()?;
         self.tables.push(Table {
             name: table_name,
             path: path.to_path_buf(),

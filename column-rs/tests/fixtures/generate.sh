@@ -117,6 +117,20 @@ CREATE TABLE tiers(id INTEGER PRIMARY KEY, tier TEXT);
 INSERT INTO tiers VALUES (1, 'gold'), (2, 'silver');
 "
 
+# A LIST<VARCHAR> column with a flat column after it (tools#80): UNNEST,
+# string_split, `SELECT *`, and a window over the column that follows.
+duckdb -c "
+COPY (
+  SELECT id, product, tags, amount_::DOUBLE AS amount FROM (VALUES
+    (1, 'red widget', ['gift', 'express'], 1.5),
+    (2, 'blue widget', [], 2.5),
+    (3, 'red gadget', NULL, 3.5),
+    (4, 'green gizmo', ['gift', NULL], 4.5),
+    (5, 'blue gadget', ['express', 'gift', 'gift'], 5.5)
+  ) t(id, product, tags, amount_)
+) TO 'tagged.parquet' (FORMAT PARQUET, COMPRESSION UNCOMPRESSED);
+"
+
 echo "Fixtures written to $DIR"
 echo "Note: the 100K+ row fixture used by the large-file oracle test is"
 echo "generated on the fly by tests/oracle.rs (not checked into git)."
