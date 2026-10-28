@@ -389,6 +389,20 @@ impl<'h> Opened<'h> {
         })
     }
 
+    /// The table's columns with their type names, for `.schema` (#83): the
+    /// type `--pipe` gives the column, or empty when it has none.
+    fn columns(&self) -> Result<Vec<(String, String)>> {
+        let types = self.column_types();
+        Ok(self
+            .column_names()?
+            .into_iter()
+            .map(|name| {
+                let ty = types.get(&name).map(|t| t.name()).unwrap_or_default();
+                (name, ty)
+            })
+            .collect())
+    }
+
     /// One segment per row group (and, for a directory, per page) over
     /// `names`, running `program`'s late materialization: a filtered
     /// query decodes its other columns only at the matching rows
@@ -855,14 +869,15 @@ impl QueryResult {
 /// approach) rather than read eagerly into a `Vec<u8>` -- #108: with a
 /// bounded scan reading only the row groups it needs, an eager full read
 /// would make peak memory scale with file size regardless, undoing the
-/// point. Plus its column names, cached so `.schema`/`.tables` don't need
-/// to re-parse the footer.
+/// point. Plus its columns and their types, cached so `.schema`/`.tables`
+/// don't need to re-parse the footer.
 struct Table {
     name: String,
     /// The file or directory it was loaded from.
     path: std::path::PathBuf,
     data: TableData,
-    column_names: Vec<String>,
+    /// Each column's name and type name (empty when it has none).
+    columns: Vec<(String, String)>,
 }
 
 /// Where a table's rows are.
@@ -1007,7 +1022,7 @@ impl QueryEngine {
     pub fn add_table(&mut self, path: &std::path::Path, name: Option<String>) -> Result<()> {
         if is_table_dir(path) {
             let snapshot = open_snapshot(path)?;
-            let column_names = Opened::dir(&snapshot)?.column_names()?;
+            let columns = Opened::dir(&snapshot)?.columns()?;
             let table_name = name.unwrap_or_else(|| {
                 path.file_name()
                     .and_then(|s| s.to_str())
@@ -1021,7 +1036,7 @@ impl QueryEngine {
                 name: table_name,
                 path: path.to_path_buf(),
                 data: TableData::Dir(path.to_path_buf()),
-                column_names,
+                columns,
             });
             return Ok(());
         }
@@ -1042,12 +1057,12 @@ impl QueryEngine {
         if self.tables.iter().any(|t| t.name == table_name) {
             return Err(QueryError::DuplicateTable(table_name));
         }
-        let column_names = Opened::File(&file).column_names()?;
+        let columns = Opened::File(&file).columns()?;
         self.tables.push(Table {
             name: table_name,
             path: path.to_path_buf(),
             data: TableData::File(data),
-            column_names,
+            columns,
         });
         Ok(())
     }
@@ -1089,7 +1104,11 @@ impl QueryEngine {
                 name: t.name,
                 path: path.to_path_buf(),
                 data: TableData::Lookup,
-                column_names: t.columns.into_iter().map(|c| c.name).collect(),
+                columns: t
+                    .columns
+                    .into_iter()
+                    .map(|c| (c.name, c.type_name))
+                    .collect(),
             });
         }
         Ok(())
@@ -1438,23 +1457,22 @@ impl QueryEngine {
         self.tables.iter().map(|t| t.name.as_str()).collect()
     }
 
-    /// Get schema information: (table_name, columns), in load order. A
-    /// table directory's columns are read fresh: appends may add some.
-    pub fn schemas(&self) -> Vec<(&str, Vec<String>)> {
+    /// Get schema information: (table_name, columns), in load order, each
+    /// column as (name, type name) -- the type `--pipe` gives it, a SQLite
+    /// table's declared type, or empty when it has none (#83). A table
+    /// directory's columns are read fresh: appends may add some.
+    pub fn schemas(&self) -> Vec<(&str, Vec<(String, String)>)> {
         self.tables
             .iter()
             .map(|t| {
                 let fresh = match &t.data {
                     TableData::Dir(_) => self
                         .hold(&t.name)
-                        .and_then(|held| held.open()?.column_names())
+                        .and_then(|held| held.open()?.columns())
                         .ok(),
                     TableData::File(_) | TableData::Lookup => None,
                 };
-                (
-                    t.name.as_str(),
-                    fresh.unwrap_or_else(|| t.column_names.clone()),
-                )
+                (t.name.as_str(), fresh.unwrap_or_else(|| t.columns.clone()))
             })
             .collect()
     }

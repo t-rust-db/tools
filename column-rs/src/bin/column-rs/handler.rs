@@ -99,8 +99,10 @@ impl ReplHandler for ColumnHandler {
             let mut lines = Vec::new();
             for (table, cols) in self.engine.schemas() {
                 lines.push(format!("{table}:"));
-                for col in cols {
-                    lines.push(format!("  {col}"));
+                let width = cols.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
+                for (name, ty) in cols {
+                    let line = format!("  {name:width$}  {ty}");
+                    lines.push(line.trim_end().to_string());
                 }
             }
             return Some(lines);

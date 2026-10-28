@@ -50,7 +50,13 @@ fn a_sqlite_files_tables_load_under_their_own_names() {
     assert_eq!(engine.table_names(), ["production", "labels", "tiers"]);
     let schemas = engine.schemas();
     let labels = schemas.iter().find(|(t, _)| *t == "labels").unwrap();
-    assert_eq!(labels.1, ["id", "label"]);
+    assert_eq!(
+        labels.1,
+        [
+            ("id".into(), "INTEGER".into()),
+            ("label".into(), "TEXT".into())
+        ]
+    );
 }
 
 #[test]

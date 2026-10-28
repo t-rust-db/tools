@@ -1727,10 +1727,10 @@ fn select_star_over_a_list_column_names_the_top_level_columns() {
         vec![(
             "tagged",
             vec![
-                "id".into(),
-                "product".into(),
-                "tags".into(),
-                "amount".into()
+                ("id".into(), "BIGINT".into()),
+                ("product".into(), "VARCHAR".into()),
+                ("tags".into(), "VARCHAR[]".into()),
+                ("amount".into(), "DOUBLE".into())
             ]
         )]
     );
