@@ -776,8 +776,10 @@ mod term {
             raw.c_cc[libc::VMIN] = 1;
             raw.c_cc[libc::VTIME] = 0;
 
+            // TCSANOW, not TCSAFLUSH: the mode is switched for every line,
+            // and flushing would drop the rest of a multi-line paste.
             // SAFETY: Setting terminal attributes on a valid fd is safe.
-            if unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, &raw) } != 0 {
+            if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
                 return None;
             }
 
@@ -796,7 +798,7 @@ mod term {
             use std::os::unix::io::AsRawFd;
             let fd = io::stdin().as_raw_fd();
             // SAFETY: Restoring previously-read terminal attributes is safe.
-            unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, &self.original) };
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &self.original) };
         }
     }
 
