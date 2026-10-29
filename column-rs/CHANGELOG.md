@@ -2,6 +2,20 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.35.0] - 2026-10-29
+
+### Added
+
+- List functions (db-core v0.201.0): `list_contains` / `list_has` (db-core#825), `l[i]`, `len(l)` (db-core#826), `['a', 'b']` literals with `list_has_any`, `list_has_all` and `list_position` (db-core#827), and `array_to_string`, `list_aggr`, `list_distinct`, `list_sort`, `list_slice`, `list_concat` and their aliases (db-core#828). `SELECT ... WHERE list_contains(techniques, 'T1105')` failed with `unsupported expression form`.
+
+### Fixed
+
+- Pasting a query over several lines kept only its first characters (`S`, `SE`): the line editor discarded input it had not read yet at every line break. db-cli 0.5.1.
+
+### Changed
+
+- A function the column dialect lacks, such as `UPPER` over a Parquet table, is refused as `unsupported expression form FunctionCall { name: "UPPER", ... }` rather than `unknown function UPPER` (db-core's wording).
+
 ## [0.34.0] - 2026-10-28
 
 ### Added
