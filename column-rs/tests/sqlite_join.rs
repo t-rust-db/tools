@@ -192,10 +192,12 @@ fn a_lookup_only_query_takes_sqlite3_functions() {
         "SELECT UPPER(region) FROM production",
         "SELECT UPPER(labels.label) FROM production JOIN labels ON production.id = labels.id",
     ] {
+        // db-core 0.201 words it as an unsupported expression form, not
+        // "unknown function UPPER"; refused at the call either way.
         let message = error(&engine, sql);
-        assert_eq!(
-            message, "unsupported at 1:8: unknown function UPPER",
-            "{sql}"
+        assert!(
+            message.starts_with("unsupported at 1:8: ") && message.contains("UPPER"),
+            "{sql}: {message}"
         );
     }
 }

@@ -4,6 +4,16 @@ All notable changes to sqlite-rs. Format follows [Keep a Changelog](https://keep
 
 **Versioning policy:** one minor version per completed plan phase — the version number tells the plan's story, sub-steps stay inside a phase. V1 (READ CORE) = 0.1.0 through 0.4.0. *(History note: internal iterations briefly numbered 0.4.0–0.6.0 were renumbered into the phase scheme on 14 Aug 2026, before any tag or publication of those versions existed.)*
 
+## [0.26.1] - 2026-10-29
+
+### Fixed
+
+- Pasting a query over several lines kept only its first characters (`S`, `SE`): the line editor discarded input it had not read yet at every line break. db-cli 0.5.1.
+
+### Changed
+
+- db-core pin v0.201.0 (was v0.192.0).
+
 ## [0.26.0] - 2026-10-22
 
 ### Changed
