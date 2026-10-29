@@ -307,3 +307,78 @@ fn a_table_directory_is_named_after_it_and_can_be_renamed() {
     let err = QueryEngine::open(&t.0.join("nope")).err().unwrap();
     assert!(!err.to_string().is_empty());
 }
+
+/// tools#86: `.physical` reads the manifest, the WAL and the footers: the
+/// layout and sort key, rows in files and pending in the WAL, each file
+/// with its partition, LSNs, arrival and key ranges, and the column tree.
+#[test]
+fn physical_describes_the_manifest_wal_files_and_columns() {
+    use column_rs::physical::{describe, Options};
+    let _serial = serial();
+    let t = TempDir::new();
+    let dir = t.0.join("events");
+    let options = TableOptions {
+        layout: Layout::Tiered(TierOptions {
+            row_group_max_rows: 7,
+            delete_grace_ns: 0,
+            sort_key: vec!["user".to_string()],
+            ..TierOptions::default()
+        }),
+        clock,
+        ..TableOptions::default()
+    };
+    let mut w = TableWriter::open(&dir, options).unwrap();
+    for (hour, line) in events(10).iter().enumerate() {
+        set_clock(hour as i64);
+        w.append(line.as_bytes(), Ack::Durable).unwrap();
+    }
+    set_clock(10 + 48);
+    w.compact().unwrap();
+    w.compact().unwrap();
+    w.append(br#"{"user":"u9","kind":"view","n":10}"#, Ack::Durable)
+        .unwrap();
+
+    let lines = describe("events", &dir, Options::default()).unwrap();
+    let text = lines.join("\n");
+    for expected in [
+        "  layout     tiered, manifest v4, sort key (user)",
+        "  rows       10 in files, 1 pending in WAL (flushed_lsn 10)",
+        "  files      1 (live 0, archive 1)",
+        "  area     partition        lsn   rows  row groups  arrived (UTC)",
+        // One row group per hour the merge read.
+        "  archive  date=2026-10-11  1-10    10  10          10-11 00:00:00 – 09:00:00",
+        "           keys user u0 … u4",
+        "columns          physical    rep.      logical               encoding  compression",
+        "  observed_ts    INT64       optional  TIMESTAMP(ns, local)  plain     SNAPPY",
+        "  user           BYTE_ARRAY  optional  STRING                plain     SNAPPY",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+    }
+    assert!(
+        text.contains(
+            "  wal        2 segments, 00000000000000000010.wal … 00000000000000000011.wal"
+        ),
+        "{text}"
+    );
+
+    let sized = describe(
+        "events",
+        &dir,
+        Options {
+            sizes: true,
+            rowgroups: true,
+        },
+    )
+    .unwrap();
+    let sized = sized.join("\n");
+    assert!(
+        sized.contains("row group 0 of archive/date=2026-10-11/"),
+        "{sized}"
+    );
+    assert!(
+        sized.contains("row group 9 of archive/date=2026-10-11/"),
+        "{sized}"
+    );
+    assert!(sized.contains("  total  "), "{sized}");
+    w.close().unwrap();
+}

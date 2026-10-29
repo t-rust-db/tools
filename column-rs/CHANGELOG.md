@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.36.0] - 2026-10-29
+
+### Added
+
+- `.physical [table|file.parquet] [sizes] [rowgroups]` shows how a table is laid out on disk (#86). For a table directory, it shows the layout, the manifest version and the sort key; rows in files and pending in the WAL; the WAL segments; and each file with its area, partition, LSN range, rows, row groups, arrival times and key ranges. For a Parquet file, it shows the row groups. Both end with the Parquet column tree: physical type, repetition, logical type, encoding and compression. `sizes` adds stored and raw bytes and each column's share, and `rowgroups` shows the column section per row group. A timestamp not adjusted to UTC is marked `local` (DuckDB reads it as `TIMESTAMP`, not `TIMESTAMPTZ`). It reads only the manifest, the WAL and the Parquet footers. Needs db-core v0.202.0.
+
 ## [0.35.0] - 2026-10-29
 
 ### Added
