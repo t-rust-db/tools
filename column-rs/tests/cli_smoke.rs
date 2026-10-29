@@ -61,3 +61,43 @@ fn schema_lists_each_columns_type() {
         "{stdout}"
     );
 }
+
+/// tools#86: `.physical` on an open file shows its row groups and column
+/// tree; `rowgroups` gives the column section per row group, and a
+/// Parquet file that isn't open can be named by path.
+#[test]
+fn physical_shows_row_groups_and_the_column_tree() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/list.parquet");
+    let map = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/map.parquet");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_column-rs"))
+        .arg(fixture)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn column-rs");
+    let input = format!(".physical\n.physical {map} rowgroups sizes\n.physical nope\n");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().expect("wait for column-rs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for expected in [
+        "row groups  1\n  row group  rows  stored    raw\n          0     3   165 B  165 B\n",
+        "columns        physical    rep.      logical  encoding  compression\n\
+         \x20 numbers      group       optional  LIST\n\
+         \x20   list       group       repeated\n\
+         \x20     element  INT64       optional           plain     none\n",
+        "row group 0  (3 rows)\n",
+        "      key      BYTE_ARRAY  required  STRING   plain     none           57 B   57 B    36%\n",
+        "  total                                                               157 B  157 B\n",
+        "error: no table or file named nope",
+    ] {
+        assert!(stdout.contains(expected), "missing {expected:?} in\n{stdout}");
+    }
+}

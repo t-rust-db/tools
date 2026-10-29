@@ -1,3 +1,4 @@
+pub mod physical;
 pub mod pipe;
 pub mod query;
 

@@ -2,6 +2,7 @@
 //! `.tables`/`.schema`/`.open` dot-commands and `EXPLAIN` plan-tree
 //! printing into the generic REPL loop.
 
+use column_rs::physical;
 use column_rs::query::{OpcodeSection, PlanNode, QueryEngine, QueryResult};
 use db_cli::{render, OutputMode, ReplHandler};
 use db_core::parser::Explain;
@@ -21,6 +22,55 @@ pub enum Output {
 
 pub struct ColumnHandler {
     pub engine: QueryEngine,
+}
+
+impl ColumnHandler {
+    /// `.physical [table|file] [sizes] [rowgroups]` (tools#86): one table,
+    /// a Parquet file by path, or every open table.
+    fn physical(&self, arg: &str) -> Vec<String> {
+        let mut options = physical::Options::default();
+        let mut target = None;
+        for word in arg.split_whitespace() {
+            match word {
+                "sizes" => options.sizes = true,
+                "rowgroups" => options.rowgroups = true,
+                other => target = Some(other),
+            }
+        }
+        let targets: Vec<(String, Option<&Path>)> = match target {
+            Some(t) if self.engine.table_names().contains(&t) => {
+                vec![(t.to_string(), self.engine.table_path(t))]
+            }
+            Some(t) if Path::new(t).exists() => {
+                let stem = Path::new(t)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(t);
+                vec![(stem.to_string(), Some(Path::new(t)))]
+            }
+            Some(t) => return vec![format!("error: no table or file named {t}")],
+            None => self
+                .engine
+                .table_names()
+                .into_iter()
+                .map(|t| (t.to_string(), self.engine.table_path(t)))
+                .collect(),
+        };
+        let mut lines = Vec::new();
+        for (name, path) in targets {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            match path {
+                Some(path) => match physical::describe(&name, path, options) {
+                    Ok(report) => lines.extend(report),
+                    Err(e) => lines.push(format!("error: {e}")),
+                },
+                None => lines.push(format!("{name}  (SQLite table; not described yet)")),
+            }
+        }
+        lines
+    }
 }
 
 impl ReplHandler for ColumnHandler {
@@ -107,6 +157,9 @@ impl ReplHandler for ColumnHandler {
             }
             return Some(lines);
         }
+        if !name.is_empty() && "physical".starts_with(name) {
+            return Some(self.physical(arg));
+        }
         if !name.is_empty() && "open".starts_with(name) {
             if arg.is_empty() {
                 return Some(vec![".open <path> [AS <name>]".to_string()]);
@@ -138,6 +191,7 @@ impl ReplHandler for ColumnHandler {
         vec![
             ".tables     List tables (Parquet files, table directories, SQLite tables)".to_string(),
             ".schema     Show column schema".to_string(),
+            ".physical [table|file] [sizes] [rowgroups]  Show how a table is laid out on disk".to_string(),
             ".open <path> [AS <name>]  Load another Parquet file, table directory or SQLite file into this session".to_string(),
         ]
     }

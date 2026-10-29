@@ -1457,6 +1457,16 @@ impl QueryEngine {
         self.tables.iter().map(|t| t.name.as_str()).collect()
     }
 
+    /// Where table `name` was loaded from, if it is a Parquet file or a
+    /// table directory (not a SQLite table).
+    pub fn table_path(&self, name: &str) -> Option<&std::path::Path> {
+        let table = self.table(name).ok()?;
+        match table.data {
+            TableData::File(_) | TableData::Dir(_) => Some(&table.path),
+            TableData::Lookup => None,
+        }
+    }
+
     /// Get schema information: (table_name, columns), in load order, each
     /// column as (name, type name) -- the type `--pipe` gives it, a SQLite
     /// table's declared type, or empty when it has none (#83). A table
