@@ -38,7 +38,7 @@ use db_core::storage::column::parquet::footer::PhysicalType;
 use db_core::storage::column::{decode_column_full, decode_column_full_bit_pattern, Decoded};
 use db_core::storage::ingest::{Snapshot, MANIFEST_FILE};
 use db_core::storage::parquet::Field;
-use db_core::storage::{ParquetFile, Vfs, VfsFile};
+use db_core::storage::{ParquetFile, Vfs};
 use db_core::vm::batch::{Chunk, QueryOutput, ScanSource, VmError};
 use db_core::vm::engine::{self, InMemorySegment, NoResolver};
 use std::collections::HashMap;
@@ -876,8 +876,9 @@ struct Table {
 
 /// Where a table's rows are.
 enum TableData {
-    /// A Parquet file, memory-mapped.
-    File(db_core::storage::MmapRegion),
+    /// A Parquet file, read one column chunk at a time (db-core#841): no
+    /// mapping keeps every page a scan touched resident.
+    File(db_core::storage::column::posix::PosixFile),
     /// A table directory (tools#13), read as a fresh snapshot per query.
     Dir(std::path::PathBuf),
     /// A table in a SQLite file (tools#69), queried through db-core's row
@@ -1039,9 +1040,8 @@ impl QueryEngine {
         }
         let data = db_core::storage::PosixVfs
             .open(path)
-            .and_then(|f| f.mmap())
             .map_err(|e| QueryError::Io(format!("{}: {e}", path.display())))?;
-        let file = ParquetFile::open(&data)?;
+        let file = ParquetFile::open_file(&data)?;
         let table_name = name.unwrap_or_else(|| {
             path.file_stem()
                 .and_then(|s| s.to_str())
@@ -1128,7 +1128,7 @@ impl QueryEngine {
     fn hold(&self, name: &str) -> Result<Held<'_>> {
         let table = self.table(name)?;
         Ok(match &table.data {
-            TableData::File(data) => Held::File(Box::new(ParquetFile::open(data)?)),
+            TableData::File(data) => Held::File(Box::new(ParquetFile::open_file(data)?)),
             TableData::Dir(path) => Held::Dir(open_snapshot(path)?),
             // `lookup_engine` takes every query that names one first.
             TableData::Lookup => {
