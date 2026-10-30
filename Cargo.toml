@@ -13,3 +13,9 @@ db-cli = { path = "db-cli", version = "0.5.0" }
 [profile.release]
 lto = true
 codegen-units = 1
+# Keep column-rs under the parity benchmark's 5 MB binary target (#89):
+# no symbol table, and no unwind tables or landing pads. Nothing catches
+# a panic (a worker's is re-raised when its thread scope closes), so a
+# panic still prints its message and exits, by SIGABRT. Tests unwind.
+strip = true
+panic = "abort"
