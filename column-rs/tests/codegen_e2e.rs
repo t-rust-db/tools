@@ -64,8 +64,16 @@ fn compile_and_run(src: &str, args: &[&str]) -> String {
     let bin_path = dir.join("generated_bin");
     std::fs::write(&src_path, src).unwrap();
 
-    let status = Command::new("rustc")
-        .args(["--edition", "2021", "--crate-type", "bin"])
+    let mut rustc = Command::new("rustc");
+    rustc.args(["--edition", "2021", "--crate-type", "bin"]);
+    // A release build of this workspace is LTO (Cargo.toml), so its rlibs
+    // hold rustc's LLVM bitcode, not machine code: rustc does the LTO
+    // itself and hands the linker an object. Left to the system linker,
+    // Apple's `ld` cannot read a newer LLVM's bitcode (#35).
+    if !cfg!(debug_assertions) {
+        rustc.args(["-C", "lto=fat"]);
+    }
+    let status = rustc
         .arg("-L")
         .arg(&deps)
         .arg("--extern")
