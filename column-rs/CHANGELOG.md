@@ -2,6 +2,13 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.37.1] - 2026-10-30
+
+### Changed
+
+- A semi-join on a float key, or on an integer key whose subquery returns floats, probes a hash set instead of comparing every key per row (db-core v0.208.0, #90). A 30k-key float semi-join over 10M rows drops from over 20 s to 41 ms (DuckDB 45 ms). Results are unchanged.
+- `EXPLAIN` of a `col IN (SELECT ...)` semi-join shows the `IN` filter its body runs, and the key column loads first (#90).
+
 ## [0.37.0] - 2026-10-30
 
 ### Fixed
