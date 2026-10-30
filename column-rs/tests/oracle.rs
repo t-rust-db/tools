@@ -820,8 +820,8 @@ fn oracle_semi_join_matches_duckdb() {
 
 /// #90: a semi-join compares keys as a literal `IN` list does, as DuckDB
 /// does: a NULL key matches nothing (not even a NULL in the subquery), and
-/// an integer key matches a float value equal to it. `nullable.parquet`
-/// holds NULL ids, vals and names.
+/// an integer key matches a float value equal to it, as does a float key
+/// an integer. `nullable.parquet` holds NULL ids, vals and names.
 #[test]
 fn oracle_semi_join_compares_keys_as_duckdb() {
     let path = fixture_path("nullable.parquet");
@@ -832,6 +832,8 @@ fn oracle_semi_join_compares_keys_as_duckdb() {
         ("name", "SELECT name FROM t"),
         ("id", "SELECT val FROM t"),
         ("id", "SELECT id * 1.0 FROM t WHERE id < 10"),
+        ("val", "SELECT val FROM t WHERE id < 50"),
+        ("val", "SELECT id FROM t"),
     ] {
         let sql_text = format!("SELECT COUNT(*) FROM t WHERE {key} IN ({sub})");
         let csv = require_duckdb_or_skip!(&sql_text.replace(" t", &format!(" '{path}'")));

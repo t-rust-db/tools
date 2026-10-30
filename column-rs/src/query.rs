@@ -1652,10 +1652,10 @@ mod tests {
         let nodes = engine.explain(&query).unwrap();
 
         assert!(details(&nodes).contains(&"SEMI JOIN: region_key IN (SELECT key FROM regions)"));
-        assert!(details(&nodes).contains(&"LOAD COLUMNS: id, region_key"));
+        assert!(details(&nodes).contains(&"LOAD COLUMNS: region_key, id"));
         assert!(details(&nodes).contains(&"LOAD COLUMNS: key"));
-        // No FILTER node -- the semi-join's WHERE isn't a VM predicate.
-        assert!(!details(&nodes).iter().any(|d| d.starts_with("FILTER")));
+        // The body filters on the subquery's keys (#90).
+        assert!(details(&nodes).contains(&"FILTER: region_key IN (SELECT ... FROM regions)"));
     }
 
     #[test]
