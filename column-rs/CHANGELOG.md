@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.36.1] - 2026-10-30
+
+### Changed
+
+- A join on a unique, dense integer key, such as a fact table joined to a dimension table's `0..n` ids, looks up its match by position instead of through a hash table (db-core v0.203.0, #88). The parity join (10M rows to 100,000 customers) drops from 1.66x to 1.18x DuckDB, 79 → 56 ms. Results are unchanged.
+
 ## [0.36.0] - 2026-10-29
 
 ### Added
