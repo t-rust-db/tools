@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "column-rs"
-version = "0.36.1"
+version = "0.37.0"
 dependencies = [
  "db-cli",
  "db-core",
@@ -431,11 +431,10 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.203.0"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.203.0#0ffe20862c82837d158c635b13e47df91f7a51be"
+version = "0.207.0"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.207.0#357c067c19df50b7a37a91de6fc8fbb5d43bc031"
 dependencies = [
  "memmap2",
- "ruzstd",
 ]
 
 [[package]]
@@ -1661,15 +1660,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ruzstd"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
-dependencies = [
- "twox-hash",
-]
-
-[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2127,12 +2117,6 @@ dependencies = [
  "ratatui-widgets",
  "unicode-width",
 ]
-
-[[package]]
-name = "twox-hash"
-version = "2.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
 
 [[package]]
 name = "typenum"
