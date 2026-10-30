@@ -2,6 +2,16 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.37.0] - 2026-10-30
+
+### Fixed
+
+- `WHERE col IN (SELECT ...)` compares keys as a literal `IN` list does, and as DuckDB does: a NULL key no longer matches a NULL in the subquery, and an integer key matches a float value equal to it (`5` and `5.0`). It used to compare the values as text (#90).
+
+### Changed
+
+- A semi-join runs over the main table's row groups in parallel, loading only the columns the query needs, with the subquery's values as one hash-set filter (db-core v0.207.0, #90). The parity semi-join (10M rows, 33k keys) drops from 15.5x to 1.0x DuckDB, 654 → 42 ms, and its peak memory from 1,354 to 156 MB.
+
 ## [0.36.1] - 2026-10-30
 
 ### Changed
