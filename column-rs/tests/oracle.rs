@@ -818,6 +818,31 @@ fn oracle_semi_join_matches_duckdb() {
     }
 }
 
+/// #90: a semi-join compares keys as a literal `IN` list does, as DuckDB
+/// does: a NULL key matches nothing (not even a NULL in the subquery), and
+/// an integer key matches a float value equal to it. `nullable.parquet`
+/// holds NULL ids, vals and names.
+#[test]
+fn oracle_semi_join_compares_keys_as_duckdb() {
+    let path = fixture_path("nullable.parquet");
+    let data = std::fs::read(&path).unwrap();
+    let file = ParquetFile::open(&data).unwrap();
+    for (key, sub) in [
+        ("id", "SELECT id FROM t"),
+        ("name", "SELECT name FROM t"),
+        ("id", "SELECT val FROM t"),
+        ("id", "SELECT id * 1.0 FROM t WHERE id < 10"),
+    ] {
+        let sql_text = format!("SELECT COUNT(*) FROM t WHERE {key} IN ({sub})");
+        let csv = require_duckdb_or_skip!(&sql_text.replace(" t", &format!(" '{path}'")));
+        let expected: i64 = parse_csv_rows(&csv)[0][0].parse().unwrap();
+        let rows = query::execute_semi_join(&file, &file, &sql::parse(&sql_text).unwrap())
+            .unwrap()
+            .into_rows();
+        assert_eq!(rows[0][0].as_f64().unwrap() as i64, expected, "{sql_text}");
+    }
+}
+
 /// #67: ROW_NUMBER/RANK/DENSE_RANK match DuckDB.
 #[test]
 fn oracle_ranking_window_functions_match_duckdb() {

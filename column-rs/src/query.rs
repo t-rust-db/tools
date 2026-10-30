@@ -816,18 +816,12 @@ fn execute_semi_join_on(
             "IN subquery must select exactly one column".to_string(),
         ));
     }
-    let allowed: std::collections::HashSet<String> =
-        sub_rows.rows().map(|row| row[0].to_string()).collect();
-
-    let mut needed = plan.body.columns_to_load();
-    if !needed.contains(&plan.key_column) {
-        needed.push(plan.key_column.clone());
-    }
-    let batch = main.whole(&needed, &[])?;
-    let filtered = engine::semi_filter(&batch, &plan.key_column, &allowed)?;
-
-    let segments = [InMemorySegment(filtered)];
-    Ok(engine::run(&segments, &plan.body)?)
+    // The subquery's values become the main query's `IN` list (#90): it
+    // runs over the main table's segments like any filtered query, and a
+    // NULL, a float or a string key compares as in a literal `IN` list.
+    let keys: Vec<Value> = sub_rows.rows().map(|row| row[0].clone()).collect();
+    let body = planner::compile_semi_body(query, keys)?;
+    run(main, &body, None)
 }
 
 /// Execute a query whose `SELECT` list contains window functions: the
