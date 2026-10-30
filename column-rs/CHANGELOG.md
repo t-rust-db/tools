@@ -2,6 +2,16 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.38.2] - 2026-10-31
+
+### Changed
+
+- A GROUP BY with many integer keys folds each worker's groups across row groups before merging (db-core v0.216.0, db-core#894): the parity `join_many_groups` (100K groups) drops from 199 to 71 ms and peak memory from 578 to 268 MB, ahead of DuckDB (122 ms, 454 MB). The plain parity join drops from 54 to 44 ms.
+
+### Fixed
+
+- A long `IN (...)` list no longer overflows the stack: 20,000 literals aborted the process and now run (db-core v0.217.1, db-core#901).
+
 ## [0.38.1] - 2026-10-30
 
 ### Changed
