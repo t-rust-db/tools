@@ -2,6 +2,16 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.38.1] - 2026-10-30
+
+### Changed
+
+- A GROUP BY with many groups merges worker results through key-hash partitions (db-core v0.215.0, db-core#863): the parity `join_many_groups` (100K groups) drops from 268 to 190 ms, peak memory 486 → 581 MB (DuckDB ~460 MB).
+
+### Fixed
+
+- `--pipe` returns a BLOB value from an ingest table's unflushed rows as base64 again; it came back `null` once db-core returned blobs as bytes (db-core#868).
+
 ## [0.38.0] - 2026-10-30
 
 ### Changed
