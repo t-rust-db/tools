@@ -115,6 +115,7 @@ impl ColType {
             Some(Value::Map(_)) => ColType::Map,
             Some(Value::List(_)) => ColType::List,
             Some(Value::Str(_)) => ColType::Text,
+            Some(Value::Blob(_)) => ColType::Blob,
             // `NULL`, or a value no column type describes (an aggregate's
             // internal sketch partial never reaches a result).
             Some(_) | None => ColType::Null,
@@ -139,6 +140,8 @@ pub fn encode(value: &Value, ty: ColType) -> Json {
                 .trim_end_matches('.')
                 .to_string(),
         ),
+        // db-core#868: a blob value is its bytes; older paths still give hex.
+        (Value::Blob(bytes), _) => Json::String(base64(bytes)),
         (Value::Str(hex), ColType::Blob) => match from_hex(hex) {
             Some(bytes) => Json::String(base64(&bytes)),
             None => Json::String(hex.to_string()),
@@ -411,6 +414,20 @@ mod tests {
             encode(&Value::Str("xyz".into()), ColType::Blob),
             json!("xyz"),
             "not hex: as is"
+        );
+        // db-core#868: blob values, whatever the column type says.
+        let bytes: std::sync::Arc<[u8]> = vec![0x80, 0xff, 0].into();
+        assert_eq!(
+            encode(&Value::Blob(bytes.clone()), ColType::Blob),
+            json!("gP8A")
+        );
+        assert_eq!(
+            encode(&Value::Blob(bytes.clone()), ColType::Null),
+            json!("gP8A")
+        );
+        assert_eq!(
+            ColType::infer([Value::Null, Value::Blob(bytes)].iter()),
+            ColType::Blob
         );
     }
 
