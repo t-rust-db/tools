@@ -2,6 +2,14 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.38.0] - 2026-10-30
+
+### Changed
+
+- Parquet tables are read one column chunk at a time instead of through a memory map, so pages a scan touched no longer stay resident (db-core v0.210.0, db-core#841). Peak memory on the 10M-row parity suite roughly halves on scans and aggregates: `SUM` 97 → 45 MB, `GROUP BY` 98 → 53 MB, a 1% filter 178 → 57 MB, a semi-join 158 → 67 MB. Times are unchanged.
+- A join feeding a `GROUP BY` no longer copies each row group's key and aggregate columns before probing (db-core v0.214.0, db-core#862): the parity join drops from 265 to 87 MB (DuckDB 87 MB) and from 1.24x to 1.12x DuckDB's time.
+- `UNNEST ... GROUP BY` and list reads use less memory (db-core v0.212.0, db-core#856): 199 → 72 MB on the parity `unnest_group_by_mid`.
+
 ## [0.37.1] - 2026-10-30
 
 ### Changed

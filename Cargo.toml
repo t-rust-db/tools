@@ -6,7 +6,7 @@ resolver = "2"
 
 # One db-core pin for every tool (#1), always the tagged release on GitHub.
 [workspace.dependencies]
-db-core = { version = "0.208.0", git = "https://github.com/t-rust-db/db-core", tag = "v0.208.0", default-features = false }
+db-core = { version = "0.214.0", git = "https://github.com/t-rust-db/db-core", tag = "v0.214.0", default-features = false }
 db-cli = { path = "db-cli", version = "0.5.0" }
 
 # Cargo only honours profiles at the workspace root (moved here from trigrep).
