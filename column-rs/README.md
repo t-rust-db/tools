@@ -60,6 +60,10 @@ column-rs -c "SELECT event_id, COUNT(*) FROM events GROUP BY event_id" events/
 # row groups that can't match
 column-rs -c "SELECT event_def.name, COUNT(*) FROM events JOIN event_def ON events.event_id = event_def.event_id GROUP BY event_def.name" events.parquet lookups.db
 
+# Several SQLite files load side by side (one query reads one of them);
+# an IN (SELECT ...) over the other kind of table runs as its values
+column-rs -c "SELECT name FROM sessions WHERE id IN (SELECT session_id FROM events WHERE event_id = 7)" events/ sessions.db machines.db
+
 # Pipe mode: JSON Lines requests on stdin, typed JSON Lines results
 column-rs --pipe events/
 
