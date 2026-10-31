@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.3] - 2026-10-31
+
+### Fixed
+
+- Opening a cache file after a crash checks the WAL or journal header before reading frames, streams them instead of reading the whole file, and treats a short read as a torn tail (db-core#875).
+
+### Changed
+
+- db-core pin v0.220.2.
+
 ## [0.5.2] - 2026-10-31
 
 ### Fixed

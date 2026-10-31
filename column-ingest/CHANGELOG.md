@@ -2,6 +2,18 @@
 
 All notable changes to column-ingest. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [0.3.2] - 2026-10-31
+
+### Fixed
+
+- `--follow` re-ingested the log from the start on any resume-file error; it now restarts only on a missing resume file or a rotated or truncated log (db-core#884).
+- Following a log was quadratic on long lines and buffered whole files (db-core#883).
+- A table whose writer panicked kept accepting calls; it refuses them until reopened (db-core#884).
+
+### Changed
+
+- db-core pin v0.220.2.
+
 ## [0.3.1] - 2026-10-31
 
 ### Fixed

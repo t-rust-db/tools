@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.2] - 2026-10-31
+
+### Fixed
+
+- Single-key `ORDER BY … LIMIT` over a table directory returned NULL for a selected column that was also filtered (db-core#914).
+- Reading a log was quadratic on long lines, and the tail reader skipped long lines and could loop forever (db-core#883).
+- A table whose writer panicked kept accepting calls; it refuses them until reopened (db-core#884).
+
+### Changed
+
+- db-core pin v0.220.2.
+
 ## [0.14.1] - 2026-10-31
 
 ### Fixed

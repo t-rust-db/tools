@@ -283,7 +283,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "column-ingest"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "column-rs"
-version = "0.38.4"
+version = "0.39.0"
 dependencies = [
  "db-cli",
  "db-core",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "db-studio"
-version = "0.14.2"
+version = "0.14.3"
 dependencies = [
  "catppuccin",
  "crossterm",
@@ -915,7 +915,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "loglume"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1812,7 +1812,7 @@ checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 
 [[package]]
 name = "sqlite-rs"
-version = "0.26.2"
+version = "0.26.3"
 dependencies = [
  "db-cli",
  "db-core",
@@ -2084,7 +2084,7 @@ checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "trigrep"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "db-core",
  "dirs",

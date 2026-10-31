@@ -4,6 +4,20 @@ All notable changes to sqlite-rs. Format follows [Keep a Changelog](https://keep
 
 **Versioning policy:** one minor version per completed plan phase — the version number tells the plan's story, sub-steps stay inside a phase. V1 (READ CORE) = 0.1.0 through 0.4.0. *(History note: internal iterations briefly numbered 0.4.0–0.6.0 were renumbered into the phase scheme on 14 Aug 2026, before any tag or publication of those versions existed.)*
 
+## [0.26.3] - 2026-10-31
+
+### Fixed
+
+- `rowid IN (…)` seeks each member, including in aggregates, and a long integer `IN` list is probed as a set (db-core#915).
+- `SELECT *` over a view that projects some of its table's columns is flattened into the table again, so its index is used (db-core#922).
+- `ROLLBACK` restores the catalog it undoes; `SELECT *` over a subquery with explicit columns returns only those; `INSERT` with a column listed twice keeps the first value; `HAVING` without `GROUP BY` needs an aggregate; `?` in a `CHECK` is refused, as in sqlite3 (db-core#650).
+- `sum()` reports sqlite3's `integer overflow` instead of hiding one mid-sum; more than 64 tables in one `FROM` is refused, as in sqlite3 (db-core#892, #877).
+- WAL and journal recovery check the header before reading frames and stream them instead of reading the whole file (db-core#875).
+
+### Changed
+
+- db-core pin v0.220.2.
+
 ## [0.26.2] - 2026-10-31
 
 ### Fixed
