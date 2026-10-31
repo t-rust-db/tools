@@ -2,6 +2,17 @@
 
 All notable changes to column-ingest. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [0.3.1] - 2026-10-31
+
+### Fixed
+
+- CLF, syslog and ISO 8601 timestamps were stored a day early for most dates (every date in 2025, March to December 2024): a CLF line stamped `15/Jun/2025:12:00:00 +0000` was written as 2025-06-14 12:00. Impossible dates such as 2023-02-29 are rejected, and a fractional JSON Lines epoch keeps its fraction (db-core#882). Rows already written by 0.3.0 keep the wrong value; re-ingest them to correct it.
+- A day merge refuses a Parquet file whose footer claims more than 64 Mi rows in one row group, or a string dictionary larger than its bytes can hold, instead of allocating for it (db-core#881).
+
+### Changed
+
+- db-core pin v0.218.0 (was v0.157.0).
+
 ## [0.3.0] - 2026-10-22
 
 ### Changed
