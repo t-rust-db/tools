@@ -41,6 +41,10 @@ fn write_value(out: &mut impl Write, value: &Value) {
         Value::Str(v) => {
             let _ = out.write_all(v.as_bytes());
         }
+        // db-core#868: a blob as `x'AB..'`, db-core's `Display`.
+        Value::Blob(_) => {
+            let _ = write!(out, "{value}");
+        }
         // db-core#621: a MAP value, printed as DuckDB prints it ({k=v, ...});
         // db-core#632: a DECIMAL at its scale (12.30); db-core#801: a LIST
         // as a JSON array (["a",null]).

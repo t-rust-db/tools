@@ -101,3 +101,24 @@ fn physical_shows_row_groups_and_the_column_tree() {
         assert!(stdout.contains(expected), "missing {expected:?} in\n{stdout}");
     }
 }
+
+/// #101: a Binary column prints as `x'AB..'`, as db-core's `Display` does,
+/// not as `NULL`.
+#[test]
+fn blob_columns_print_as_hex_literals() {
+    let out = Command::new(env!("CARGO_BIN_EXE_column-rs"))
+        .args(["-c", "SELECT id, k, seq FROM blobs WHERE id < 2"])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/blobs.parquet"
+        ))
+        .output()
+        .expect("spawn column-rs");
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "id\tk\tseq\n\
+         0\tx''\tx'FFFF0000'\n\
+         1\tx'33333333333333333333333333333333'\tx'FFFF0001'\n"
+    );
+}
