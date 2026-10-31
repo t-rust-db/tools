@@ -2,6 +2,19 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.14.2] - 2026-10-31
+
+### Fixed
+
+- Log timestamps were a day early for most dates (db-core#882).
+- Column engine: a non-boolean `WHERE` predicate was silently false; `HAVING` with an aggregate inside `CASE` returned no rows (db-core#886).
+- Row engine: a corrupt table page is an error instead of an empty table (db-core#873); CTEs are visible in subqueries and runaway CTE/view expansion is refused (db-core#876, #885).
+- `LIKE`/`GLOB` no longer overflow the stack (db-core#871).
+
+### Changed
+
+- db-core pin v0.218.0.
+
 ## [0.14.1] - 2026-10-28
 
 ### Fixed

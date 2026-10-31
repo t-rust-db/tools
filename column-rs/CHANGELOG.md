@@ -2,6 +2,15 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.38.3] - 2026-10-31
+
+### Fixed
+
+- A non-boolean `WHERE` predicate (`WHERE 1`, `WHERE ts`, `NOT ts`) was silently false and returned no rows; it is cast to BOOLEAN as DuckDB does. `HAVING` with an aggregate inside `CASE` returned no rows (db-core v0.218.0, db-core#886).
+- `ORDER BY ... LIMIT` returned wrong rows for integers above 2^53, and a huge `LIMIT` no longer panics (db-core#890, #889).
+- `LIKE`/`GLOB` patterns no longer overflow the stack or take exponential time (db-core#871).
+- A Parquet file whose footer claims more than 64 Mi rows in one row group, or a string dictionary larger than its bytes can hold, is refused instead of allocated (db-core#881).
+
 ## [0.38.2] - 2026-10-31
 
 ### Changed
