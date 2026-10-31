@@ -61,7 +61,8 @@ pub(crate) fn compile_select_program(
     // a `TableRefKind::Subquery` wrapping that CTE's own query, so the
     // rest of this pipeline (and #257's subquery-in-FROM codegen) needs
     // no CTE-specific handling at all.
-    let cte_expanded = expand_with_clause(select);
+    // A circular, misdeclared or oversized CTE is refused (db-core#876/#885).
+    let cte_expanded = expand_with_clause(select).map_err(|e| e.to_string())?;
     // #380: every catalog-view reference in `FROM`/`JOIN` is rewritten
     // away next, the same shape as the CTE rewrite above — into a
     // `TableRefKind::Subquery` wrapping the view's own stored query,
