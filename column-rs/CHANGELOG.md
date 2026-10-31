@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.38.4] - 2026-10-31
+
+### Fixed
+
+- A Binary (`BLOB`) column printed as `NULL` in `-c` output (`SELECT k`, `SELECT *`, `GROUP BY k`); it prints as `x'AB..'`, db-core's rendering (#101).
+
 ## [0.38.3] - 2026-10-31
 
 ### Fixed

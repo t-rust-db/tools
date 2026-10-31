@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "column-rs"
-version = "0.38.3"
+version = "0.38.4"
 dependencies = [
  "db-cli",
  "db-core",
