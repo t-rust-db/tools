@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.2] - 2026-10-31
+
+### Fixed
+
+- A damaged cache file is an error instead of a crash or silent damage: a cyclic b-tree page no longer overflows the stack, and an out-of-range freelist page is refused instead of handing out a live page (db-core#872, #874).
+
+### Changed
+
+- db-core pin v0.218.0 (was v0.78.1), the workspace pin; first release from the tools workspace.
+
 ## [0.5.1] - 2026-09-09
 
 ### Added
