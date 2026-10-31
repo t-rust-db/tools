@@ -15,6 +15,7 @@ use std::cmp::Ordering;
 use std::rc::Rc;
 
 use db_core::value::Collation;
+use db_core::vm::row::cursor::{CursorError, CursorResult};
 use db_core::vm::row::cursor_factory::{CursorFactory, CursorFactoryError};
 use db_core::vm::row::schema_storage::{SchemaStorage, SchemaStorageError};
 use db_core::vm::row::transaction::{Transaction, TransactionError};
@@ -32,6 +33,13 @@ type SharedPager = Rc<RefCell<crate::pager::Pager>>;
 
 fn storage_err(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+/// A b-tree or record failure as the VM's cursor error (db-core#873):
+/// these used to read as "no row" / "end of table", so a corrupt file
+/// returned `count(*)` = 0 or no rows instead of failing.
+fn cursor_err(e: impl std::fmt::Display) -> CursorError {
+    CursorError(e.to_string())
 }
 
 // ---------------------------------------------------------------- tables
@@ -67,40 +75,46 @@ impl TableCursorAdapter {
         }
     }
 
-    fn position(&mut self, rowid: Result<Option<i64>, btree::BtreeError>) -> bool {
-        self.current_rowid = rowid.ok().flatten();
+    fn position(&mut self, rowid: Result<Option<i64>, btree::BtreeError>) -> CursorResult<bool> {
         self.cached = None;
-        self.current_rowid.is_some()
+        self.current_rowid = None;
+        self.current_rowid = rowid.map_err(cursor_err)?;
+        Ok(self.current_rowid.is_some())
     }
 
-    fn max_rowid(&self) -> i64 {
+    fn max_rowid(&self) -> CursorResult<i64> {
         let mut probe = TableCursor::new(Rc::clone(&self.source), &self.header, self.root_page);
-        probe.last().ok().flatten().unwrap_or(0)
+        Ok(probe.last().map_err(cursor_err)?.unwrap_or(0))
     }
 }
 
 impl Cursor for TableCursorAdapter {
-    fn rewind(&mut self) -> bool {
+    fn rewind(&mut self) -> CursorResult<bool> {
         let r = self.cursor.first();
         self.position(r)
     }
 
-    fn next(&mut self) -> bool {
+    fn next(&mut self) -> CursorResult<bool> {
         let r = self.cursor.next();
         self.position(r)
     }
 
-    fn last(&mut self) -> bool {
+    fn last(&mut self) -> CursorResult<bool> {
         let r = self.cursor.last();
         self.position(r)
     }
 
-    fn prev(&mut self) -> bool {
-        let r = self.cursor.prev();
+    fn prev(&mut self) -> CursorResult<bool> {
+        // `prev` without a `last` first is the b-tree reporting a call
+        // order it doesn't walk, not a damaged file: no row, as before.
+        let r = match self.cursor.prev() {
+            Err(btree::BtreeError::CursorNotPositioned { .. }) => Ok(None),
+            r => r,
+        };
         self.position(r)
     }
 
-    fn seek(&mut self, rowid: i64) -> bool {
+    fn seek(&mut self, rowid: i64) -> CursorResult<bool> {
         let r = self
             .cursor
             .seek(rowid)
@@ -108,19 +122,23 @@ impl Cursor for TableCursorAdapter {
         self.position(r)
     }
 
-    fn column(&self, col: usize) -> Option<Value> {
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
         // `column` takes `&self`; the dispatcher always positions first,
         // and `payload()`/`ensure_cached` is called through `&mut self`
         // paths, so fall back to a direct read when nothing is cached.
         // `None` is "no current row" (db-core#231); a column index past the
-        // record's end is `Some(Null)`, SQLite's short-record rule.
+        // record's end is `Some(Null)`, SQLite's short-record rule. A record
+        // that doesn't decode is an error, not "no current row" (db-core#873).
         match &self.cached {
-            Some((_, values)) => Some(values.get(col).cloned().unwrap_or(Value::Null)),
+            Some((_, values)) => Ok(Some(values.get(col).cloned().unwrap_or(Value::Null))),
             None => {
-                self.current_rowid?;
-                let payload = self.cursor.current_payload().ok()?;
-                let values = decode_record(&payload, self.header.text_encoding).ok()?;
-                Some(values.get(col).cloned().unwrap_or(Value::Null))
+                if self.current_rowid.is_none() {
+                    return Ok(None);
+                }
+                let payload = self.cursor.current_payload().map_err(cursor_err)?;
+                let values =
+                    decode_record(&payload, self.header.text_encoding).map_err(cursor_err)?;
+                Ok(Some(values.get(col).cloned().unwrap_or(Value::Null)))
             }
         }
     }
@@ -129,54 +147,61 @@ impl Cursor for TableCursorAdapter {
         self.current_rowid
     }
 
-    fn payload(&self) -> Option<Rc<[u8]>> {
-        self.current_rowid?;
-        let payload = self.cursor.current_payload().ok()?;
-        Some(Rc::from(&payload[..]))
+    fn payload(&self) -> CursorResult<Option<Rc<[u8]>>> {
+        if self.current_rowid.is_none() {
+            return Ok(None);
+        }
+        let payload = self.cursor.current_payload().map_err(cursor_err)?;
+        Ok(Some(Rc::from(&payload[..])))
     }
 
-    fn insert_payload(&mut self, rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
-        let writer = self.writer.as_ref()?;
-        let ok = btree::insert_row(
+    fn insert_payload(&mut self, rowid: i64, payload: &Rc<[u8]>) -> CursorResult<Option<bool>> {
+        let Some(writer) = self.writer.as_ref() else {
+            return Ok(None);
+        };
+        let inserted = btree::insert_row(
             &mut writer.borrow_mut(),
             &self.header,
             self.root_page,
             rowid,
             payload,
-        )
-        .is_ok();
+        );
         self.cached = None;
-        Some(ok)
+        inserted.map_err(cursor_err)?;
+        Ok(Some(true))
     }
 
-    fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
+    fn insert(&mut self, rowid: i64, values: Vec<Value>) -> CursorResult<bool> {
         let payload = crate::record::encode_record(&values, self.header.text_encoding);
-        self.insert_payload(rowid, &Rc::from(payload))
-            .unwrap_or(false)
+        Ok(self
+            .insert_payload(rowid, &Rc::from(payload))?
+            .unwrap_or(false))
     }
 
-    fn delete(&mut self) -> bool {
+    fn delete(&mut self) -> CursorResult<bool> {
         let (Some(writer), Some(rowid)) = (self.writer.as_ref(), self.current_rowid) else {
-            return false;
+            return Ok(false);
         };
-        let ok = btree::delete_row(
+        let deleted = btree::delete_row(
             &mut writer.borrow_mut(),
             &self.header,
             self.root_page,
             rowid,
-        )
-        .is_ok();
+        );
         self.current_rowid = None;
         self.cached = None;
-        ok
+        deleted.map_err(cursor_err)?;
+        Ok(true)
     }
 
-    fn next_rowid(&self) -> i64 {
-        self.max_rowid().saturating_add(1)
+    fn next_rowid(&self) -> CursorResult<i64> {
+        Ok(self.max_rowid()?.saturating_add(1))
     }
 
-    fn count(&self) -> Option<i64> {
-        btree::count_table_rows(&self.source, self.root_page).ok()
+    fn count(&self) -> CursorResult<Option<i64>> {
+        btree::count_table_rows(&self.source, self.root_page)
+            .map(Some)
+            .map_err(cursor_err)
     }
 }
 
@@ -209,12 +234,17 @@ impl IndexCursorAdapter {
         }
     }
 
-    fn set_current(&mut self, row: Result<Option<IndexRow>, btree::BtreeError>) -> bool {
-        self.current = row.ok().flatten().and_then(|row| {
-            let values = decode_record(&row.payload, self.header.text_encoding).ok()?;
-            Some((row, values))
-        });
-        self.current.is_some()
+    fn set_current(
+        &mut self,
+        row: Result<Option<IndexRow>, btree::BtreeError>,
+    ) -> CursorResult<bool> {
+        self.current = None;
+        let Some(row) = row.map_err(cursor_err)? else {
+            return Ok(false);
+        };
+        let values = decode_record(&row.payload, self.header.text_encoding).map_err(cursor_err)?;
+        self.current = Some((row, values));
+        Ok(true)
     }
 
     /// sqlite-rs `decode_leading_columns`: the entry's first `probe.len()`
@@ -242,29 +272,31 @@ impl IndexCursorAdapter {
 }
 
 impl Cursor for IndexCursorAdapter {
-    fn rewind(&mut self) -> bool {
+    fn rewind(&mut self) -> CursorResult<bool> {
         let r = self.cursor.first();
         self.set_current(r)
     }
 
-    fn next(&mut self) -> bool {
+    fn next(&mut self) -> CursorResult<bool> {
         let r = self.cursor.next();
         self.set_current(r)
     }
 
-    fn last(&mut self) -> bool {
+    fn last(&mut self) -> CursorResult<bool> {
         let r = self.cursor.last();
         self.set_current(r)
     }
 
-    fn prev(&mut self) -> bool {
+    fn prev(&mut self) -> CursorResult<bool> {
         let r = self.cursor.prev();
         self.set_current(r)
     }
 
-    fn column(&self, col: usize) -> Option<Value> {
-        let (_, values) = self.current.as_ref()?;
-        Some(values.get(col).cloned().unwrap_or(Value::Null))
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
+        Ok(self
+            .current
+            .as_ref()
+            .map(|(_, values)| values.get(col).cloned().unwrap_or(Value::Null)))
     }
 
     fn rowid(&self) -> Option<i64> {
@@ -279,19 +311,19 @@ impl Cursor for IndexCursorAdapter {
         }
     }
 
-    fn seek_index_eq(&mut self, key: &[Value], collations: &[Collation]) -> bool {
+    fn seek_index_eq(&mut self, key: &[Value], collations: &[Collation]) -> CursorResult<bool> {
         let r = self.cursor.seek(key, self.header.text_encoding);
-        if !self.set_current(r) {
-            return false;
+        if !self.set_current(r)? {
+            return Ok(false);
         }
         let matched = self.compare_leading(key, collations) == Some(Ordering::Equal);
         if !matched {
             self.current = None;
         }
-        matched
+        Ok(matched)
     }
 
-    fn seek_index_ge(&mut self, key: &[Value], _collations: &[Collation]) -> bool {
+    fn seek_index_ge(&mut self, key: &[Value], _collations: &[Collation]) -> CursorResult<bool> {
         let r = self.cursor.seek(key, self.header.text_encoding);
         self.set_current(r)
     }
@@ -306,9 +338,9 @@ impl Cursor for IndexCursorAdapter {
         )
     }
 
-    fn idx_insert(&mut self, key: Vec<Value>) -> bool {
+    fn idx_insert(&mut self, key: Vec<Value>) -> CursorResult<bool> {
         let Some(writer) = self.writer.as_ref() else {
-            return false;
+            return Ok(false);
         };
         btree::insert_entry(
             &mut writer.borrow_mut(),
@@ -317,12 +349,13 @@ impl Cursor for IndexCursorAdapter {
             &key,
             self.header.text_encoding,
         )
-        .is_ok()
+        .map_err(cursor_err)?;
+        Ok(true)
     }
 
-    fn idx_delete(&mut self, key: &[Value]) -> bool {
+    fn idx_delete(&mut self, key: &[Value]) -> CursorResult<bool> {
         let Some(writer) = self.writer.as_ref() else {
-            return false;
+            return Ok(false);
         };
         btree::delete_entry(
             &mut writer.borrow_mut(),
@@ -331,7 +364,8 @@ impl Cursor for IndexCursorAdapter {
             key,
             self.header.text_encoding,
         )
-        .is_ok()
+        .map_err(cursor_err)?;
+        Ok(true)
     }
 }
 
@@ -628,6 +662,28 @@ impl SchemaStorage for BtreeSchemaStorage {
                 tbl_name: tbl_name.to_string(),
                 rootpage: root_page,
                 sql: sql.to_string(),
+            },
+        )
+        .map_err(schema_err)
+    }
+
+    /// The `sqlite_master` row of an implicit `PRIMARY KEY`/`UNIQUE` index,
+    /// with a NULL `sql` as sqlite3 writes it (db-core#694).
+    fn insert_autoindex_row(
+        &mut self,
+        name: &str,
+        tbl_name: &str,
+        root_page: u32,
+    ) -> Result<(), SchemaStorageError> {
+        btree::insert_autoindex_master_row(
+            &mut self.pager.borrow_mut(),
+            &self.header,
+            &btree::MasterEntry {
+                kind: "index".to_string(),
+                name: name.to_string(),
+                tbl_name: tbl_name.to_string(),
+                rootpage: root_page,
+                sql: String::new(),
             },
         )
         .map_err(schema_err)

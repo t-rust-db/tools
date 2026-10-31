@@ -298,6 +298,8 @@ fn run_query(db_path: &Path, record: &QueryRecord) -> Outcome {
             // other statement kinds.
             | CodegenError::RowShapeMismatch { .. }
             | CodegenError::CircularView { .. }
+            // A CTE/view expansion past db-core's size bound (#876).
+            | CodegenError::ExpansionTooLarge { .. }
             | CodegenError::Internal { .. },
         ) => return Outcome::Skip,
     };

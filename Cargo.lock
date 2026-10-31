@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "column-rs"
-version = "0.38.2"
+version = "0.38.3"
 dependencies = [
  "db-cli",
  "db-core",
@@ -431,15 +431,15 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.217.3"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.217.3#f3bb7c25164b907f955c3e0c396a10475fc7d2a9"
+version = "0.218.0"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.218.0#b922a0f0c2e56c382ee064188eb2c75ff4f5dde9"
 dependencies = [
  "memmap2",
 ]
 
 [[package]]
 name = "db-studio"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "catppuccin",
  "crossterm",
@@ -915,7 +915,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "loglume"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1812,7 +1812,7 @@ checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 
 [[package]]
 name = "sqlite-rs"
-version = "0.26.1"
+version = "0.26.2"
 dependencies = [
  "db-cli",
  "db-core",

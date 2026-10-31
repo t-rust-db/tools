@@ -4,6 +4,21 @@ All notable changes to sqlite-rs. Format follows [Keep a Changelog](https://keep
 
 **Versioning policy:** one minor version per completed plan phase — the version number tells the plan's story, sub-steps stay inside a phase. V1 (READ CORE) = 0.1.0 through 0.4.0. *(History note: internal iterations briefly numbered 0.4.0–0.6.0 were renumbered into the phase scheme on 14 Aug 2026, before any tag or publication of those versions existed.)*
 
+## [0.26.2] - 2026-10-31
+
+### Fixed
+
+- A corrupt table or index page is an error, as in sqlite3: `count(*)` printed 0, a scan printed no rows and a write failed with an unrelated message (db-core v0.218.0, db-core#873).
+- `CREATE TABLE` with a `PRIMARY KEY` or `UNIQUE` column writes its implicit index's `sqlite_master` row with a NULL `sql`, as sqlite3 does (db-core#694).
+- A circular, misdeclared or exponentially expanding CTE is refused instead of using gigabytes of memory; CTEs are visible inside `IN`/`EXISTS`/scalar subqueries; `count(*)` over a derived table works (db-core#876, #885, #887).
+- Cyclic b-tree pages and out-of-range freelist pages are errors instead of a stack overflow or reused live pages (db-core#872, #874).
+- `LIKE`/`GLOB` no longer overflow the stack or take exponential time, with sqlite3's pattern-length and ESCAPE errors (db-core#871).
+- `CREATE VIEW` refuses parameters in its body (db-core#650).
+
+### Changed
+
+- db-core pin v0.218.0 (was v0.201.0).
+
 ## [0.26.1] - 2026-10-29
 
 ### Fixed

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] - 2026-10-31
+
+### Fixed
+
+- Log timestamps were a day early for most dates (every date in 2025, March to December 2024): a CLF line stamped `15/Jun/2025:12:00:00` read as 2025-06-14. Impossible dates such as 2023-02-29 are rejected, and a fractional JSONL epoch keeps its fraction (db-core v0.218.0, db-core#882).
+- A non-boolean `WHERE` predicate over a table directory was silently false (db-core#886).
+
+### Changed
+
+- db-core pin v0.218.0.
+
 ## [0.14.0] - 2026-10-16
 
 ### Added

@@ -684,3 +684,50 @@ fn script_can_create_table_then_write_to_it_in_the_same_call() {
     let rows = run_query(&db, "SELECT * FROM fresh");
     assert_eq!(rows, "5\n");
 }
+
+/// db-core#873: the cursor adapter turned a b-tree error into "no row", so
+/// with `t`'s root page type zeroed `count(*)` printed 0 and a scan
+/// printed nothing. sqlite3 reports "database disk image is malformed";
+/// every read and write of `t` now fails with the storage error too.
+#[test]
+fn a_corrupt_table_page_is_an_error_not_an_empty_table() {
+    // `t` is the file's only table, so page 2 is its root.
+    let db = scratch_db("corrupt-root");
+    for sql in [
+        "CREATE TABLE t(a INTEGER, b TEXT)",
+        "INSERT INTO t VALUES (1, 'one')",
+    ] {
+        assert!(run_exec(&db, sql).status.success(), "{sql}");
+    }
+    assert_eq!(run_query(&db, "SELECT count(*) FROM t").trim(), "1");
+    let root = 2;
+
+    let mut bytes = std::fs::read(&db).unwrap();
+    let page_size = match u16::from_be_bytes([bytes[16], bytes[17]]) {
+        1 => 65_536,
+        n => usize::from(n),
+    };
+    // Byte 0 of a non-first page is its b-tree page type.
+    bytes[(root - 1) * page_size] = 0x00;
+    std::fs::write(&db, &bytes).unwrap();
+
+    for (cmd, sql) in [
+        ("query", "SELECT count(*) FROM t"),
+        ("query", "SELECT a, b FROM t"),
+        ("query", "SELECT sum(a) FROM t"),
+        ("exec", "INSERT INTO t VALUES (9, 'x')"),
+        ("exec", "DELETE FROM t WHERE a = 1"),
+    ] {
+        let output = Command::new(CLI)
+            .arg(cmd)
+            .arg(&db)
+            .arg(sql)
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "{sql}: corrupt page read as {:?}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+}
