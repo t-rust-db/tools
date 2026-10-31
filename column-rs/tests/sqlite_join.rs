@@ -303,6 +303,69 @@ fn a_table_directory_joins_a_lookup_table() {
     );
 }
 
+/// tools#103 as the issue writes it: a session table in SQLite joined
+/// SQLite-first to a table directory, and filtered by `IN (SELECT ...)`
+/// over it, in `-c` and `--pipe`; `--pipe` sees rows appended since the
+/// session opened.
+#[test]
+fn a_session_table_joins_and_semi_joins_a_table_directory() {
+    use db_core::storage::ingest::{Ack, TableOptions, TableWriter};
+    let root = std::env::temp_dir().join(format!("column-rs-sessions-{}", std::process::id()));
+    std::fs::remove_dir_all(&root).ok();
+    let dir = root.join("event");
+    let mut w = TableWriter::open(&dir, TableOptions::default()).unwrap();
+    let mut append = |rows: &[(i64, i64)]| {
+        for (session_id, event_id) in rows {
+            w.append(
+                format!(r#"{{"session_id":{session_id},"event_id":{event_id}}}"#).as_bytes(),
+                Ack::Durable,
+            )
+            .unwrap();
+        }
+    };
+    append(&[(1, 7), (2, 8), (3, 7)]);
+    let sessions = ScratchDb::new(
+        "session_live.db",
+        "CREATE TABLE session_live(session_id INTEGER PRIMARY KEY, name TEXT);\
+         INSERT INTO session_live VALUES (1, 'a');\
+         INSERT INTO session_live VALUES (2, 'b');\
+         INSERT INTO session_live VALUES (3, 'c');\
+         INSERT INTO session_live VALUES (4, 'd');",
+    );
+    let engine = QueryEngine::open_many(&[sessions.0.clone(), dir.clone()]).unwrap();
+    let join = "SELECT session_live.name FROM session_live \
+                JOIN event ON event.session_id = session_live.session_id \
+                WHERE event.event_id = 7 AND session_live.session_id > 0 \
+                ORDER BY session_live.name DESC LIMIT 5";
+    let semi = "SELECT name FROM session_live \
+                WHERE session_id IN (SELECT session_id FROM event WHERE event_id = 7) \
+                ORDER BY name";
+    assert_eq!(rows(&engine, join), [vec![text("c")], vec![text("a")]]);
+    assert_eq!(rows(&engine, semi), [vec![text("a")], vec![text("c")]]);
+
+    append(&[(4, 7)]);
+    let requests = format!(
+        "{}\n{}\n",
+        serde_json::json!({"id": 1, "sql": join}),
+        serde_json::json!({"id": 2, "sql": semi}),
+    );
+    let mut out = Vec::new();
+    column_rs::pipe::run(&engine, requests.as_bytes(), &mut out).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    drop(append);
+    w.close().unwrap();
+    std::fs::remove_dir_all(&root).ok();
+    let rows_of = |id: i64| -> Vec<String> {
+        out.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|v| v["id"] == id && v.get("row").is_some())
+            .map(|v| v["row"][0].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    assert_eq!(rows_of(1), ["d", "c", "a"], "{out}");
+    assert_eq!(rows_of(2), ["a", "c", "d"], "{out}");
+}
+
 /// db-core 0.184/0.186: ROUND, ABS and CASE run over a Parquet table
 /// joined to a lookup. Expected rows from DuckDB.
 #[test]
@@ -323,14 +386,71 @@ fn round_abs_and_case_over_a_cross_mode_join() {
     );
 }
 
+/// A scratch SQLite file `name` holding `schema`, removed on drop.
+struct ScratchDb(PathBuf);
+
+impl ScratchDb {
+    fn new(name: &str, schema: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("column-rs-sqlite-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::remove_file(&path).ok();
+        db_core::engine::row::RowEngine::create(&path, Default::default(), schema).unwrap();
+        ScratchDb(path)
+    }
+}
+
+impl Drop for ScratchDb {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.0).ok();
+    }
+}
+
+/// tools#103: several SQLite files load side by side; one query reads the
+/// tables of one of them.
 #[test]
-fn one_sqlite_file_per_session_and_no_alias() {
-    let mut engine = engine();
-    let second = engine.add_table(&fixture("lookups.db"), None).unwrap_err();
-    assert!(
-        second.to_string().contains("one SQLite file per session"),
-        "{second}"
+fn several_sqlite_files_load_and_a_query_reads_one_of_them() {
+    let machines = ScratchDb::new(
+        "machines.db",
+        "CREATE TABLE machines(id INTEGER, machine TEXT);\
+         INSERT INTO machines VALUES (2, 'm2');\
+         INSERT INTO machines VALUES (4500, 'm4500');",
     );
+    let engine = QueryEngine::open_many(&[
+        fixture("production.parquet"),
+        fixture("lookups.db"),
+        machines.0.clone(),
+    ])
+    .unwrap();
+    assert_eq!(
+        engine.table_names(),
+        ["production", "labels", "tiers", "machines"]
+    );
+    assert_eq!(
+        rows(
+            &engine,
+            "SELECT production.id, machines.machine FROM production \
+             JOIN machines ON production.id = machines.id ORDER BY production.id"
+        ),
+        [vec![int(2), text("m2")], vec![int(4500), text("m4500")]]
+    );
+    assert_eq!(rows(&engine, "SELECT COUNT(*) FROM labels"), [vec![int(4)]]);
+    let across = error(
+        &engine,
+        "SELECT COUNT(*) FROM machines JOIN labels ON machines.id = labels.id",
+    );
+    assert!(
+        across.contains("one query reads one SQLite file"),
+        "{across}"
+    );
+}
+
+#[test]
+fn a_table_name_in_two_sqlite_files_and_an_alias_are_refused() {
+    let again = ScratchDb::new("again.db", "CREATE TABLE labels(id INTEGER, label TEXT);");
+    let mut engine = engine();
+    let second = engine.add_table(&again.0, None).unwrap_err();
+    assert!(second.to_string().contains("labels"), "{second}");
 
     let mut fresh = QueryEngine::default();
     let alias = fresh
@@ -340,6 +460,68 @@ fn one_sqlite_file_per_session_and_no_alias() {
         alias.to_string().contains("keep their own names"),
         "{alias}"
     );
+}
+
+/// tools#103: an `IN (SELECT ...)` over the other kind of table runs as
+/// the list of values the subquery returns, from either side.
+#[test]
+fn in_select_across_a_sqlite_table_and_a_parquet_file() {
+    let engine = engine();
+    for (sql, expected) in [
+        (
+            "SELECT label FROM labels WHERE id IN (SELECT id FROM production WHERE id < 3) \
+             ORDER BY label",
+            vec![vec![text("one")], vec![text("two")]],
+        ),
+        (
+            "SELECT label FROM labels WHERE id NOT IN (SELECT id FROM production WHERE id < 3) \
+             AND id > 0 ORDER BY id",
+            vec![vec![text("three")], vec![text("late")]],
+        ),
+        (
+            "SELECT COUNT(*) FROM labels WHERE id IN (SELECT id FROM production WHERE id < 0)",
+            vec![vec![int(0)]],
+        ),
+        (
+            "SELECT COUNT(*) FROM labels WHERE id NOT IN (SELECT id FROM production WHERE id < 0)",
+            vec![vec![int(4)]],
+        ),
+        (
+            "SELECT COUNT(*) FROM production WHERE id IN (SELECT id FROM labels)",
+            vec![vec![int(4)]],
+        ),
+        (
+            "SELECT COUNT(*) FROM production WHERE id IN (SELECT id FROM labels WHERE id > 9999)",
+            vec![vec![int(0)]],
+        ),
+    ] {
+        assert_eq!(rows(&engine, sql), expected, "{sql}");
+    }
+}
+
+/// tools#103 (db-core#919): a join written SQLite-first returns what the
+/// swapped form returns, with a filter on the Parquet side.
+#[test]
+fn a_join_written_sqlite_first_filters_either_side() {
+    let engine = engine();
+    for (sqlite_first, parquet_first) in [
+        (
+            "SELECT production.id, labels.label FROM labels \
+             JOIN production ON production.id = labels.id \
+             WHERE production.id > 1 AND labels.id < 4000 ORDER BY labels.label LIMIT 1",
+            "SELECT production.id, labels.label FROM production \
+             JOIN labels ON production.id = labels.id \
+             WHERE production.id > 1 AND labels.id < 4000 ORDER BY labels.label LIMIT 1",
+        ),
+        (
+            "SELECT COUNT(*) FROM labels JOIN production USING (id) WHERE production.id < 3",
+            "SELECT COUNT(*) FROM production JOIN labels USING (id) WHERE production.id < 3",
+        ),
+    ] {
+        let got = rows(&engine, sqlite_first);
+        assert!(!got.is_empty(), "{sqlite_first}");
+        assert_eq!(got, rows(&engine, parquet_first), "{sqlite_first}");
+    }
 }
 
 #[test]

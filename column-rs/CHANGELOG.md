@@ -2,6 +2,24 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.39.0] - 2026-10-31
+
+### Added
+
+- Several SQLite files load side by side (`column-rs a.db b.db events/`); a query reads the tables of one of them, and naming tables from two files is an error that says so (#103).
+- `IN (SELECT …)` works across a SQLite table and a Parquet file or table directory, in either direction: the subquery runs first and its values become the `IN` list (#103).
+
+### Fixed
+
+- A join with the SQLite table written first (`FROM session_live JOIN event …`) failed with "no such table" when the `WHERE` filtered the column table (#103, db-core#919).
+- Single-key `ORDER BY … LIMIT` returned NULL for a selected column that was also filtered (db-core#914).
+- SQLite tables: `rowid IN (…)` seeks each member instead of scanning, which ran out of VM steps at about 25 ids on a large table (db-core#915); `SELECT *` over a view that projects some columns uses the table's index again (db-core#922).
+- Crafted keys could make `GROUP BY`, `DISTINCT`, joins and `IN` lists quadratic; list and map functions raise DuckDB's conversion error instead of returning NULL (db-core#891, #892).
+
+### Changed
+
+- db-core pin v0.220.2.
+
 ## [0.38.4] - 2026-10-31
 
 ### Fixed

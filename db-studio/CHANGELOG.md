@@ -2,6 +2,17 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.14.3] - 2026-10-31
+
+### Fixed
+
+- Column engine: single-key `ORDER BY … LIMIT` returned NULL for a selected column that was also filtered (db-core#914); crafted keys could make hashing quadratic (db-core#891).
+- Row engine: `rowid IN (…)` seeks instead of scanning (db-core#915); `SELECT *` over a projecting view uses the table's index again (db-core#922); `ROLLBACK` restores the catalog (db-core#650).
+
+### Changed
+
+- db-core pin v0.220.2.
+
 ## [0.14.2] - 2026-10-31
 
 ### Fixed

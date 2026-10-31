@@ -30,7 +30,8 @@ use db_core::engine::resolve::CrossModeEngine;
 use db_core::engine::row::RowEngine;
 use db_core::engine::{Cell, Engine, EngineError, ErrorKind};
 use db_core::parser::ast::{
-    ExplainBody, Expr, ExprKind, Join, JoinConstraint, JoinOp, ResultColumn, Select, TableRefKind,
+    ExplainBody, Expr, ExprKind, Join, JoinConstraint, JoinOp, Literal, ResultColumn, Select,
+    TableRefKind,
 };
 use db_core::parser::row::ParseOutcome;
 use db_core::parser::Explain;
@@ -1062,8 +1063,9 @@ impl QueryEngine {
     }
 
     /// Loads every table of the SQLite file at `path` under its own name
-    /// (tools#69). One SQLite file per session: db-core's cross-mode
-    /// engine joins a Parquet file to the tables of one SQLite file.
+    /// (tools#69). Several files load side by side (tools#103), their table
+    /// names distinct; one query reads the tables of one of them, as
+    /// db-core's cross-mode engine joins column tables to one SQLite file.
     fn add_lookups(&mut self, path: &std::path::Path, name: Option<String>) -> Result<()> {
         if name.is_some() {
             return Err(QueryError::Lookup(
@@ -1071,16 +1073,6 @@ impl QueryEngine {
                 format!(
                     "{}: a SQLite file's tables keep their own names (drop AS)",
                     path.display()
-                ),
-            ));
-        }
-        if let Some(loaded) = self.lookup_file() {
-            return Err(QueryError::Lookup(
-                ErrorKind::Unsupported,
-                format!(
-                    "{}: one SQLite file per session, and {} is loaded",
-                    path.display(),
-                    loaded.display()
                 ),
             ));
         }
@@ -1106,14 +1098,6 @@ impl QueryEngine {
             });
         }
         Ok(())
-    }
-
-    /// The SQLite file loaded into this session, if any.
-    fn lookup_file(&self) -> Option<&std::path::Path> {
-        self.tables
-            .iter()
-            .find(|t| matches!(t.data, TableData::Lookup))
-            .map(|t| t.path.as_path())
     }
 
     fn table(&self, name: &str) -> Result<&Table> {
@@ -1174,11 +1158,119 @@ impl QueryEngine {
                 _ => return None,
             },
         };
-        let lookups_only = named_tables(&query)
-            .ok()?
-            .iter()
-            .all(|name| matches!(self.table(name).map(|t| &t.data), Ok(TableData::Lookup)));
-        lookups_only.then_some((explain, query))
+        // An `IN (SELECT ...)` over column tables is replaced by its values
+        // before the query runs (tools#103), so only `FROM` and `JOIN` count.
+        let from_lookups = std::iter::once(from_table(&query).ok()?)
+            .chain(table_joins(&query).filter_map(|j| join_table(j).ok()))
+            .all(|name| self.is_lookup(name));
+        from_lookups.then_some((explain, query))
+    }
+
+    fn is_lookup(&self, name: &str) -> bool {
+        matches!(self.table(name).map(|t| &t.data), Ok(TableData::Lookup))
+    }
+
+    /// `query` with each `IN (SELECT ...)` in its `WHERE` whose subquery
+    /// reads only tables of the other kind than its `FROM` table -- column
+    /// tables under a SQLite table, or SQLite tables under a column table
+    /// -- replaced by the list of values the subquery returns (tools#103).
+    /// db-core's cross-mode engine runs joins only. `None` when there is
+    /// none to replace.
+    fn inline_subqueries(&self, query: &Select) -> Result<Option<Select>> {
+        let Some(mut where_clause) = query.where_clause.clone() else {
+            return Ok(None);
+        };
+        let from_lookup = self.is_lookup(from_table(query)?);
+        if !self.inline_in(&mut where_clause, from_lookup)? {
+            return Ok(None);
+        }
+        let mut inlined = query.clone();
+        inlined.where_clause = Some(where_clause);
+        Ok(Some(inlined))
+    }
+
+    /// [`Self::inline_subqueries`] on one expression, through `AND`, `OR`,
+    /// `NOT` and parentheses. Whether it replaced any.
+    fn inline_in(&self, expr: &mut Expr, from_lookup: bool) -> Result<bool> {
+        let list = match &mut expr.kind {
+            ExprKind::Binary { lhs, rhs, .. } => {
+                let left = self.inline_in(lhs, from_lookup)?;
+                return Ok(self.inline_in(rhs, from_lookup)? || left);
+            }
+            ExprKind::Unary { expr, .. } | ExprKind::Paren(expr) => {
+                return self.inline_in(expr, from_lookup)
+            }
+            ExprKind::InSubquery {
+                subquery, negated, ..
+            } => {
+                let names = named_tables(subquery)?;
+                if !names.iter().all(|n| self.is_lookup(n) != from_lookup) {
+                    return Ok(false);
+                }
+                let list = self.subquery_values(subquery)?;
+                // The column dialect has no empty `IN ()`: nothing is in an
+                // empty list.
+                if list.is_empty() {
+                    expr.kind = ExprKind::Literal(if *negated {
+                        Literal::True
+                    } else {
+                        Literal::False
+                    });
+                    return Ok(true);
+                }
+                list
+            }
+            _ => return Ok(false),
+        };
+        if let ExprKind::InSubquery {
+            expr: tested,
+            negated,
+            ..
+        } = &expr.kind
+        {
+            expr.kind = ExprKind::In {
+                expr: tested.clone(),
+                list,
+                negated: *negated,
+            };
+        }
+        Ok(true)
+    }
+
+    /// The values `subquery` returns, as literals for an `IN` list.
+    fn subquery_values(&self, subquery: &Select) -> Result<Vec<Expr>> {
+        let (result, _) = self.execute_parsed(subquery.clone(), &subquery.to_string())?;
+        // The row engine reports no columns for an empty result.
+        if result.columns.len() != 1 && result.rows().next().is_some() {
+            return Err(QueryError::UnsupportedSemiJoin(format!(
+                "IN (SELECT ...) needs one result column, got {}",
+                result.columns.len()
+            )));
+        }
+        result
+            .rows()
+            .filter_map(|row| row.into_iter().next())
+            .map(|value| {
+                let literal = match value {
+                    Value::Null => Literal::Null,
+                    Value::Int(i) => Literal::Integer(i),
+                    Value::Float(f) => Literal::Float(f),
+                    Value::Bool(b) => Literal::Integer(i64::from(b)),
+                    Value::Str(s) => Literal::Str(s.into_owned()),
+                    Value::Blob(b) => Literal::Blob(b.to_vec()),
+                    other => {
+                        return Err(QueryError::UnsupportedSemiJoin(format!(
+                            "IN (SELECT ...) across a SQLite table and a column table \
+                             compares integers, reals, text and blobs, not {other:?}"
+                        )))
+                    }
+                };
+                Ok(Expr {
+                    kind: ExprKind::Literal(literal),
+                    span: Default::default(),
+                })
+            })
+            .collect()
     }
 
     fn lookup_engine(&self, query: &Select) -> Result<Option<LookupEngine>> {
@@ -1189,13 +1281,23 @@ impl QueryEngine {
                 named.push(table);
             }
         }
-        let Some(lookup) = named
+        let mut files = named
             .iter()
-            .find(|t| matches!(t.data, TableData::Lookup))
-            .map(|t| t.path.as_path())
-        else {
+            .filter(|t| matches!(t.data, TableData::Lookup))
+            .map(|t| t.path.as_path());
+        let Some(lookup) = files.next() else {
             return Ok(None);
         };
+        if let Some(other) = files.find(|f| *f != lookup) {
+            return Err(QueryError::Lookup(
+                ErrorKind::Unsupported,
+                format!(
+                    "the query reads tables of {} and of {}: one query reads one SQLite file",
+                    lookup.display(),
+                    other.display()
+                ),
+            ));
+        }
         let columns: Vec<&Table> = named
             .into_iter()
             .filter(|t| !matches!(t.data, TableData::Lookup))
@@ -1345,13 +1447,31 @@ impl QueryEngine {
         sql: &str,
     ) -> Result<(QueryResult, Vec<Option<crate::pipe::ColType>>)> {
         let query = self.parse(sql)?;
+        self.execute_parsed(query, sql)
+    }
+
+    /// [`Self::execute_typed`] for `query`, parsed from `sql`.
+    fn execute_parsed(
+        &self,
+        query: Select,
+        sql: &str,
+    ) -> Result<(QueryResult, Vec<Option<crate::pipe::ColType>>)> {
+        // Printed and parsed again: the column dialect lowers an `IN` list
+        // as it parses, and the batch planner takes only the lowered form.
+        let (query, sql) = match self.inline_subqueries(&query)? {
+            Some(inlined) => {
+                let sql = inlined.to_string();
+                (self.parse(&sql)?, std::borrow::Cow::Owned(sql))
+            }
+            None => (query, std::borrow::Cow::Borrowed(sql)),
+        };
 
         // A query that names a SQLite table runs in db-core (tools#69).
         // `--pipe` infers its column types from the values.
         if let Some(mut engine) = self.lookup_engine(&query)? {
             let result = engine
                 .as_engine_mut()
-                .run_query(sql)
+                .run_query(&sql)
                 .map_err(lookup_error)?;
             let types = vec![None; result.columns.len()];
             let rows = result
