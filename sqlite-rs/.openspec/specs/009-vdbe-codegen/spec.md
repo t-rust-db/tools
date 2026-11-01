@@ -14,7 +14,7 @@ by the phase-3 opener (#87), grown by #139's bitwise/concat harvest,
 #142's literal-fidelity/CAST harvest (`Real`, `Blob`, `Int64`, `Cast`),
 and #137's bound-parameter harvest (`Variable`, for `WHERE rowid = ?`
 point lookups): the harvested, scope-decided `tools/opcodes-v2.json` (68 opcodes,
-oracle 3.53.4) is the exhaustive
+oracle 3.54.1) is the exhaustive
 denominator for every requirement below — no opcode outside that inventory
 is in scope for V2, and every opcode inside it must appear as a scenario
 somewhere in this spec (#65 wires the count into the assurance dashboard).

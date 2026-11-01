@@ -21,8 +21,8 @@ defaults:
 
 env:
   # Same pins as sqlite-rs.yml — enforced there by `make version-pin`.
-  SQLITE_ORACLE_VERSION: "3.53.4"
-  SQLITE_ORACLE_TARBALL: "sqlite-autoconf-3530400"
+  SQLITE_ORACLE_VERSION: "3.54.1"
+  SQLITE_ORACLE_TARBALL: "sqlite-autoconf-3540100"
   MVL_RUST_REV: "a64eb33e7c9ef9ad031d22a70405e59aa1ad3cb0"
   # sqlite-rs keeps its own target dir inside the workspace (its Makefile).
   CARGO_TARGET_DIR: ${{ github.workspace }}/sqlite-rs/target

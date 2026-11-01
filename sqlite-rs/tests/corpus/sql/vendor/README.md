@@ -40,7 +40,7 @@ CI, so the pin tracks the GitHub mirror instead.
 ## `tcl/` — 60 files
 
 From SQLite's own TCL test suite, `test/*.test` in the SQLite source tree at
-tag `version-3.53.4` — matching `[package.metadata.oracle]` in `Cargo.toml`, so
+tag `version-3.54.1` — matching `[package.metadata.oracle]` in `Cargo.toml`, so
 extracted SQL lines up with the `sqlite3` the corpus is validated against.
 
 The upstream suite is 1159 files; vendored here is a selection covering every

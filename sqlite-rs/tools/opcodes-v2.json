@@ -1,5 +1,5 @@
 {
-  "oracle_version": "3.53.4",
+  "oracle_version": "3.54.1",
   "query_count": 40,
   "opcode_count": 73,
   "opcodes": {
@@ -219,11 +219,7 @@
     },
     "Int64": {
       "count": 3,
-      "p4_variants": [
-        "-9223372036854775808",
-        "3000000000",
-        "9223372036854775807"
-      ],
+      "p4_variants": [],
       "example_query": "SELECT 3000000000, 9223372036854775807, -9223372036854775808 FROM products LIMIT 1",
       "category": "result"
     },
@@ -364,11 +360,7 @@
     },
     "Real": {
       "count": 3,
-      "p4_variants": [
-        "0.5",
-        "1",
-        "1000"
-      ],
+      "p4_variants": [],
       "example_query": "SELECT 1e3, .5, 1. FROM products LIMIT 1",
       "category": "result"
     },

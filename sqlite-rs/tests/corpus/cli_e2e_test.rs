@@ -95,20 +95,6 @@ fn expected_csv_path(dir: &Path, table: &str, db: &Path) -> PathBuf {
     dir.join(format!("{sanitized}_{stem}.csv"))
 }
 
-/// The header line `export` writes, CRLF-terminated like every other CSV
-/// row. Built with the crate's own `csv_quote` on purpose: the point of
-/// the header assertions is the *line assembly and terminator*, and
-/// per-value quoting parity is already covered against the oracle by
-/// `csv_quote_matches_oracle_on_edge_values` below.
-fn expected_csv_header(columns: &[String]) -> String {
-    let joined = columns
-        .iter()
-        .map(|c| sqlite_rs::format::csv_quote(c))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("{joined}\r\n")
-}
-
 fn in_family(path: &Path, family: &str) -> bool {
     path.parent()
         .and_then(|d| d.file_name())
@@ -181,37 +167,8 @@ fn export_csv_files_match_sqlite3_csv_header_across_corpus() {
                     )
                 });
 
-                if table.rows.is_empty() {
-                    // Deliberate, documented divergence: `sqlite3 -csv
-                    // -header` emits *nothing at all* for a zero-row
-                    // result — not even the header, since the header is
-                    // printed as part of the first row's output. `export`
-                    // writes a file per table, and a header-only CSV is
-                    // more useful to a consumer than an empty file (which
-                    // is indistinguishable from "table missing"), so it
-                    // keeps the header. Pinned here so the divergence
-                    // stays intentional rather than drifting.
-                    let header = expected_csv_header(&table.columns);
-                    assert_eq!(
-                        actual,
-                        header,
-                        "empty table should export a header-only CSV: {} / table {}",
-                        fixture.display(),
-                        table.name
-                    );
-                    assert_eq!(
-                        oracle_csv_with_header_output(&oracle, &db, &table.name, &table.columns),
-                        "",
-                        "assumption broken: oracle emitted output for a zero-row table \
-                         ({} / table {}) — if sqlite3 now prints a header here, drop this \
-                         special case and compare directly",
-                        fixture.display(),
-                        table.name
-                    );
-                    checked_tables += 1;
-                    continue;
-                }
-
+                // A zero-row table exports a header-only CSV, as sqlite3
+                // 3.54 prints one (3.53 printed nothing).
                 let expected =
                     oracle_csv_with_header_output(&oracle, &db, &table.name, &table.columns);
                 assert_eq!(

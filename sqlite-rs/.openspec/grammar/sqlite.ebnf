@@ -2,8 +2,8 @@
  * sqlite-rs -- SQL grammar source of truth (issue #63, epic #56)
  *
  * SQLite publishes NO EBNF. The upstream authorities are:
- *   - src/parse.y (Lemon LALR grammar, action-annotated) -- pinned at 3.53.4:
- *     https://github.com/sqlite/sqlite/blob/version-3.53.4/src/parse.y
+ *   - src/parse.y (Lemon LALR grammar, action-annotated) -- pinned at 3.54.1:
+ *     https://github.com/sqlite/sqlite/blob/version-3.54.1/src/parse.y
  *   - Railroad diagrams (human-readable, generated):
  *     https://www.sqlite.org/syntaxdiagrams.html
  *   - Prose reference:
@@ -65,7 +65,7 @@ explain-stmt    ::= explain-prefix sql-stmt ;
 explain-prefix  ::= "EXPLAIN" [ "QUERY" "PLAN" ] ;   (* db-core grammar.ebnf SHARED, db-core#565 *)
 
 (* ===================== SELECT (V2 slice, FROM/JOIN + GROUP BY/HAVING + UNION/UNION ALL V4/V6 slice) =====================
- * [parse.y:520 cmd, :654 oneselect, :710 selcollist, :750 from, :925 orderby_opt, :967 limit_opt, :1002 where_opt]
+ * [parse.y:520 cmd, :654 oneselect, :710 selcollist, :750 from, :931 orderby_opt, :973 limit_opt, :1008 where_opt]
  * V2 restrictions vs full parse.y: no window clause (V9). The FROM
  * clause itself (`from-clause` below) is now the V4 full JOIN slice
  * (#237's INNER/LEFT/CROSS `JOIN ... ON`, extended by #250 with
@@ -130,7 +130,7 @@ select-core     ::= "SELECT" [ "DISTINCT" | "ALL" ] result-column { "," result-c
                                                                             implicit whole-table group (#287) *)
 
 group-by-clause ::= "GROUP" "BY" expr { "," expr } ;
-                     (* V4 [parse.y:950 groupby_opt]; HAVING [parse.y:955
+                     (* V4 [parse.y:956 groupby_opt]; HAVING [parse.y:961
                         having_opt] moved to select-core above -- #287 *)
 
 result-column   ::= "*"                                   (* V2 [parse.y:717 selcollist] *)
@@ -168,27 +168,27 @@ table-ref       ::= table-name [ [ "AS" ] identifier ]    (* V2 [parse.y:762 sel
 from-clause     ::= table-ref { ( "," | join-op ) table-ref
                        [ "ON" expr | "USING" "(" column-name { "," column-name } ")" ] } ;
                                                                           (* V4 [parse.y:750 from, :758 stl_prefix,
-                                                                              :762 seltablist, :894 on_using,
-                                                                              :895 on_using USING] *)
-join-op         ::= [ "NATURAL" ] [ "INNER" ] "JOIN"                     (* V4 [parse.y:866 joinop COMMA|JOIN,
-                                                                              :868 joinop JOIN_KW JOIN] *)
-                  | [ "NATURAL" ] "LEFT" [ "OUTER" ] "JOIN"               (* V4 [parse.y:870 joinop JOIN_KW nm JOIN] *)
-                  | [ "NATURAL" ] "RIGHT" [ "OUTER" ] "JOIN"              (* V4 [parse.y:870 joinop JOIN_KW nm JOIN] --
+                                                                              :762 seltablist, :900 on_using,
+                                                                              :901 on_using USING] *)
+join-op         ::= [ "NATURAL" ] [ "INNER" ] "JOIN"                     (* V4 [parse.y:872 joinop COMMA|JOIN,
+                                                                              :874 joinop JOIN_KW JOIN] *)
+                  | [ "NATURAL" ] "LEFT" [ "OUTER" ] "JOIN"               (* V4 [parse.y:876 joinop JOIN_KW nm JOIN] *)
+                  | [ "NATURAL" ] "RIGHT" [ "OUTER" ] "JOIN"              (* V4 [parse.y:876 joinop JOIN_KW nm JOIN] --
                                                                               #250 *)
-                  | [ "NATURAL" ] "FULL" [ "OUTER" ] "JOIN"               (* V4 [parse.y:872 joinop JOIN_KW nm nm JOIN] --
+                  | [ "NATURAL" ] "FULL" [ "OUTER" ] "JOIN"               (* V4 [parse.y:878 joinop JOIN_KW nm nm JOIN] --
                                                                               #250 *)
-                  | "CROSS" "JOIN" ;                                     (* V4 [parse.y:872 joinop] --
+                  | "CROSS" "JOIN" ;                                     (* V4 [parse.y:878 joinop] --
                                                                               CROSS JOIN takes no ON here, but
                                                                               #250 allows USING with it *)
 
 ordering-term   ::= expr [ "COLLATE" collation-name ]
                      [ "ASC" | "DESC" ]
-                     [ "NULLS" ( "FIRST" | "LAST" ) ] ;   (* V2 [parse.y:927 sortlist] *)
+                     [ "NULLS" ( "FIRST" | "LAST" ) ] ;   (* V2 [parse.y:933 sortlist] *)
 
 collation-name  ::= identifier ;                          (* V2: BINARY | NOCASE | RTRIM *)
 
 (* ===================== Expressions (V2 slice) =====================
- * [parse.y:1176 expr, :1193 term]
+ * [parse.y:1182 expr, :1199 term]
  * Precedence, LOWEST to HIGHEST, mirrors parse.y's %left/%right
  * declarations [parse.y:295-309] exactly:
  *
@@ -208,12 +208,12 @@ collation-name  ::= identifier ;                          (* V2: BINARY | NOCASE
  *)
 
 expr            ::= or-expr ;                                             (* V2 *)
-or-expr         ::= and-expr { "OR" and-expr } ;                          (* V2 [parse.y:1349] *)
-and-expr        ::= not-expr { "AND" not-expr } ;                         (* V2 [parse.y:1348] *)
-not-expr        ::= { "NOT" } equality-expr ;                             (* V2 [parse.y:1448] *)
+or-expr         ::= and-expr { "OR" and-expr } ;                          (* V2 [parse.y:1355] *)
+and-expr        ::= not-expr { "AND" not-expr } ;                         (* V2 [parse.y:1354] *)
+not-expr        ::= { "NOT" } equality-expr ;                             (* V2 [parse.y:1454] *)
 
 equality-expr   ::= relational-expr { equality-tail } ;                   (* V2 *)
-equality-tail   ::= ( "=" | "==" | "!=" | "<>" ) relational-expr          (* V2 [parse.y:1350,1352] *)
+equality-tail   ::= ( "=" | "==" | "!=" | "<>" ) relational-expr          (* V2 [parse.y:1356,1352] *)
                   | "IS" [ "NOT" ] relational-expr                        (* V2 [parse.y expr ::= expr IS expr] *)
                   | "ISNULL"                                              (* V2 [parse.y expr ::= expr ISNULL] *)
                   | "NOTNULL" | "NOT" "NULL"                              (* V2 [parse.y expr ::= expr NOTNULL] *)
@@ -226,21 +226,21 @@ equality-tail   ::= ( "=" | "==" | "!=" | "<>" ) relational-expr          (* V2 
                                                                           (* V2 [parse.y expr ::= expr likeop expr] *)
 like-op         ::= "LIKE" | "GLOB" ;                                     (* V2; "REGEXP"|"MATCH" V7+ (need functions) *)
 
-relational-expr ::= bitwise-expr { ( "<" | "<=" | ">" | ">=" ) bitwise-expr } ;  (* V2 [parse.y:1354] *)
-bitwise-expr    ::= additive-expr { ( "&" | "|" | "<<" | ">>" ) additive-expr } ; (* V2 [parse.y:1353] *)
-additive-expr   ::= multiplicative-expr { ( "+" | "-" ) multiplicative-expr } ;   (* V2 [parse.y:1355] *)
-multiplicative-expr ::= concat-expr { ( "*" | "/" | "%" ) concat-expr } ;         (* V2 [parse.y:1357] *)
-concat-expr     ::= collate-expr { "||" collate-expr } ;                          (* V2 [parse.y:1359]; "->"/"->>" V11 *)
+relational-expr ::= bitwise-expr { ( "<" | "<=" | ">" | ">=" ) bitwise-expr } ;  (* V2 [parse.y:1360] *)
+bitwise-expr    ::= additive-expr { ( "&" | "|" | "<<" | ">>" ) additive-expr } ; (* V2 [parse.y:1359] *)
+additive-expr   ::= multiplicative-expr { ( "+" | "-" ) multiplicative-expr } ;   (* V2 [parse.y:1361] *)
+multiplicative-expr ::= concat-expr { ( "*" | "/" | "%" ) concat-expr } ;         (* V2 [parse.y:1363] *)
+concat-expr     ::= collate-expr { "||" collate-expr } ;                          (* V2 [parse.y:1365]; "->"/"->>" V11 *)
 collate-expr    ::= unary-expr { "COLLATE" collation-name } ;             (* V2 [parse.y expr ::= expr COLLATE ids] *)
-unary-expr      ::= { "+" | "-" | "~" } primary-expr ;                    (* V2 [parse.y:1452, BITNOT] *)
+unary-expr      ::= { "+" | "-" | "~" } primary-expr ;                    (* V2 [parse.y:1458, BITNOT] *)
 
-primary-expr    ::= literal-value                                         (* V2 [parse.y:1193-1204 term] *)
+primary-expr    ::= literal-value                                         (* V2 [parse.y:1199-1210 term] *)
                   | parameter                                             (* V2 [parse.y expr ::= VARIABLE] *)
-                  | column-ref                                            (* V2 [parse.y:1177 expr ::= idj] *)
-                  | function-call                                         (* V2 [parse.y:1235] *)
+                  | column-ref                                            (* V2 [parse.y:1183 expr ::= idj] *)
+                  | function-call                                         (* V2 [parse.y:1241] *)
                   | case-expr                                             (* V2 [parse.y expr ::= CASE case_operand case_exprlist case_else END] *)
                   | cast-expr                                             (* V2 [parse.y expr ::= CAST LP expr AS typetoken RP] *)
-                  | "(" expr ")"                                          (* V2 [parse.y:1176] *)
+                  | "(" expr ")"                                          (* V2 [parse.y:1182] *)
                   | "(" select-stmt ")"                                   (* V4 [parse.y expr ::= LP select RP] --
                                                                              #238: scalar subquery, incl. correlated *)
                   | [ "NOT" ] "EXISTS" "(" select-stmt ")" ;               (* V4 [parse.y expr ::= EXISTS LP select RP] --
@@ -255,7 +255,7 @@ cast-expr       ::= "CAST" "(" expr "AS" type-name ")" ;                  (* V2 
 
 function-call   ::= identifier "(" [ [ "DISTINCT" ] expr-list | "*" ] ")" ;
                      (* V2 scalar only (count(*) V4 with aggregates)
-                        [parse.y:1235 expr ::= idj LP distinct exprlist RP]
+                        [parse.y:1241 expr ::= idj LP distinct exprlist RP]
                         V9: FILTER clause, OVER window *)
 
 literal-value   ::= NUMBER                                                (* V2: int, hex 0x, float incl. 1e5/.5/1. *)
@@ -266,9 +266,9 @@ literal-value   ::= NUMBER                                                (* V2:
 
 parameter       ::= "?" | "?" NUMBER | ":" identifier | "@" identifier | "$" identifier ;  (* V2 *)
 
-column-ref      ::= identifier [ "." identifier [ "." identifier ] ] ;    (* V2 [parse.y:1178]; 3-part = db.tbl.col, ATTACH semantics V10 *)
+column-ref      ::= identifier [ "." identifier [ "." identifier ] ] ;    (* V2 [parse.y:1184]; 3-part = db.tbl.col, ATTACH semantics V10 *)
 
-expr-list       ::= expr { "," expr } ;                                   (* V2 [parse.y:1605 nexprlist] *)
+expr-list       ::= expr { "," expr } ;                                   (* V2 [parse.y:1615 nexprlist] *)
 
 (* ===================== DML (V3 block) =====================
  * Carried from the spike distillation; V3 tickets grow these
@@ -279,19 +279,19 @@ insert-stmt     ::= "INSERT" [ "OR" conflict-action ] "INTO" table-name
                      [ "(" column-name { "," column-name } ")" ]
                      ( "VALUES" "(" expr-list ")" { "," "(" expr-list ")" }
                      | select-stmt
-                     | "DEFAULT" "VALUES" ) ;                             (* V3 [parse.y:1082 cmd, :1114 insert_cmd, :1122 idlist_opt] *)
+                     | "DEFAULT" "VALUES" ) ;                             (* V3 [parse.y:1088 cmd, :1120 insert_cmd, :1128 idlist_opt] *)
 
 conflict-action ::= "REPLACE" | "IGNORE" | "ABORT" | "ROLLBACK" | "FAIL" ; (* V3 [parse.y:492 orconf, :493 resolvetype] *)
 
 update-stmt     ::= "UPDATE" [ "OR" conflict-action ] table-name
                      "SET" set-assignment { "," set-assignment }
-                     [ "WHERE" expr ] ;                                   (* V3 [parse.y:1014 cmd, :1065 setlist] *)
+                     [ "WHERE" expr ] ;                                   (* V3 [parse.y:1020 cmd, :1071 setlist] *)
 
 set-assignment  ::= column-name "=" expr
                   | "(" column-name { "," column-name } ")" "=" "(" expr-list ")" ;
-                                                                           (* V3 [parse.y:1065 setlist, :1073 nm] *)
+                                                                           (* V3 [parse.y:1071 setlist, :1079 nm] *)
 
-delete-stmt     ::= "DELETE" "FROM" table-name [ "WHERE" expr ] ;         (* V3 [parse.y:978 cmd, :1002 where_opt] *)
+delete-stmt     ::= "DELETE" "FROM" table-name [ "WHERE" expr ] ;         (* V3 [parse.y:984 cmd, :1008 where_opt] *)
 
 (* ===================== DDL (V3 block) ===================== *)
 
@@ -348,8 +348,8 @@ view-name       ::= identifier ;                                         (* V6 *
 
 (* ===================== PRAGMA journal_mode / integrity_check / quick_check
  *                       / synchronous (V6/V7 carve-outs) =====================
- * [parse.y:1715 cmd ::= PRAGMA nm dbnm EQ nmnum, :1717 cmd ::= PRAGMA nm
- * dbnm] -- `nmnum` (parse.y:1723) is where `DELETE`/`FULL` are folded in
+ * [parse.y:1725 cmd ::= PRAGMA nm dbnm EQ nmnum, :1727 cmd ::= PRAGMA nm
+ * dbnm] -- `nmnum` (parse.y:1733) is where `DELETE`/`FULL` are folded in
  * as bare keyword values alongside a plain `nm` (identifier) value like
  * `WAL`/`OFF`/`NORMAL`, which is why the `journal_mode`/`synchronous`
  * value alternations below need their own literal cases for those two
@@ -374,12 +374,12 @@ pragma-stmt     ::= "PRAGMA" "journal_mode" "=" ( "WAL" | "DELETE" )
                    | "PRAGMA" ( "integrity_check" | "quick_check" )
                    | "PRAGMA" "synchronous" [ "=" ( "OFF" | "NORMAL" | "FULL"
                                                    | "0" | "1" | "2" ) ] ;
-                     (* V6 [parse.y:1715 cmd] -- #388 *)
-                     (* V7 [parse.y:1717 cmd] -- #540, #541 *)
-                     (* V7 [parse.y:1715,1717 cmd] -- #645 *)
+                     (* V6 [parse.y:1725 cmd] -- #388 *)
+                     (* V7 [parse.y:1727 cmd] -- #540, #541 *)
+                     (* V7 [parse.y:1725,1717 cmd] -- #645 *)
 
 (* ===================== ANALYZE (V7 carve-out) =====================
- * [parse.y:1875 cmd ::= ANALYZE, :1876 cmd ::= ANALYZE nm dbnm] --
+ * [parse.y:1885 cmd ::= ANALYZE, :1886 cmd ::= ANALYZE nm dbnm] --
  * `dbnm` (an optional `.`-qualified schema-name prefix on the table
  * name) is a stock-SQLite production this MVP carve-out doesn't
  * implement: `table-name` below is a single bare identifier only, and
@@ -388,7 +388,7 @@ pragma-stmt     ::= "PRAGMA" "journal_mode" "=" ( "WAL" | "DELETE" )
  *)
 
 analyze-stmt    ::= "ANALYZE" [ table-name ] ;
-                     (* V7 [parse.y:1875 cmd] -- #461 *)
+                     (* V7 [parse.y:1885 cmd] -- #461 *)
 
 (* ===================== Transaction control (V5 slice) =====================
  * [parse.y:181 cmd ::= BEGIN transtype trans_opt, :186 transtype,

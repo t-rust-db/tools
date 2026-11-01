@@ -308,6 +308,23 @@ SQL
 CREATE TABLE t(a INTEGER, b INTEGER GENERATED ALWAYS AS (a*2) STORED) STRICT;
 INSERT INTO t(a) VALUES(21);
 SQL
+
+"$ORACLE" features/multitable.db <<'SQL'
+CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT);
+INSERT INTO customers VALUES(1,'Alice');
+INSERT INTO customers VALUES(2,'Bob');
+CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, total REAL);
+INSERT INTO orders VALUES(1,1,29.98);
+INSERT INTO orders VALUES(2,2,9.99);
+CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, price REAL);
+INSERT INTO products VALUES(1,'Widget',9.99);
+INSERT INTO products VALUES(2,'Gadget',19.99);
+CREATE TABLE order_items (order_id INTEGER, product_id INTEGER, qty INTEGER);
+INSERT INTO order_items VALUES(1,1,1);
+INSERT INTO order_items VALUES(1,2,1);
+INSERT INTO order_items VALUES(2,1,1);
+CREATE INDEX idx_orders_customer ON orders(customer_id);
+SQL
 cat > features/manifest.txt <<'EOF'
 autovacuum.db — PRAGMA auto_vacuum=FULL; page 2 is a pointer-map page
 (verified by raw byte inspection — dbstat doesn't surface ptrmap pages
@@ -316,6 +333,8 @@ fts5.db, rtree.db — virtual tables via FTS5 and R-Tree modules.
 strict_generated.db — a STRICT table with a GENERATED ALWAYS ... STORED
 column. All raw-row readable per Tier 0 (spec 001 Requirement 4) without
 needing query-level support for the extension.
+multitable.db — four tables (customers, orders, products, order_items)
+plus one index. For testing `tables` command and multi-table scenarios.
 EOF
 
 # --- invalid/: malformed inputs #11's VFS/header layer must reject cleanly ---

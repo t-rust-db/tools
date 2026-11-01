@@ -38,8 +38,8 @@ env:
   # enforced by `make version-pin`. The oracle diffs skip green when no
   # sqlite3 of exactly this version is found, so an unpinned runner would turn
   # the corpus job into theatre rather than a gate.
-  SQLITE_ORACLE_VERSION: "3.53.4"
-  SQLITE_ORACLE_TARBALL: "sqlite-autoconf-3530400"
+  SQLITE_ORACLE_VERSION: "3.54.1"
+  SQLITE_ORACLE_TARBALL: "sqlite-autoconf-3540100"
   # cargo-mvl-limit is not published to crates.io, so the qualified-subset
   # gate builds it from source at this pinned rev (verified against
   # rust-limit v0.3.0). Bumping it is a reviewed change, like an oracle bump.
