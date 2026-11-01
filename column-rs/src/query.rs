@@ -961,17 +961,35 @@ fn cell_value(cell: Cell) -> Value {
     }
 }
 
-/// Every table a query names: its `FROM`, each `JOIN`, and an
-/// `IN (SELECT ...)` subquery's `FROM`.
+/// Every table a query names: its `FROM`, each `JOIN`, and those of every
+/// `IN (SELECT ...)` in its `WHERE`, nested ones included (tools#108).
 fn named_tables(query: &Select) -> Result<Vec<&str>> {
     let mut names = vec![from_table(query)?];
     for join in table_joins(query) {
         names.push(join_table(join)?);
     }
-    if let Some(subquery) = in_subquery(query) {
-        names.push(from_table(subquery)?);
+    let mut subqueries = Vec::new();
+    if let Some(where_clause) = &query.where_clause {
+        in_subqueries(where_clause, &mut subqueries);
+    }
+    for subquery in subqueries {
+        names.extend(named_tables(subquery)?);
     }
     Ok(names)
+}
+
+/// Each `IN (SELECT ...)` in `expr`, through `AND`, `OR`, `NOT` and
+/// parentheses, as [`QueryEngine::inline_subqueries`] finds them.
+fn in_subqueries<'a>(expr: &'a Expr, out: &mut Vec<&'a Select>) {
+    match &expr.kind {
+        ExprKind::Binary { lhs, rhs, .. } => {
+            in_subqueries(lhs, out);
+            in_subqueries(rhs, out);
+        }
+        ExprKind::Unary { expr, .. } | ExprKind::Paren(expr) => in_subqueries(expr, out),
+        ExprKind::InSubquery { subquery, .. } => out.push(subquery),
+        _ => {}
+    }
 }
 
 /// Whether `path` is a table directory: a directory holding a manifest.

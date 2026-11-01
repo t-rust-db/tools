@@ -366,6 +366,88 @@ fn a_session_table_joins_and_semi_joins_a_table_directory() {
     assert_eq!(rows_of(2), ["a", "c", "d"], "{out}");
 }
 
+/// tools#108: `IN (SELECT ...)` over a table of a second SQLite file,
+/// alone and next to one over a table directory, in-process and through
+/// `--pipe` with fresh rows in every file.
+#[test]
+fn in_select_over_a_second_sqlite_file_and_a_table_directory() {
+    use db_core::engine::Engine;
+    use db_core::storage::ingest::{Ack, TableOptions, TableWriter};
+    let root = std::env::temp_dir().join(format!("column-rs-second-file-{}", std::process::id()));
+    std::fs::remove_dir_all(&root).ok();
+    let dir = root.join("event");
+    let mut w = TableWriter::open(&dir, TableOptions::default()).unwrap();
+    let mut append = |rows: &[(i64, i64)]| {
+        for (session_id, event_id) in rows {
+            w.append(
+                format!(r#"{{"session_id":{session_id},"event_id":{event_id}}}"#).as_bytes(),
+                Ack::Durable,
+            )
+            .unwrap();
+        }
+    };
+    append(&[(1, 7), (2, 7), (3, 8)]);
+    let sessions = ScratchDb::new(
+        "second_sessions.db",
+        "CREATE TABLE sessions(session_id INTEGER, machine_id INTEGER, name TEXT);\
+         INSERT INTO sessions VALUES (1, 10, 'a');\
+         INSERT INTO sessions VALUES (2, 20, 'b');\
+         INSERT INTO sessions VALUES (3, 10, 'c');\
+         INSERT INTO sessions VALUES (4, 30, 'd');",
+    );
+    let machines = ScratchDb::new(
+        "second_machines.db",
+        "CREATE TABLE machine(machine_id INTEGER, customers INTEGER);\
+         INSERT INTO machine VALUES (10, 5);\
+         INSERT INTO machine VALUES (20, 1);\
+         INSERT INTO machine VALUES (30, 1);",
+    );
+    let engine =
+        QueryEngine::open_many(&[sessions.0.clone(), machines.0.clone(), dir.clone()]).unwrap();
+    let alone = "SELECT name FROM sessions \
+                 WHERE machine_id IN (SELECT machine_id FROM machine WHERE customers >= 3) \
+                 ORDER BY name";
+    let both = "SELECT name FROM sessions \
+                WHERE machine_id IN (SELECT machine_id FROM machine WHERE customers >= 3) \
+                AND session_id IN (SELECT session_id FROM event WHERE event_id = 7) \
+                ORDER BY name";
+    let negated = "SELECT name FROM sessions \
+                   WHERE machine_id NOT IN (SELECT machine_id FROM machine WHERE customers >= 3) \
+                   ORDER BY name";
+    assert_eq!(rows(&engine, alone), [vec![text("a")], vec![text("c")]]);
+    assert_eq!(rows(&engine, both), [vec![text("a")]]);
+    assert_eq!(rows(&engine, negated), [vec![text("b")], vec![text("d")]]);
+
+    // Fresh rows in both kinds of table: machine 30 gains customers and
+    // session 4 an event.
+    append(&[(4, 7)]);
+    let mut machine_db = db_core::engine::row::RowEngine::open(&machines.0).unwrap();
+    machine_db
+        .run_query("UPDATE machine SET customers = 4 WHERE machine_id = 30")
+        .unwrap();
+    drop(machine_db);
+    let requests = format!(
+        "{}\n{}\n",
+        serde_json::json!({"id": 1, "sql": alone}),
+        serde_json::json!({"id": 2, "sql": both}),
+    );
+    let mut out = Vec::new();
+    column_rs::pipe::run(&engine, requests.as_bytes(), &mut out).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    drop(append);
+    w.close().unwrap();
+    std::fs::remove_dir_all(&root).ok();
+    let rows_of = |id: i64| -> Vec<String> {
+        out.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|v| v["id"] == id && v.get("row").is_some())
+            .map(|v| v["row"][0].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    assert_eq!(rows_of(1), ["a", "c", "d"], "{out}");
+    assert_eq!(rows_of(2), ["a", "d"], "{out}");
+}
+
 /// db-core 0.184/0.186: ROUND, ABS and CASE run over a Parquet table
 /// joined to a lookup. Expected rows from DuckDB.
 #[test]
