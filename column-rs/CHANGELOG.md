@@ -2,6 +2,20 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.42.0] - 2026-11-01
+
+### Added
+
+- `GROUP BY` an expression or a select-list position, and `ORDER BY` a computed select item (db-core#869, #930).
+
+### Fixed
+
+- `regexp_extract` supports `^`/`$` and `(...)?`, and refuses a malformed or unsupported pattern; a scalar function error fails the query instead of returning NULL (db-core#929).
+
+### Changed
+
+- db-core pin v0.224.1.
+
 ## [0.41.0] - 2026-11-01
 
 ### Added
