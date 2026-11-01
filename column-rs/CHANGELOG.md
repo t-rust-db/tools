@@ -2,6 +2,20 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.41.0] - 2026-11-01
+
+### Added
+
+- A join chains SQLite tables through each other across files, joined to a Parquet table or table directory in either order, with row-group pruning from the end of the chain (#108).
+
+### Fixed
+
+- `IN (SELECT …)` over a table of a second SQLite file works next to another `IN (SELECT …)` (#108).
+
+### Changed
+
+- db-core pin v0.223.0.
+
 ## [0.40.0] - 2026-11-01
 
 ### Added

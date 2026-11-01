@@ -4,6 +4,19 @@ All notable changes to sqlite-rs. Format follows [Keep a Changelog](https://keep
 
 **Versioning policy:** one minor version per completed plan phase — the version number tells the plan's story, sub-steps stay inside a phase. V1 (READ CORE) = 0.1.0 through 0.4.0. *(History note: internal iterations briefly numbered 0.4.0–0.6.0 were renumbered into the phase scheme on 14 Aug 2026, before any tag or publication of those versions existed.)*
 
+## [0.26.5] - 2026-11-01
+
+### Changed
+
+- The sqlite3 oracle is pinned to 3.54.1: fixtures, the vendored TCL corpus and the grammar's `parse.y` citations follow it.
+- `query` prints a whole blob and control characters as `^X`, as the sqlite3 3.54 shell does; `sqlite_version()` is 3.54.1.
+- db-core pin v0.223.0.
+
+### Fixed
+
+- `gen_fixtures.sh` builds `features/multitable.db`, which a regeneration used to delete.
+- `make version-pin` checks the sibling db-core and benchmark checkouts again.
+
 ## [0.26.4] - 2026-11-01
 
 ### Changed
