@@ -45,6 +45,7 @@ fn schema(sql: &str, columns: &[&str]) -> TableSchema {
     TableSchema {
         name: "t".to_string(),
         root_page: 2,
+        database: 0,
         columns: columns.iter().map(|c| (*c).to_string()).collect(),
         column_types,
         column_collations: vec![],

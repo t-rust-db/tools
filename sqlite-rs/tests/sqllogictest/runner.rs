@@ -234,6 +234,7 @@ fn run_query(db_path: &Path, record: &QueryRecord) -> Outcome {
         let no_from_schema = TableSchema {
             name: String::new(),
             root_page: 0,
+            database: 0,
             columns: vec![],
             without_rowid: false,
             strict: false,

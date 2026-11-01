@@ -409,7 +409,7 @@ impl Drop for ScratchDb {
 /// tools#103: several SQLite files load side by side; one query reads the
 /// tables of one of them.
 #[test]
-fn several_sqlite_files_load_and_a_query_reads_one_of_them() {
+fn several_sqlite_files_load_and_a_query_joins_across_them() {
     let machines = ScratchDb::new(
         "machines.db",
         "CREATE TABLE machines(id INTEGER, machine TEXT);\
@@ -435,13 +435,30 @@ fn several_sqlite_files_load_and_a_query_reads_one_of_them() {
         [vec![int(2), text("m2")], vec![int(4500), text("m4500")]]
     );
     assert_eq!(rows(&engine, "SELECT COUNT(*) FROM labels"), [vec![int(4)]]);
-    let across = error(
-        &engine,
-        "SELECT COUNT(*) FROM machines JOIN labels ON machines.id = labels.id",
+    // db-core#924: one query joins tables of both files, alone or with
+    // the Parquet file.
+    assert_eq!(
+        rows(
+            &engine,
+            "SELECT labels.label, machines.machine FROM machines \
+             JOIN labels ON machines.id = labels.id ORDER BY machines.id"
+        ),
+        [
+            vec![text("two"), text("m2")],
+            vec![text("late"), text("m4500")]
+        ]
     );
-    assert!(
-        across.contains("one query reads one SQLite file"),
-        "{across}"
+    assert_eq!(
+        rows(
+            &engine,
+            "SELECT production.id, labels.label, machines.machine FROM production \
+             JOIN labels ON production.id = labels.id \
+             JOIN machines ON production.id = machines.id ORDER BY production.id"
+        ),
+        [
+            vec![int(2), text("two"), text("m2")],
+            vec![int(4500), text("late"), text("m4500")]
+        ]
     );
 }
 

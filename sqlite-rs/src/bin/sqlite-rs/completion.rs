@@ -201,6 +201,7 @@ mod tests {
         TableSchema {
             name: name.to_string(),
             root_page: 2,
+            database: 0,
             column_types: vec![String::new(); columns.len()],
             column_collations: vec![Collation::Binary; columns.len()],
             without_rowid: false,

@@ -115,6 +115,7 @@ fn not_null_violation_halts_and_inserts_nothing() {
     let schema = TableSchema {
         name: "t".to_string(),
         root_page: 1,
+        database: 0,
         columns: vec!["a".to_string(), "b".to_string()],
         column_types: vec!["INTEGER".to_string(), "TEXT".to_string()],
         column_collations: vec![],
@@ -152,6 +153,7 @@ fn valid_row_round_trips() {
     let schema = TableSchema {
         name: "t".to_string(),
         root_page: 1,
+        database: 0,
         columns: vec!["a".to_string(), "b".to_string()],
         column_types: vec!["INTEGER".to_string(), "TEXT".to_string()],
         column_collations: vec![],
@@ -193,6 +195,7 @@ fn default_value_applied_when_column_omitted() {
     let schema = TableSchema {
         name: "t".to_string(),
         root_page: 1,
+        database: 0,
         columns: vec!["a".to_string(), "b".to_string()],
         column_types: vec!["INTEGER".to_string(), "TEXT".to_string()],
         column_collations: vec![],
@@ -237,6 +240,7 @@ fn check_violation_halts() {
     let schema = TableSchema {
         name: "t".to_string(),
         root_page: 1,
+        database: 0,
         columns: vec!["a".to_string()],
         column_types: vec!["INTEGER".to_string()],
         column_collations: vec![],
@@ -286,6 +290,7 @@ fn primary_key_conflict_aborts_by_default() {
     let schema = TableSchema {
         name: "t".to_string(),
         root_page: 1,
+        database: 0,
         columns: vec!["id".to_string(), "v".to_string()],
         column_types: vec!["INTEGER".to_string(), "TEXT".to_string()],
         column_collations: vec![],
@@ -334,6 +339,7 @@ fn primary_key_conflict_or_ignore_skips_the_row() {
     let schema = TableSchema {
         name: "t".to_string(),
         root_page: 1,
+        database: 0,
         columns: vec!["id".to_string(), "v".to_string()],
         column_types: vec!["INTEGER".to_string(), "TEXT".to_string()],
         column_collations: vec![],
@@ -379,6 +385,7 @@ fn primary_key_conflict_or_replace_overwrites_the_row() {
     let schema = TableSchema {
         name: "t".to_string(),
         root_page: 1,
+        database: 0,
         columns: vec!["id".to_string(), "v".to_string()],
         column_types: vec!["INTEGER".to_string(), "TEXT".to_string()],
         column_collations: vec![],
@@ -424,6 +431,7 @@ fn omitted_rowid_alias_is_auto_assigned() {
     let schema = TableSchema {
         name: "t".to_string(),
         root_page: 1,
+        database: 0,
         columns: vec!["id".to_string(), "v".to_string()],
         column_types: vec!["INTEGER".to_string(), "TEXT".to_string()],
         column_collations: vec![],

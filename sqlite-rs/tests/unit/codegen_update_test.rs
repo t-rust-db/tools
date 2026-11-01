@@ -126,6 +126,7 @@ fn schema(sql: &str) -> TableSchema {
     TableSchema {
         name: "t".to_string(),
         root_page: 1,
+        database: 0,
         columns: vec!["a".to_string(), "b".to_string()],
         column_types: vec!["INTEGER".to_string(), "TEXT".to_string()],
         column_collations: vec![],
@@ -143,6 +144,7 @@ fn schema_with_columns(sql: &str, columns: &[&str], column_types: &[&str]) -> Ta
     TableSchema {
         name: "t".to_string(),
         root_page: 1,
+        database: 0,
         columns: columns.iter().map(|s| (*s).to_string()).collect(),
         column_types: column_types.iter().map(|s| (*s).to_string()).collect(),
         column_collations: vec![],

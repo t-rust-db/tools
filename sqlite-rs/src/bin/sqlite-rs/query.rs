@@ -104,6 +104,7 @@ pub(crate) fn compile_select_program(
         let no_table = TableSchema {
             name: String::new(),
             root_page: 0,
+            database: 0,
             columns: vec![],
             column_types: vec![],
             column_collations: vec![],
