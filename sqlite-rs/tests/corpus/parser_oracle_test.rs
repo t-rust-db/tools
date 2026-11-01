@@ -81,7 +81,8 @@ const CASES: &[(&str, Outcome)] = &[
         Outcome::Accept,
     ),
     ("SELECT * FROM t NOT INDEXED", Outcome::Unsupported),
-    ("SELECT * FROM main.t", Outcome::Unsupported),
+    // db-core#924 reads `main.t` as `t`.
+    ("SELECT * FROM main.t", Outcome::Accept),
     ("SELECT 123 -> 456", Outcome::Unsupported),
     (
         "SELECT * FROM t OUTER LEFT NATURAL JOIN t AS t2",
