@@ -1,6 +1,6 @@
 [package]
 name = "db-studio"
-version = "0.14.5"
+version = "0.14.6"
 edition = "2021"
 description = "A TUI database studio for the t-rust-db family -- open a .sqlite/.parquet/.log file or a table directory, get a query pane and grid output over the matching db-core engine"
 license = "Apache-2.0"
