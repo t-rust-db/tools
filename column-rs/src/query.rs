@@ -1064,8 +1064,8 @@ impl QueryEngine {
 
     /// Loads every table of the SQLite file at `path` under its own name
     /// (tools#69). Several files load side by side (tools#103), their table
-    /// names distinct; one query reads the tables of one of them, as
-    /// db-core's cross-mode engine joins column tables to one SQLite file.
+    /// names distinct, and one query joins tables of any of them
+    /// (db-core#924).
     fn add_lookups(&mut self, path: &std::path::Path, name: Option<String>) -> Result<()> {
         if name.is_some() {
             return Err(QueryError::Lookup(
@@ -1281,31 +1281,33 @@ impl QueryEngine {
                 named.push(table);
             }
         }
-        let mut files = named
-            .iter()
-            .filter(|t| matches!(t.data, TableData::Lookup))
-            .map(|t| t.path.as_path());
-        let Some(lookup) = files.next() else {
+        let mut files: Vec<&std::path::Path> = Vec::new();
+        for table in named.iter().filter(|t| matches!(t.data, TableData::Lookup)) {
+            if !files.contains(&table.path.as_path()) {
+                files.push(table.path.as_path());
+            }
+        }
+        let Some((&lookup, attached)) = files.split_first() else {
             return Ok(None);
         };
-        if let Some(other) = files.find(|f| *f != lookup) {
-            return Err(QueryError::Lookup(
-                ErrorKind::Unsupported,
-                format!(
-                    "the query reads tables of {} and of {}: one query reads one SQLite file",
-                    lookup.display(),
-                    other.display()
-                ),
-            ));
-        }
+        // Table names are unique across the loaded SQLite files, so a query
+        // names each table bare and the file names below never show.
+        let names: Vec<String> = (1..=files.len()).map(|i| format!("db{i}")).collect();
         let columns: Vec<&Table> = named
             .into_iter()
             .filter(|t| !matches!(t.data, TableData::Lookup))
             .collect();
         if columns.is_empty() {
-            return Ok(Some(LookupEngine::Row(
-                RowEngine::open(lookup).map_err(lookup_error)?,
-            )));
+            // Lookup tables of several files: the first file's row engine
+            // ATTACHes the others (db-core#924).
+            let mut engine = RowEngine::open(lookup).map_err(lookup_error)?;
+            for (path, name) in attached.iter().zip(&names[1..]) {
+                let file = path.to_string_lossy().replace('\'', "''");
+                engine
+                    .run_query(&format!("ATTACH '{file}' AS {name}"))
+                    .map_err(lookup_error)?;
+            }
+            return Ok(Some(LookupEngine::Row(engine)));
         }
         // db-core names a Parquet table after its file's stem and a table
         // directory after the directory (db-core#782).
@@ -1329,8 +1331,10 @@ impl QueryEngine {
             }
         }
         let paths: Vec<&std::path::Path> = columns.iter().map(|t| t.path.as_path()).collect();
+        let lookups: Vec<(&str, &std::path::Path)> =
+            names.iter().map(String::as_str).zip(files).collect();
         Ok(Some(LookupEngine::Cross(Box::new(
-            CrossModeEngine::open_column_tables_sqlite(&paths, lookup).map_err(lookup_error)?,
+            CrossModeEngine::open_column_tables_sqlite(&paths, &lookups).map_err(lookup_error)?,
         ))))
     }
 

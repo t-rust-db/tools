@@ -45,8 +45,8 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.220.2"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.220.2#34e31b61d26e178b4bdee1d93d42db52fd28c51c"
+version = "0.221.0"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.221.0#1c9fe9b648275aaf69e5be10c54917440ff17fe8"
 
 [[package]]
 name = "dirs"
@@ -204,7 +204,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sqlite-rs"
-version = "0.26.2"
+version = "0.26.4"
 dependencies = [
  "db-cli",
  "db-core",

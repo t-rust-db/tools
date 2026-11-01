@@ -48,6 +48,7 @@ fn one_row_fixture() -> (std::path::PathBuf, TableSchema) {
     let schema = TableSchema {
         name: "t".to_string(),
         root_page: 2,
+        database: 0,
         columns: vec!["a".to_string(), "b".to_string(), "name".to_string()],
         column_types: vec![
             "INTEGER".to_string(),
@@ -222,6 +223,7 @@ fn affinity_fixture() -> (std::path::PathBuf, TableSchema) {
     let schema = TableSchema {
         name: "t".to_string(),
         root_page: 2,
+        database: 0,
         columns: vec!["i".to_string(), "r".to_string()],
         column_types: vec!["INTEGER".to_string(), "REAL".to_string()],
         column_collations: vec![],

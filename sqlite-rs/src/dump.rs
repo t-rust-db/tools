@@ -326,6 +326,7 @@ mod tests {
         TableSchema {
             name: "t".to_string(),
             root_page: 1,
+            database: 0,
             columns: vec![],
             column_types: vec![],
             column_collations: vec![],

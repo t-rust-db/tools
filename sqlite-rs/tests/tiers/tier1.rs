@@ -159,6 +159,7 @@ fn t1_single_table_where_matches_oracle() {
     let schema = TableSchema {
         name: "t".to_string(),
         root_page: 2,
+        database: 0,
         columns: vec!["a".to_string(), "b".to_string()],
         column_types: vec![],
         column_collations: vec![],
