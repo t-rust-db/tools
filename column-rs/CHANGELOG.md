@@ -2,6 +2,16 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.40.0] - 2026-11-01
+
+### Added
+
+- One query joins tables from several SQLite files, alone or with Parquet files and table directories; the "one query reads one SQLite file" refusal is gone (db-core#924).
+
+### Changed
+
+- db-core pin v0.221.0.
+
 ## [0.39.0] - 2026-10-31
 
 ### Added
