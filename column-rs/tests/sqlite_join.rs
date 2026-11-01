@@ -366,6 +366,185 @@ fn a_session_table_joins_and_semi_joins_a_table_directory() {
     assert_eq!(rows_of(2), ["a", "c", "d"], "{out}");
 }
 
+/// tools#108: `IN (SELECT ...)` over a table of a second SQLite file,
+/// alone and next to one over a table directory, and a join chain from the
+/// table directory through both files, in-process and through `--pipe`
+/// with fresh rows in every file.
+#[test]
+fn a_second_sqlite_file_in_semi_joins_and_chains_with_a_table_directory() {
+    use db_core::engine::Engine;
+    use db_core::storage::ingest::{Ack, TableOptions, TableWriter};
+    let root = std::env::temp_dir().join(format!("column-rs-second-file-{}", std::process::id()));
+    std::fs::remove_dir_all(&root).ok();
+    let dir = root.join("event");
+    let mut w = TableWriter::open(&dir, TableOptions::default()).unwrap();
+    let mut append = |rows: &[(i64, i64)]| {
+        for (session_id, event_id) in rows {
+            w.append(
+                format!(r#"{{"session_id":{session_id},"event_id":{event_id}}}"#).as_bytes(),
+                Ack::Durable,
+            )
+            .unwrap();
+        }
+    };
+    append(&[(1, 7), (2, 7), (3, 8)]);
+    let sessions = ScratchDb::new(
+        "second_sessions.db",
+        "CREATE TABLE sessions(session_id INTEGER, machine_id INTEGER, name TEXT);\
+         INSERT INTO sessions VALUES (1, 10, 'a');\
+         INSERT INTO sessions VALUES (2, 20, 'b');\
+         INSERT INTO sessions VALUES (3, 10, 'c');\
+         INSERT INTO sessions VALUES (4, 30, 'd');",
+    );
+    let machines = ScratchDb::new(
+        "second_machines.db",
+        "CREATE TABLE machine(machine_id INTEGER, customers INTEGER);\
+         INSERT INTO machine VALUES (10, 5);\
+         INSERT INTO machine VALUES (20, 1);\
+         INSERT INTO machine VALUES (30, 1);",
+    );
+    let engine =
+        QueryEngine::open_many(&[sessions.0.clone(), machines.0.clone(), dir.clone()]).unwrap();
+    let alone = "SELECT name FROM sessions \
+                 WHERE machine_id IN (SELECT machine_id FROM machine WHERE customers >= 3) \
+                 ORDER BY name";
+    let both = "SELECT name FROM sessions \
+                WHERE machine_id IN (SELECT machine_id FROM machine WHERE customers >= 3) \
+                AND session_id IN (SELECT session_id FROM event WHERE event_id = 7) \
+                ORDER BY name";
+    let negated = "SELECT name FROM sessions \
+                   WHERE machine_id NOT IN (SELECT machine_id FROM machine WHERE customers >= 3) \
+                   ORDER BY name";
+    let chain = "SELECT sessions.name FROM event \
+                 JOIN sessions ON event.session_id = sessions.session_id \
+                 JOIN machine ON machine.machine_id = sessions.machine_id \
+                 WHERE machine.customers >= 3 AND event.event_id = 7 ORDER BY sessions.name";
+    let chain_sqlite_first = "SELECT sessions.name FROM sessions \
+                 JOIN machine ON machine.machine_id = sessions.machine_id \
+                 JOIN event ON event.session_id = sessions.session_id \
+                 WHERE machine.customers >= 3 AND event.event_id = 7 ORDER BY sessions.name";
+    assert_eq!(rows(&engine, alone), [vec![text("a")], vec![text("c")]]);
+    assert_eq!(rows(&engine, both), [vec![text("a")]]);
+    assert_eq!(rows(&engine, negated), [vec![text("b")], vec![text("d")]]);
+    assert_eq!(rows(&engine, chain), [vec![text("a")]]);
+    assert_eq!(rows(&engine, chain_sqlite_first), [vec![text("a")]]);
+
+    // Fresh rows in both kinds of table: machine 30 gains customers and
+    // session 4 an event.
+    append(&[(4, 7)]);
+    let mut machine_db = db_core::engine::row::RowEngine::open(&machines.0).unwrap();
+    machine_db
+        .run_query("UPDATE machine SET customers = 4 WHERE machine_id = 30")
+        .unwrap();
+    drop(machine_db);
+    let requests = format!(
+        "{}\n{}\n{}\n",
+        serde_json::json!({"id": 1, "sql": alone}),
+        serde_json::json!({"id": 2, "sql": both}),
+        serde_json::json!({"id": 3, "sql": chain_sqlite_first}),
+    );
+    let mut out = Vec::new();
+    column_rs::pipe::run(&engine, requests.as_bytes(), &mut out).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    drop(append);
+    w.close().unwrap();
+    std::fs::remove_dir_all(&root).ok();
+    let rows_of = |id: i64| -> Vec<String> {
+        out.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|v| v["id"] == id && v.get("row").is_some())
+            .map(|v| v["row"][0].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    assert_eq!(rows_of(1), ["a", "c", "d"], "{out}");
+    assert_eq!(rows_of(2), ["a", "d"], "{out}");
+    assert_eq!(rows_of(3), ["a", "d"], "{out}");
+}
+
+/// tools#108: a chain from a Parquet table through a table of one SQLite
+/// file to a table of another returns, in either order, what sqlite3's own
+/// join of the two files (`ATTACH`) and the Parquet table read separately
+/// give together, and the filter at the end of the chain prunes the
+/// Parquet table's row groups.
+#[test]
+fn a_chain_through_two_sqlite_files_matches_attach_and_prunes() {
+    use db_core::engine::Engine;
+    let sessions = ScratchDb::new(
+        "chain_sessions.db",
+        "CREATE TABLE sess(id INTEGER, machine_id INTEGER);\
+         INSERT INTO sess VALUES (1, 10);\
+         INSERT INTO sess VALUES (2, 20);\
+         INSERT INTO sess VALUES (3, 10);\
+         INSERT INTO sess VALUES (4500, 30);",
+    );
+    let machines = ScratchDb::new(
+        "chain_machines.db",
+        "CREATE TABLE mach(machine_id INTEGER, customers INTEGER);\
+         INSERT INTO mach VALUES (10, 5);\
+         INSERT INTO mach VALUES (20, 1);\
+         INSERT INTO mach VALUES (30, 1);",
+    );
+    let mut sqlite = db_core::engine::row::RowEngine::open(&sessions.0).unwrap();
+    sqlite
+        .run_query(&format!("ATTACH '{}' AS m", machines.0.display()))
+        .unwrap();
+    let joined: Vec<i64> = sqlite
+        .run_query(
+            "SELECT sess.id FROM sess JOIN m.mach ON mach.machine_id = sess.machine_id \
+             WHERE mach.customers >= 3 ORDER BY sess.id",
+        )
+        .unwrap()
+        .rows
+        .into_iter()
+        .filter_map(|r| match r.first() {
+            Some(db_core::engine::Cell::Int(i)) => Some(*i),
+            _ => None,
+        })
+        .collect();
+    let paths = [
+        fixture("production.parquet"),
+        sessions.0.clone(),
+        machines.0.clone(),
+    ];
+    let engine = QueryEngine::open_many(&paths).unwrap();
+    let production: Vec<Vec<Value>> = rows(&engine, "SELECT id FROM production ORDER BY id");
+    let want: Vec<Vec<Value>> = joined
+        .into_iter()
+        .map(int)
+        .filter(|v| production.contains(&vec![v.clone()]))
+        .map(|v| vec![v])
+        .collect();
+    assert_eq!(want, [vec![int(1)], vec![int(3)]]);
+    let filter = "WHERE mach.customers >= 3 ORDER BY production.id";
+    for from in [
+        "production JOIN sess ON production.id = sess.id \
+         JOIN mach ON mach.machine_id = sess.machine_id",
+        "sess JOIN mach ON mach.machine_id = sess.machine_id \
+         JOIN production ON production.id = sess.id",
+    ] {
+        let sql = format!("SELECT production.id FROM {from} {filter}");
+        assert_eq!(rows(&engine, &sql), want, "{sql}");
+    }
+
+    let out = Command::new(env!("CARGO_BIN_EXE_column-rs"))
+        .arg("-c")
+        .arg(
+            "EXPLAIN QUERY PLAN SELECT production.id FROM production \
+             JOIN sess ON production.id = sess.id \
+             JOIN mach ON mach.machine_id = sess.machine_id WHERE mach.customers >= 3",
+        )
+        .args(&paths)
+        .output()
+        .expect("spawn column-rs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("(1 of 3 kept)"), "{stdout}");
+}
+
 /// db-core 0.184/0.186: ROUND, ABS and CASE run over a Parquet table
 /// joined to a lookup. Expected rows from DuckDB.
 #[test]

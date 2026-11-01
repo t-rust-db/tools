@@ -19,7 +19,7 @@ use std::process::Command;
 /// Must equal Cargo.toml's `[package.metadata.oracle] version` — a
 /// `const` cannot read it at run time, so `make version-pin` enforces
 /// the agreement.
-pub const ORACLE_VERSION: &str = "3.53.4";
+pub const ORACLE_VERSION: &str = "3.54.1";
 
 pub fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus/fixtures")

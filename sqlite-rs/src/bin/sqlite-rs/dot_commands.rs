@@ -50,7 +50,7 @@ pub(crate) const HELP_ENTRIES: &[(&str, &str)] = &[
 ];
 
 /// The SQLite on-disk file-format version this crate targets/emulates —
-/// the same 3.53.4 pin recorded in `Cargo.toml`'s `[package.metadata.oracle]`
+/// the same 3.54.1 pin recorded in `Cargo.toml`'s `[package.metadata.oracle]`
 /// and `tests/corpus/oracle.rs::ORACLE_VERSION`, and what
 /// `sqlite_version()` (`src/vdbe/functions.rs`) reports to SQL callers.
 /// Duplicated here as a literal rather than plumbed through, matching
@@ -58,7 +58,7 @@ pub(crate) const HELP_ENTRIES: &[(&str, &str)] = &[
 /// rather than adding a shared constant across crate boundaries — see
 /// `tools/version_pin.py`'s `make version-pin` gate, which holds all of
 /// these to the same value.
-const SQLITE_FORMAT_VERSION: &str = "3.53.4";
+const SQLITE_FORMAT_VERSION: &str = "3.54.1";
 
 pub(crate) fn print_version() {
     println!("sqlite-rs {}", env!("CARGO_PKG_VERSION"));

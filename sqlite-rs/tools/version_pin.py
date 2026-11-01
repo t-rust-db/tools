@@ -56,7 +56,8 @@ PINNED_LITERALS = [
         re.compile(r'pub const ORACLE_VERSION: &str = "([^"]+)"'),
         "tier-1 bench ORACLE_VERSION const",
     ),
-    # `<repo>:path` = a sibling t-rust-db checkout (`../<repo>`), where the
+    # `<repo>:path` = a sibling t-rust-db checkout (`../../<repo>`, beside
+    # the tools workspace this crate lives in), where the
     # site moved with the VDBE (t-rust-db/sqlite-rs#18); checked when that
     # checkout is present, reported as skipped otherwise.
     (
@@ -108,8 +109,8 @@ def main():
     for rel, pattern, description in PINNED_LITERALS:
         if ":" in rel:
             repo, sub_path = rel.split(":", 1)
-            path = REPO_ROOT.parent / repo / sub_path
-            if not (REPO_ROOT.parent / repo).is_dir():
+            path = REPO_ROOT.parent.parent / repo / sub_path
+            if not (REPO_ROOT.parent.parent / repo).is_dir():
                 print(f"  SKIP     {rel} — no sibling {repo} checkout to verify against")
                 continue
         else:

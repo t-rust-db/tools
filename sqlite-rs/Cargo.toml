@@ -1,6 +1,6 @@
 [package]
 name = "sqlite-rs"
-version = "0.26.4"
+version = "0.26.5"
 edition = "2021"
 publish = false
 license = "Apache-2.0"
@@ -236,7 +236,7 @@ md-5 = "0.10"
 # parse.y line citations. Bump, then re-run `make fixtures opcodes sql-corpus
 # grammar-drift test-corpus`.
 [package.metadata.oracle]
-version = "3.53.4"
+version = "3.54.1"
 
 
 [lints.rust]

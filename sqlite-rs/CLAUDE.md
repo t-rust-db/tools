@@ -54,7 +54,7 @@ a trivial budget.
 ## Grammar conventions
 
 - **Grammar source of truth:** `.openspec/grammar/sqlite.ebnf` — an EBNF
-  re-derivation of SQLite's `parse.y` (pinned at 3.53.4; SQLite publishes
+  re-derivation of SQLite's `parse.y` (pinned at 3.54.1; SQLite publishes
   no EBNF). Parser work starts from this file, never from memory or
   third-party grammars.
 - **Grow the grammar in the same PR.** Any ticket that extends the parser

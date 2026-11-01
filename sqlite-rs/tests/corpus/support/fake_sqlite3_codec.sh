@@ -6,7 +6,7 @@
 # the wrong version, which would leave that path untested on its own).
 set -euo pipefail
 if [ "${1:-}" = "-version" ]; then
-  echo "3.53.4 2026-07-24 19:02:57 fake"
+  echo "3.54.1 2026-10-16 14:45:20 fake"
   exit 0
 fi
 echo "CODEC=fake"

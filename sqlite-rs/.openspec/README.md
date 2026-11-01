@@ -49,7 +49,7 @@ sqlite-rs follows SQLite's layered architecture. Each layer has one job and pres
 
 ## Grammar
 
-[`grammar/sqlite.ebnf`](grammar/sqlite.ebnf) — the SQL grammar source of truth: EBNF re-derivation of SQLite's `parse.y` (pinned 3.53.4), every rule annotated with its V-block and parse.y origin. `make check-grammar-drift` validates all annotations against the pinned parse.y (downloads/caches it in `target/`). Grew out of spike 001's subset grammar (#63).
+[`grammar/sqlite.ebnf`](grammar/sqlite.ebnf) — the SQL grammar source of truth: EBNF re-derivation of SQLite's `parse.y` (pinned 3.54.1), every rule annotated with its V-block and parse.y origin. `make check-grammar-drift` validates all annotations against the pinned parse.y (downloads/caches it in `target/`). Grew out of spike 001's subset grammar (#63).
 
 ## Progress & Coverage Tracking
 

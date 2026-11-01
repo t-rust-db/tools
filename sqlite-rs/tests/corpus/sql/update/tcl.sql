@@ -1,5 +1,5 @@
 -- Extracted by tools/extract_sql_corpus.py from the vendored SQLite
--- TCL suite subset (version 3.53.4) under tests/corpus/sql/vendor/tcl/.
+-- TCL suite subset (version 3.54.1) under tests/corpus/sql/vendor/tcl/.
 -- Do not edit by hand; run `make extract-sql-corpus` to regenerate (#70).
 UPDATE t2 SET b=0
 UPDATE tbl3 SET a = 'G' where a = 'g'
@@ -31,6 +31,8 @@ UPDATE OR REPLACE t1 SET a=2 WHERE b=4
 UPDATE OR REPLACE t2 SET a=1, b=3 WHERE a=1
 UPDATE t4 SET y='lots of data for the row where x=' || x || ' and y=' || y || ' - even more data to fill space'
 UPDATE t1 SET a = randstr(10,10) WHERE (rowid%4)==0
+UPDATE src SET y=x+100, z=x*100
+UPDATE dest SET y=x+100, z=x*100
 UPDATE t6 SET a='xyz'
 UPDATE t6 SET a=1
 UPDATE sqlite_schema SET rootpage=(SELECT rootpage FROM saved_schema WHERE name='t2bcd') WHERE name='t1bcd'

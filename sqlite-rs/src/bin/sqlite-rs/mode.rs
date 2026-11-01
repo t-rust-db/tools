@@ -31,7 +31,8 @@ pub enum OutputMode {
 
 /// Renders `v` for `column`/`line` mode display: reuses
 /// `write_query_value`'s `-list`-mode rendering (empty string for
-/// `NULL`, NUL-truncated text/blobs) converted lossily to `String` —
+/// `NULL`, NUL-truncated text, whole blobs, control characters as `^X`)
+/// converted lossily to `String` —
 /// both modes are terminal-display renderers, not `-list`'s
 /// binary-safe byte stream, so lossy UTF-8 is an acceptable
 /// approximation here. `scratch` is a caller-owned buffer (#591), reused
