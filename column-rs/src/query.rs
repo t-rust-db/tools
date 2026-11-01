@@ -1329,8 +1329,15 @@ impl QueryEngine {
             }
         }
         let paths: Vec<&std::path::Path> = columns.iter().map(|t| t.path.as_path()).collect();
+        // db-core#924: the SQLite side is a list of named files; this
+        // query reads one, named after its stem.
+        let name = lookup
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("lookup");
         Ok(Some(LookupEngine::Cross(Box::new(
-            CrossModeEngine::open_column_tables_sqlite(&paths, lookup).map_err(lookup_error)?,
+            CrossModeEngine::open_column_tables_sqlite(&paths, &[(name, lookup)])
+                .map_err(lookup_error)?,
         ))))
     }
 
