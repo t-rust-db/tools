@@ -4,6 +4,20 @@ All notable changes to sqlite-rs. Format follows [Keep a Changelog](https://keep
 
 **Versioning policy:** one minor version per completed plan phase — the version number tells the plan's story, sub-steps stay inside a phase. V1 (READ CORE) = 0.1.0 through 0.4.0. *(History note: internal iterations briefly numbered 0.4.0–0.6.0 were renumbered into the phase scheme on 14 Aug 2026, before any tag or publication of those versions existed.)*
 
+## [0.26.7] - 2026-11-02
+
+### Added
+
+- `INSERT ... SELECT` from a `WITH` clause, a view, a FROM-subquery or a compound `SELECT`, and without `FROM` (db-core#939).
+
+### Fixed
+
+- Subqueries in a JOIN query see tables outside the JOIN, and `ORDER BY` on a JOIN projects computed columns (db-core#937).
+
+### Changed
+
+- db-core pin v0.225.0.
+
 ## [0.26.6] - 2026-11-01
 
 ### Changed
