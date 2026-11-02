@@ -2,6 +2,16 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.43.0] - 2026-11-02
+
+### Added
+
+- Integer division `//` and remainder `%`, e.g. a day bucket `GROUP BY ts // 86400000000` (db-core#647).
+
+### Changed
+
+- db-core pin v0.225.0.
+
 ## [0.42.0] - 2026-11-01
 
 ### Added

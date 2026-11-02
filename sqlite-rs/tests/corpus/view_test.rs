@@ -290,29 +290,25 @@ fn create_view_body_is_union_is_rejected_cleanly() {
 }
 
 /// `INSERT INTO t SELECT * FROM some_view` — a view-backed source for
-/// `INSERT ... SELECT` — resolves the view reference (the same
-/// `expand_views` pass `compile_select_program` runs for a plain
-/// `SELECT`) but is then cleanly rejected, since `compile_insert`'s scan
-/// path doesn't yet drive #257's FROM-subquery materialization the way
-/// a plain SELECT's codegen does. This pins the clear, explicit
-/// rejection message over the confusing "invalid root page (0)" a
-/// view's synthetic schema would otherwise surface.
+/// `INSERT ... SELECT` (db-core#939). The rows written to `dst` must be
+/// exactly what the pinned sqlite3 reads through the same view.
 #[test]
-fn insert_select_from_view_is_rejected_cleanly() {
+fn insert_select_from_view_matches_oracle() {
     let db = view_fixture_db("insert_from_view");
     run_exec_ok(&db, "CREATE TABLE dst(id INTEGER, x INTEGER)");
     run_exec_ok(&db, "CREATE VIEW v AS SELECT id, x FROM t WHERE x > 15");
-    let output = run_exec(&db, "INSERT INTO dst SELECT * FROM v");
+    run_exec_ok(&db, "INSERT INTO dst SELECT * FROM v");
+    let ours = run_query_ok(&db, "SELECT id, x FROM dst ORDER BY id");
     assert!(
-        !output.status.success(),
-        "expected INSERT...SELECT FROM a view to be rejected, got success: {}",
-        String::from_utf8_lossy(&output.stdout)
+        !ours.trim().is_empty(),
+        "INSERT...SELECT FROM a view wrote no rows"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("not yet supported"),
-        "expected a clean 'not yet supported' rejection, got: {stderr}"
-    );
+    if let Some(oracle) = pinned_oracle() {
+        let theirs = oracle_select(&oracle, &db, "SELECT id, x FROM v ORDER BY id");
+        assert_eq!(ours, theirs, "dst differs from the view's rows");
+    } else {
+        skip_no_oracle("insert_select_from_view_matches_oracle");
+    }
 }
 
 /// The mirror image of `with_clause_cte_selects_from_view_matches_oracle`

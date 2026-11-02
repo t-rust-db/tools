@@ -324,15 +324,11 @@ fn with_clause_cte_shadows_real_table_matches_oracle() {
 }
 
 /// `INSERT INTO t WITH cte AS (...) SELECT ...` — a `WITH`-clause
-/// source for `INSERT ... SELECT` — resolves the CTE reference (the
-/// same `expand_with_clause` pass `compile_select_program` runs for a
-/// plain `SELECT`) but is then cleanly rejected, since `compile_insert`'s
-/// scan path doesn't yet drive #257's FROM-subquery materialization the
-/// way a plain SELECT's codegen does. This pins the clear, explicit
-/// rejection message over the confusing "invalid root page (0)" a CTE's
-/// synthetic schema would otherwise surface.
+/// source for `INSERT ... SELECT` (db-core#939). The rows written to
+/// `dst` must be exactly what the pinned sqlite3 computes for the same
+/// CTE query, read back from the file sqlite-rs wrote.
 #[test]
-fn insert_select_with_clause_source_is_rejected_cleanly() {
+fn insert_select_with_clause_source_matches_oracle() {
     let db = cte_fixture_db("insert_with_clause");
     let output = run_exec(&db, "CREATE TABLE dst(id INTEGER, x INTEGER)");
     assert!(output.status.success());
@@ -341,13 +337,23 @@ fn insert_select_with_clause_source_is_rejected_cleanly() {
         "INSERT INTO dst WITH cte AS (SELECT id, x FROM t WHERE x > 15) SELECT * FROM cte",
     );
     assert!(
-        !output.status.success(),
-        "expected INSERT...WITH...SELECT to be rejected, got success: {}",
-        String::from_utf8_lossy(&output.stdout)
+        output.status.success(),
+        "INSERT...WITH...SELECT failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let ours = run_query_ok(&db, "SELECT id, x FROM dst ORDER BY id");
     assert!(
-        stderr.contains("not yet supported"),
-        "expected a clean 'not yet supported' rejection, got: {stderr}"
+        !ours.trim().is_empty(),
+        "INSERT...WITH...SELECT wrote no rows"
     );
+    if let Some(oracle) = pinned_oracle() {
+        let theirs = oracle_select(
+            &oracle,
+            &db,
+            "WITH cte AS (SELECT id, x FROM t WHERE x > 15) SELECT * FROM cte ORDER BY id",
+        );
+        assert_eq!(ours, theirs, "dst differs from the CTE's rows");
+    } else {
+        skip_no_oracle("insert_select_with_clause_source_matches_oracle");
+    }
 }
