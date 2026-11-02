@@ -72,6 +72,13 @@ fn compile_and_run(src: &str, args: &[&str]) -> String {
     // Apple's `ld` cannot read a newer LLVM's bitcode (#35).
     if !cfg!(debug_assertions) {
         rustc.args(["-C", "lto=fat"]);
+        // The release profile is `panic = "abort"` (Cargo.toml), so cargo
+        // leaves two `column_rs` rlibs in the deps dir: the abort one for
+        // the binary and an unwind one for this test. The newest is either,
+        // by build order or a restored CI cache; an unwind program cannot
+        // link the abort one (db-core's emit guard failed on exactly that).
+        // An abort program links both, as the shipped binary is abort too.
+        rustc.args(["-C", "panic=abort"]);
     }
     let status = rustc
         .arg("-L")
