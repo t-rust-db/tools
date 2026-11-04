@@ -4,6 +4,16 @@ All notable changes to sqlite-rs. Format follows [Keep a Changelog](https://keep
 
 **Versioning policy:** one minor version per completed plan phase — the version number tells the plan's story, sub-steps stay inside a phase. V1 (READ CORE) = 0.1.0 through 0.4.0. *(History note: internal iterations briefly numbered 0.4.0–0.6.0 were renumbered into the phase scheme on 14 Aug 2026, before any tag or publication of those versions existed.)*
 
+## [0.26.9] - 2026-11-04
+
+### Fixed
+
+- A `SELECT` without `FROM` reads one row, also with `WHERE`, aggregates and `UNION`; a `UNION` may be the body of a CTE, view or FROM-subquery, and its arms may join tables; subquery expressions read a FROM-subquery, CTE or view; `WITH` before `INSERT ... VALUES`, `UPDATE` and `DELETE` (db-core#940).
+
+### Changed
+
+- db-core pin v0.225.1.
+
 ## [0.26.8] - 2026-11-04
 
 ### Changed

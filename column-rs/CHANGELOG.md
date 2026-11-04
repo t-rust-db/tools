@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.43.1] - 2026-11-04
+
+### Changed
+
+- db-core pin v0.225.1.
+
 ## [0.43.0] - 2026-11-02
 
 ### Added
