@@ -269,24 +269,22 @@ fn drop_view_removes_the_view_and_keeps_the_table() {
     );
 }
 
+/// A view whose body is a compound `UNION` `SELECT` (db-core#940):
+/// both arms' rows come back, as in sqlite3.
 #[test]
-fn create_view_body_is_union_is_rejected_cleanly() {
+fn create_view_body_is_union_matches_oracle() {
     let db = view_fixture_db("union_body");
     run_exec_ok(
         &db,
         "CREATE VIEW v AS SELECT x FROM t WHERE x > 15 UNION SELECT x FROM t WHERE x < 25",
     );
-    let output = run_query(&db, "SELECT * FROM v ORDER BY x");
-    assert!(
-        !output.status.success(),
-        "expected a compound view body to be rejected (not yet supported), got success: {}",
-        String::from_utf8_lossy(&output.stdout)
+    let sql = "SELECT * FROM v ORDER BY x";
+    assert_eq!(
+        run_query_ok(&db, sql),
+        "10\n20\n30\n",
+        "a UNION arm's rows were dropped"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("not yet supported"),
-        "expected a clean 'not yet supported' rejection, got: {stderr}"
-    );
+    assert_matches_oracle(&db, sql, "create_view_body_is_union_matches_oracle");
 }
 
 /// `INSERT INTO t SELECT * FROM some_view` — a view-backed source for

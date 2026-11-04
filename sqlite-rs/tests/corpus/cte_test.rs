@@ -198,33 +198,20 @@ fn with_clause_cte_with_internal_order_by_limit_matches_oracle() {
     );
 }
 
-/// A CTE whose body is itself a compound `UNION` `SELECT` — CTE
-/// materialization (#375/#376) does not yet compose with compound-
-/// `SELECT` codegen (#377/#378): `materialize_from_subquery` only
-/// scans a subquery body's `first` arm, silently dropping every other
-/// arm's rows (a real data-loss bug found while writing this test —
-/// see `src/codegen/subquery/from_clause.rs::materialize_from_subquery`,
-/// fixed here to reject cleanly instead of returning wrong results;
-/// full support for a compound CTE/view body is a fast-follow). This
-/// pins the current clean-rejection behavior.
+/// A CTE whose body is itself a compound `UNION` `SELECT` (db-core#940):
+/// every arm's rows are materialized, not just the `first` arm's (the
+/// data-loss bug #382 once guarded against by rejecting the query).
 #[test]
-fn with_clause_cte_body_is_union_is_rejected_cleanly() {
+fn with_clause_cte_body_is_union_matches_oracle() {
     let db = cte_fixture_db("union_body");
-    let output = run_query(
-        &db,
-        "WITH cte AS (SELECT x FROM t WHERE x > 15 UNION SELECT x FROM t WHERE x < 25) \
-         SELECT * FROM cte ORDER BY x",
+    let sql = "WITH cte AS (SELECT x FROM t WHERE x > 15 UNION SELECT x FROM t WHERE x < 25) \
+               SELECT * FROM cte ORDER BY x";
+    assert_eq!(
+        run_query_ok(&db, sql),
+        "10\n20\n30\n",
+        "a UNION arm's rows were dropped"
     );
-    assert!(
-        !output.status.success(),
-        "expected a compound CTE body to be rejected (not yet supported), got success: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("not yet supported"),
-        "expected a clean 'not yet supported' rejection, got: {stderr}"
-    );
+    assert_matches_oracle(&db, sql, "with_clause_cte_body_is_union_matches_oracle");
 }
 
 /// A CTE referenced from more than one arm of a `UNION ALL`/`UNION`
