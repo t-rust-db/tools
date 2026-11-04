@@ -607,6 +607,81 @@ fn full_lifecycle_schema_to_export_round_trips() {
     }
 }
 
+/// db-core#951: `CREATE INDEX ... DESC` over existing rows, then an
+/// `INSERT` and a `DELETE` through it. Every step must leave the index in
+/// sqlite3's descending key order, which its `integrity_check` verifies.
+#[test]
+fn desc_index_is_built_and_maintained_in_descending_order() {
+    let db = seed_db("desc_index");
+    for sql in [
+        "INSERT INTO t VALUES (1,'m'),(2,'c'),(3,'x')",
+        "CREATE INDEX idx_t_b_desc ON t(b DESC)",
+        "INSERT INTO t VALUES (4,'a'),(5,'z')",
+        "DELETE FROM t WHERE a = 3",
+    ] {
+        let output = run_exec(&db, sql);
+        assert!(
+            output.status.success(),
+            "{sql}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert_eq!(
+        run_query(&db, "SELECT * FROM t ORDER BY b DESC"),
+        "5|z\n1|m\n2|c\n4|a\n"
+    );
+
+    if let Some(oracle) = pinned_oracle() {
+        assert_integrity_check_ok(&oracle, &db);
+        assert_eq!(
+            oracle_select(
+                &oracle,
+                &db,
+                "SELECT a FROM t INDEXED BY idx_t_b_desc WHERE b > ''"
+            ),
+            "5\n1\n2\n4\n"
+        );
+    } else {
+        skip_no_oracle(
+            "desc_index_is_built_and_maintained_in_descending_order (oracle cross-check)",
+        );
+    }
+}
+
+/// db-core#945: inside a transaction, `PRAGMA journal_mode = <current>` is
+/// a no-op (as in sqlite3); changing the mode there is refused.
+#[test]
+fn journal_mode_inside_a_transaction_only_refuses_a_change() {
+    let db = seed_db("txn_journal_mode");
+    let output = run_exec(
+        &db,
+        "BEGIN; INSERT INTO t VALUES (1, 'x'); PRAGMA journal_mode = DELETE; COMMIT;",
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = run_exec(&db, "BEGIN; PRAGMA journal_mode = WAL; COMMIT;");
+    assert!(
+        !output.status.success(),
+        "changing journal_mode inside a transaction must fail"
+    );
+    assert_eq!(run_query(&db, "SELECT * FROM t"), "1|x\n");
+
+    if let Some(oracle) = pinned_oracle() {
+        assert_integrity_check_ok(&oracle, &db);
+        assert_eq!(
+            oracle_select(&oracle, &db, "PRAGMA journal_mode"),
+            "delete\n"
+        );
+    } else {
+        skip_no_oracle(
+            "journal_mode_inside_a_transaction_only_refuses_a_change (oracle cross-check)",
+        );
+    }
+}
+
 /// #358/#360: `exec`'s single SQL argument can now be a `;`-separated
 /// multi-statement script sharing one connection — `BEGIN`/a write/
 /// `ROLLBACK` must leave the row exactly as `sqlite3` would.

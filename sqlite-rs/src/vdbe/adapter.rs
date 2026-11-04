@@ -20,8 +20,8 @@ use db_core::vm::row::cursor_factory::{CursorFactory, CursorFactoryError};
 use db_core::vm::row::schema_storage::{SchemaStorage, SchemaStorageError};
 use db_core::vm::row::transaction::{Transaction, TransactionError};
 use db_core::vm::row::{
-    compare, AnalyzeTarget, Cursor, SortKeyColumn, JOURNAL_MODE_WAL, SYNCHRONOUS_NORMAL,
-    SYNCHRONOUS_OFF,
+    compare, AnalyzeTarget, Cursor, SortKeyColumn, JOURNAL_MODE_DELETE, JOURNAL_MODE_WAL,
+    SYNCHRONOUS_NORMAL, SYNCHRONOUS_OFF,
 };
 
 use crate::btree::{self, IndexCursor, IndexRow, Payload, TableCursor};
@@ -237,6 +237,8 @@ pub struct IndexCursorAdapter {
     writer: Option<SharedPager>,
     header: DatabaseHeader,
     root_page: u32,
+    /// Which key columns are `DESC` (empty: all ascending, db-core#951).
+    desc: Vec<bool>,
     /// The entry most recently positioned on, `None` after a miss. Its key
     /// record (key columns then the trailing rowid) stays encoded: a
     /// column is decoded only when something reads it (#113, as
@@ -254,12 +256,15 @@ impl IndexCursorAdapter {
         writer: Option<SharedPager>,
         header: DatabaseHeader,
         root_page: u32,
+        desc: Vec<bool>,
     ) -> Self {
         IndexCursorAdapter {
-            cursor: IndexCursor::new(source, header.usable_page_size(), root_page),
+            cursor: IndexCursor::new(source, header.usable_page_size(), root_page)
+                .with_desc(desc.clone()),
             writer,
             header,
             root_page,
+            desc,
             current: None,
             entries: Vec::new(),
         }
@@ -324,7 +329,10 @@ impl IndexCursorAdapter {
             // body that still fails to decode (invalid text) has no
             // ordering: report "no entry" rather than a wrong one.
             let key = self.decode_column(col).ok()??;
-            let ordering = compare(&key, p, c);
+            let mut ordering = compare(&key, p, c);
+            if self.desc.get(col).copied().unwrap_or(false) {
+                ordering = ordering.reverse();
+            }
             if !ordering.is_eq() {
                 return Some(ordering);
             }
@@ -442,12 +450,13 @@ impl Cursor for IndexCursorAdapter {
         let Some(writer) = self.writer.as_ref() else {
             return Ok(false);
         };
-        btree::insert_entry(
+        btree::insert_entry_ordered(
             &mut writer.borrow_mut(),
             &self.header,
             self.root_page,
             &key,
             self.header.text_encoding,
+            &self.desc,
         )
         .map_err(cursor_err)?;
         Ok(true)
@@ -457,12 +466,13 @@ impl Cursor for IndexCursorAdapter {
         let Some(writer) = self.writer.as_ref() else {
             return Ok(false);
         };
-        btree::delete_entry(
+        btree::delete_entry_ordered(
             &mut writer.borrow_mut(),
             &self.header,
             self.root_page,
             key,
             self.header.text_encoding,
+            &self.desc,
         )
         .map_err(cursor_err)?;
         Ok(true)
@@ -546,13 +556,14 @@ impl CursorFactory for StorageFactory {
     fn open_index(
         &mut self,
         root: u32,
-        _key: &[SortKeyColumn],
+        key: &[SortKeyColumn],
     ) -> Result<Box<dyn Cursor>, CursorFactoryError> {
         Ok(Box::new(IndexCursorAdapter::new(
             Rc::clone(&self.source),
             self.writer.clone(),
             self.header,
             root,
+            key.iter().map(|k| k.descending).collect(),
         )))
     }
 }
@@ -627,6 +638,16 @@ impl Transaction for PagerTransaction {
                 .map_err(|e| TransactionError(storage_err(e))),
             None => Ok(()),
         }
+    }
+
+    /// The pager's journal mode, so `PRAGMA journal_mode = <current>`
+    /// inside a transaction is a no-op as in sqlite3 (db-core#945).
+    fn journal_mode(&self) -> Option<i32> {
+        let writer = self.writer.as_ref()?;
+        Some(match writer.borrow().journal_mode() {
+            JournalMode::Wal => JOURNAL_MODE_WAL,
+            JournalMode::Legacy => JOURNAL_MODE_DELETE,
+        })
     }
 
     fn set_journal_mode(&mut self, mode: i32) -> Result<(), TransactionError> {
@@ -736,6 +757,26 @@ impl SchemaStorage for BtreeSchemaStorage {
             table_root,
             index_root,
             column_indices,
+        )
+        .map_err(schema_err)
+    }
+
+    /// `CREATE INDEX` with `DESC` key columns (db-core#951): the trait's
+    /// default refuses them.
+    fn populate_index_ordered(
+        &mut self,
+        index_root: u32,
+        table_root: u32,
+        column_indices: &[usize],
+        desc: &[bool],
+    ) -> Result<(), SchemaStorageError> {
+        btree::populate_index_from_table_ordered(
+            &mut self.pager.borrow_mut(),
+            &self.header,
+            table_root,
+            index_root,
+            column_indices,
+            desc,
         )
         .map_err(schema_err)
     }
@@ -917,7 +958,7 @@ mod tests {
             .first()
             .unwrap()
             .root_page;
-        IndexCursorAdapter::new(erase(pager), None, header, root)
+        IndexCursorAdapter::new(erase(pager), None, header, root, Vec::new())
     }
 
     fn schema_of(
