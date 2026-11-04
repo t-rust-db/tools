@@ -382,3 +382,63 @@ fn physical_describes_the_manifest_wal_files_and_columns() {
     assert!(sized.contains("  total  "), "{sized}");
     w.close().unwrap();
 }
+
+/// db-core#647/#679 over a table directory: column-rs applies db-core's
+/// TIMESTAMP rewrite with the directory's schema, so a quoted timestamp
+/// and `date_trunc` work over records still in the WAL and, after a
+/// flush, over Parquet.
+#[test]
+fn quoted_timestamps_and_date_trunc_over_a_table_directory() {
+    use db_core::storage::ingest::RecordValue;
+    use db_core::storage::parquet::writer::{ColumnSpec, ColumnType};
+
+    let t = TempDir::new();
+    let dir = t.0.join("stamps");
+    let mut w = TableWriter::open(
+        &dir,
+        TableOptions {
+            schema: Some(vec![
+                ColumnSpec::new("id", ColumnType::Int64, false),
+                ColumnSpec::new("ts", ColumnType::TimestampMicros, true),
+            ]),
+            ..TableOptions::default()
+        },
+    )
+    .unwrap();
+    let day = 1_767_225_600_000_000; // 2026-01-01T00:00:00Z
+    for (id, ts) in [
+        (1, Some(day + 3_600_000_000)),
+        (2, Some(day + 86_400_000_000)),
+        (3, None),
+    ] {
+        let ts = ts.map_or(RecordValue::Null, RecordValue::Int);
+        w.append_row(vec![RecordValue::Int(id), ts], Ack::Durable)
+            .unwrap();
+    }
+    let check = || {
+        let mut engine = QueryEngine::default();
+        engine.add_table(&dir, None).unwrap();
+        assert_eq!(
+            ours(
+                &engine,
+                "SELECT id FROM stamps WHERE ts >= '2026-01-01 12:00:00' ORDER BY id"
+            ),
+            [["2"]]
+        );
+        assert_eq!(
+            ours(
+                &engine,
+                "SELECT date_trunc('day', ts) AS d, count(*) FROM stamps GROUP BY 1 ORDER BY 1"
+            ),
+            [
+                [day.to_string(), "1".to_string()],
+                [(day + 86_400_000_000).to_string(), "1".to_string()],
+                ["NULL".to_string(), "1".to_string()],
+            ]
+        );
+    };
+    check();
+    w.flush().unwrap();
+    check();
+    w.close().unwrap();
+}

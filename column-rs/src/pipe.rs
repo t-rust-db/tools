@@ -256,7 +256,8 @@ fn kind(e: &QueryError) -> &'static str {
         | QueryError::ScopeClauseUnsupported
         | QueryError::NotStreamable(_) => "unsupported",
         QueryError::TableDirectory(_) | QueryError::File(_) | QueryError::Io(_) => "storage",
-        QueryError::Vm(_) => "execution",
+        // db-core's Compile kind, as for a query over SQLite tables.
+        QueryError::Vm(_) | QueryError::Timestamp(_) => "execution",
         QueryError::Lookup(kind, _) => match kind {
             ErrorKind::Unsupported => "unsupported",
             ErrorKind::Open => "storage",

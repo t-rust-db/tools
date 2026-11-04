@@ -21,10 +21,10 @@
 
 use crate::vm::{Batch, Opcode, Program, Segment, Value};
 use db_core::codegen::batch::{self as planner, PlanError, TableStats};
-use db_core::engine::column::table::read_snapshot_with_bit_patterns;
+use db_core::engine::column::table::{read_snapshot_with_bit_patterns, snapshot_timestamp_columns};
 use db_core::engine::column::{
-    file_segments_with_bit_patterns, snapshot_files, snapshot_segments_with_bit_patterns,
-    FileSegment, SnapshotSegment,
+    file_segments_with_bit_patterns, parquet_timestamp_columns, resolve_timestamps, snapshot_files,
+    snapshot_segments_with_bit_patterns, FileSegment, SnapshotSegment,
 };
 use db_core::engine::resolve::CrossModeEngine;
 use db_core::engine::row::RowEngine;
@@ -90,6 +90,11 @@ pub enum QueryError {
     /// A table directory could not be read (tools#13): its manifest,
     /// WAL or one of its files.
     TableDirectory(String),
+    /// db-core's TIMESTAMP rewrite refused the query: a quoted value
+    /// compared with a TIMESTAMP column that is no timestamp
+    /// (db-core#679), or a `date_trunc` with an unknown part or a second
+    /// argument that is no TIMESTAMP column (db-core#647).
+    Timestamp(String),
     /// A SQLite file or a query over its tables (tools#69): db-core's own
     /// kind and message, or why column-rs can't hand the query to db-core
     /// (`Unsupported`).
@@ -139,6 +144,7 @@ impl fmt::Display for QueryError {
             }
             QueryError::NotStreamable(reason) => write!(f, "cannot stream this query: {reason}"),
             QueryError::TableDirectory(why) => write!(f, "table directory: {why}"),
+            QueryError::Timestamp(why) => write!(f, "{why}"),
             QueryError::Lookup(_, why) => write!(f, "{why}"),
             QueryError::Parse(e) => write!(f, "{e}"),
             QueryError::JoinColumns(e) => write!(f, "{e}"),
@@ -194,6 +200,23 @@ impl From<EngineError> for QueryError {
             }
             _ => QueryError::TableDirectory(e.message),
         }
+    }
+}
+
+/// The column whose type a select item has: a bare column reference, or
+/// the TIMESTAMP column of a `date_trunc`, which db-core has rewritten to
+/// `__date_trunc(part, ts, per_second)` and which returns `ts`'s units
+/// (db-core#647). `None` for any other expression, whose type the caller
+/// infers from its values.
+fn typed_column(expr: &Expr) -> Option<(Option<&str>, &str)> {
+    match &expr.kind {
+        ExprKind::Column { table, name, .. } => Some((table.as_deref(), name)),
+        ExprKind::FunctionCall {
+            name,
+            args: db_core::parser::ast::FunctionArgs::List(args),
+            ..
+        } if name.eq_ignore_ascii_case("__date_trunc") => args.get(1).and_then(typed_column),
+        _ => None,
     }
 }
 
@@ -390,6 +413,15 @@ impl<'h> Opened<'h> {
         })
     }
 
+    /// The table's TIMESTAMP columns and their units per second, for
+    /// db-core's [`resolve_timestamps`].
+    fn timestamps(&self) -> Result<Vec<(String, i64)>> {
+        Ok(match self {
+            Opened::File(file) => parquet_timestamp_columns(file),
+            Opened::Dir(snapshot, _) => snapshot_timestamp_columns(snapshot)?,
+        })
+    }
+
     /// The table's columns with their type names, for `.schema` (#83): the
     /// type `--pipe` gives the column, or empty when it has none.
     fn columns(&self) -> Result<Vec<(String, String)>> {
@@ -485,9 +517,10 @@ impl<'h> Opened<'h> {
                                 | ConvertedType::Uint64,
                             ),
                         ) => ColType::UInt,
-                        (PhysicalType::Int32 | PhysicalType::Int64 | PhysicalType::Int96, _) => {
-                            ColType::Int
-                        }
+                        // db-core decodes a legacy INT96 timestamp as epoch
+                        // microseconds.
+                        (PhysicalType::Int96, _) => ColType::Timestamp(TimeUnit::Micros),
+                        (PhysicalType::Int32 | PhysicalType::Int64, _) => ColType::Int,
                         (PhysicalType::Float | PhysicalType::Double, _) => ColType::Double,
                         (PhysicalType::Boolean, _) => ColType::Bool,
                         (PhysicalType::ByteArray, None) | (PhysicalType::FixedLenByteArray, _) => {
@@ -1414,7 +1447,7 @@ impl QueryEngine {
         sql: &str,
         mut on_event: impl FnMut(StreamEvent),
     ) -> Result<()> {
-        let query = self.parse(sql)?;
+        let mut query = self.parse(sql)?;
         let from = from_table(&query)?;
         if first_join(&query).is_some() {
             return Err(QueryError::NotStreamable("query has a JOIN".to_string()));
@@ -1436,6 +1469,8 @@ impl QueryEngine {
         }
         let held = self.hold(from)?;
         let table = held.open()?;
+        resolve_timestamps(&mut query, &table.timestamps()?)
+            .map_err(|e| QueryError::Timestamp(e.message))?;
         let query = planner::expand_star(&query, &table.column_names()?)?;
         let program = planner::compile(&query)?;
         // Decided before `on_event` fires at all: an aggregate, DISTINCT,
@@ -1511,6 +1546,7 @@ impl QueryEngine {
         }
 
         one_join(&query)?;
+        let query = self.with_timestamps_resolved(query)?;
 
         // Resolve `*` against the queried table(s)' schema before anything
         // else touches `query.columns` -- a `JOIN` expands against both
@@ -1559,15 +1595,9 @@ impl QueryEngine {
             .columns
             .iter()
             .map(|column| match column {
-                ResultColumn::Expr {
-                    expr:
-                        Expr {
-                            kind: ExprKind::Column { table, name, .. },
-                            ..
-                        },
-                    ..
-                } => {
-                    let in_right = table.as_deref().is_some_and(|t| Some(t) == right_name);
+                ResultColumn::Expr { expr, .. } => {
+                    let (table, name) = typed_column(expr)?;
+                    let in_right = table.is_some_and(|t| Some(t) == right_name);
                     let (first, second) = if in_right {
                         (&right_types, &main_types)
                     } else {
@@ -1628,6 +1658,7 @@ impl QueryEngine {
     /// referenced table's row-group/row counts from its Parquet footer.
     pub fn explain(&self, query: &Select) -> Result<Vec<PlanNode>> {
         one_join(query)?;
+        let query = &self.with_timestamps_resolved(query.clone())?;
         let mut tables = vec![from_table(query)?];
         if let Some(subquery) = in_subquery(query) {
             tables.push(from_table(subquery)?);
@@ -1653,7 +1684,34 @@ impl QueryEngine {
     /// per phase the executor actually runs.
     pub fn explain_opcodes(&self, query: &Select) -> Result<Vec<OpcodeSection>> {
         one_join(query)?;
-        Ok(planner::explain_opcodes(query)?)
+        let query = self.with_timestamps_resolved(query.clone())?;
+        Ok(planner::explain_opcodes(&query)?)
+    }
+
+    /// `query` with db-core's TIMESTAMP rewrite applied, as its own engine
+    /// does before planning: a quoted timestamp compared with a TIMESTAMP
+    /// column becomes the column's integer units (db-core#679) and
+    /// `date_trunc(part, ts)` the dialect's `__date_trunc` (db-core#647).
+    /// The TIMESTAMP columns are those of every table the query names: its
+    /// `FROM`, its `JOIN` and its `IN (SELECT ...)` table.
+    fn with_timestamps_resolved(&self, mut query: Select) -> Result<Select> {
+        let mut tables = vec![from_table(&query)?];
+        if let Some(join) = first_join(&query) {
+            tables.push(join_table(join)?);
+        }
+        if let Some(subquery) = in_subquery(&query) {
+            tables.push(from_table(subquery)?);
+        }
+        let mut timestamps = Vec::new();
+        for table in tables {
+            if matches!(self.table(table)?.data, TableData::Lookup) {
+                continue;
+            }
+            timestamps.extend(self.hold(table)?.open()?.timestamps()?);
+        }
+        resolve_timestamps(&mut query, &timestamps)
+            .map_err(|e| QueryError::Timestamp(e.message))?;
+        Ok(query)
     }
 }
 
@@ -1670,6 +1728,107 @@ mod tests {
 
     fn details(nodes: &[PlanNode]) -> Vec<&str> {
         nodes.iter().map(|n| n.detail.as_str()).collect()
+    }
+
+    /// db-core#647/#679 through column-rs's own parse and plan: a quoted
+    /// timestamp compared with a TIMESTAMP column, and `date_trunc` in the
+    /// select list, `GROUP BY` and `WHERE`. Values are DuckDB's
+    /// `epoch_us` on the same file. These failed with "unknown function
+    /// date_trunc" and "could not convert string ... to INTEGER" before
+    /// column-rs applied db-core's `resolve_timestamps`.
+    #[test]
+    fn date_trunc_and_quoted_timestamps_match_duckdb() {
+        let mut engine = QueryEngine::default();
+        engine
+            .add_table(&fixture_path("logical_types.parquet"), None)
+            .unwrap();
+        let rows = |sql: &str| -> Vec<Vec<Value>> {
+            engine
+                .execute(sql)
+                .unwrap_or_else(|e| panic!("{sql}: {e}"))
+                .rows()
+                .collect()
+        };
+        assert_eq!(
+            rows("SELECT date_trunc('minute', ts_us) AS m, count(*) FROM logical_types GROUP BY 1 ORDER BY 1"),
+            [vec![Value::Int(1_705_314_600_000_000), Value::Int(10)]]
+        );
+        assert_eq!(
+            rows("SELECT count(*) FROM logical_types WHERE ts_us >= '2024-01-15 10:30:05'"),
+            [vec![Value::Int(5)]]
+        );
+        assert_eq!(
+            rows(
+                "SELECT count(*) FROM logical_types WHERE date_trunc('day', ts_us) = '2024-01-15'"
+            ),
+            [vec![Value::Int(10)]]
+        );
+
+        // The rewrite's refusals are column-rs errors, not "table directory".
+        for sql in [
+            "SELECT count(*) FROM logical_types WHERE ts_us > 'soon'",
+            "SELECT date_trunc('day', id) FROM logical_types",
+            "SELECT date_trunc('fortnight', ts_us) FROM logical_types",
+        ] {
+            assert!(
+                matches!(engine.execute(sql), Err(QueryError::Timestamp(_))),
+                "{sql}"
+            );
+        }
+
+        // The streaming path and EXPLAIN rewrite the query too.
+        let mut values = Vec::new();
+        engine
+            .execute_streaming(
+                "SELECT date_trunc('hour', ts_us) FROM logical_types WHERE ts_us >= '2024-01-15 10:30:08'",
+                |event| {
+                    if let StreamEvent::Chunk(chunk) = event {
+                        values.extend(chunk[0].iter().cloned());
+                    }
+                },
+            )
+            .unwrap();
+        assert_eq!(values, vec![Value::Int(1_705_312_800_000_000); 2]);
+        let query = sql::parse(
+            "SELECT count(*) FROM logical_types WHERE date_trunc('day', ts_us) = '2024-01-15'",
+        )
+        .unwrap();
+        assert!(engine.explain_opcodes(&query).is_ok());
+        assert!(engine.explain(&query).is_ok());
+    }
+
+    /// A legacy INT96 timestamp column (db-core's column decoder used to
+    /// read it with the string reader and fail with "unexpected end of
+    /// page data"): epoch microseconds, a TIMESTAMP for `--pipe`, and the
+    /// timestamp rewrite applies to it. Values are DuckDB's `epoch_us`.
+    #[test]
+    fn an_int96_timestamp_column_reads_as_a_timestamp() {
+        let mut engine = QueryEngine::default();
+        engine
+            .add_table(&fixture_path("int96_timestamps.parquet"), None)
+            .unwrap();
+        let (result, types) = engine
+            .execute_typed("SELECT ts, date_trunc('year', ts) AS y FROM int96_timestamps")
+            .unwrap();
+        let rows: Vec<_> = result.rows().collect();
+        let expected: Vec<_> = (0..5)
+            .map(|i| {
+                vec![
+                    Value::Int(1_705_314_600_000_000 + i * 1_000_000),
+                    Value::Int(1_704_067_200_000_000),
+                ]
+            })
+            .collect();
+        assert_eq!(rows, expected);
+        let micros = Some(crate::pipe::ColType::Timestamp(
+            crate::pipe::TimeUnit::Micros,
+        ));
+        assert_eq!(types, [micros, micros]);
+
+        let count = engine
+            .execute("SELECT count(*) FROM int96_timestamps WHERE ts >= '2024-01-15 10:30:03'")
+            .unwrap();
+        assert_eq!(count.rows().collect::<Vec<_>>(), [vec![Value::Int(2)]]);
     }
 
     /// db-core#747: the query's WHERE clause goes to `file_segments`, which
