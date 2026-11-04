@@ -4,6 +4,12 @@ All notable changes to sqlite-rs. Format follows [Keep a Changelog](https://keep
 
 **Versioning policy:** one minor version per completed plan phase — the version number tells the plan's story, sub-steps stay inside a phase. V1 (READ CORE) = 0.1.0 through 0.4.0. *(History note: internal iterations briefly numbered 0.4.0–0.6.0 were renumbered into the phase scheme on 14 Aug 2026, before any tag or publication of those versions existed.)*
 
+## [0.26.8] - 2026-11-04
+
+### Changed
+
+- Table cursor `column()` parses the record header once per row and decodes only the requested column, instead of decoding and cloning every column (tools#114, db-core#533). 50MB `full_scan` 2.6x -> ~1.0x of sqlite3, `full_scan_3col` 2.7x -> ~1.3x.
+
 ## [0.26.7] - 2026-11-02
 
 ### Added

@@ -26,7 +26,7 @@ use db_core::vm::row::{
 
 use crate::btree::{self, IndexCursor, IndexRow, Payload, TableCursor};
 use crate::header::{DatabaseHeader, JournalMode, SynchronousMode};
-use crate::record::{decode_record, Value};
+use crate::record::{decode_record, decode_serial_value, parse_header_into, Value};
 use crate::vfs::{PageError, PageSource};
 
 type SharedPager = Rc<RefCell<crate::pager::Pager>>;
@@ -52,9 +52,14 @@ pub struct TableCursorAdapter {
     header: DatabaseHeader,
     root_page: u32,
     current_rowid: Option<i64>,
-    /// The current row's payload and its decoded columns, fetched lazily
-    /// on the first `column()`/`payload()` after positioning.
-    cached: Option<(Payload, Vec<Value>)>,
+    /// The current row's payload, fetched on the first `column()` after
+    /// positioning (`column` takes `&self`, hence the `RefCell`).
+    payload: RefCell<Option<Payload>>,
+    /// `(serial_type, body_offset)` per column of the current row, parsed
+    /// once per row; `column()` decodes only the requested body. Kept apart
+    /// from `payload` so the Vec's allocation is reused across rows
+    /// (`parse_header_into` clears it) (db-core#533, tools#114).
+    entries: RefCell<Vec<(u64, usize)>>,
 }
 
 impl TableCursorAdapter {
@@ -71,15 +76,31 @@ impl TableCursorAdapter {
             header,
             root_page,
             current_rowid: None,
-            cached: None,
+            payload: RefCell::new(None),
+            entries: RefCell::new(Vec::new()),
         }
     }
 
     fn position(&mut self, rowid: Result<Option<i64>, btree::BtreeError>) -> CursorResult<bool> {
-        self.cached = None;
+        *self.payload.borrow_mut() = None;
         self.current_rowid = None;
         self.current_rowid = rowid.map_err(cursor_err)?;
         Ok(self.current_rowid.is_some())
+    }
+
+    /// Parses the current row's header at most once per positioned row.
+    /// `Ok(false)` when there is no current row.
+    fn ensure_cached(&self) -> CursorResult<bool> {
+        if self.payload.borrow().is_some() {
+            return Ok(true);
+        }
+        if self.current_rowid.is_none() {
+            return Ok(false);
+        }
+        let payload = self.cursor.current_payload().map_err(cursor_err)?;
+        parse_header_into(&payload, &mut self.entries.borrow_mut()).map_err(cursor_err)?;
+        *self.payload.borrow_mut() = Some(payload);
+        Ok(true)
     }
 
     fn max_rowid(&self) -> CursorResult<i64> {
@@ -123,23 +144,24 @@ impl Cursor for TableCursorAdapter {
     }
 
     fn column(&self, col: usize) -> CursorResult<Option<Value>> {
-        // `column` takes `&self`; the dispatcher always positions first,
-        // and `payload()`/`ensure_cached` is called through `&mut self`
-        // paths, so fall back to a direct read when nothing is cached.
         // `None` is "no current row" (db-core#231); a column index past the
         // record's end is `Some(Null)`, SQLite's short-record rule. A record
         // that doesn't decode is an error, not "no current row" (db-core#873).
-        match &self.cached {
-            Some((_, values)) => Ok(Some(values.get(col).cloned().unwrap_or(Value::Null))),
-            None => {
-                if self.current_rowid.is_none() {
-                    return Ok(None);
-                }
-                let payload = self.cursor.current_payload().map_err(cursor_err)?;
-                let values =
-                    decode_record(&payload, self.header.text_encoding).map_err(cursor_err)?;
-                Ok(Some(values.get(col).cloned().unwrap_or(Value::Null)))
+        if !self.ensure_cached()? {
+            return Ok(None);
+        }
+        let payload = self.payload.borrow();
+        let Some(payload) = payload.as_ref() else {
+            return Ok(None);
+        };
+        match self.entries.borrow().get(col) {
+            Some(&(serial_type, offset)) => {
+                let (value, _) =
+                    decode_serial_value(serial_type, payload, offset, self.header.text_encoding)
+                        .map_err(cursor_err)?;
+                Ok(Some(value))
             }
+            None => Ok(Some(Value::Null)),
         }
     }
 
@@ -166,7 +188,7 @@ impl Cursor for TableCursorAdapter {
             rowid,
             payload,
         );
-        self.cached = None;
+        *self.payload.borrow_mut() = None;
         inserted.map_err(cursor_err)?;
         Ok(Some(true))
     }
@@ -189,7 +211,7 @@ impl Cursor for TableCursorAdapter {
             rowid,
         );
         self.current_rowid = None;
-        self.cached = None;
+        *self.payload.borrow_mut() = None;
         deleted.map_err(cursor_err)?;
         Ok(true)
     }
