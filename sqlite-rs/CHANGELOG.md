@@ -4,6 +4,12 @@ All notable changes to sqlite-rs. Format follows [Keep a Changelog](https://keep
 
 **Versioning policy:** one minor version per completed plan phase — the version number tells the plan's story, sub-steps stay inside a phase. V1 (READ CORE) = 0.1.0 through 0.4.0. *(History note: internal iterations briefly numbered 0.4.0–0.6.0 were renumbered into the phase scheme on 14 Aug 2026, before any tag or publication of those versions existed.)*
 
+## [0.26.10] - 2026-11-04
+
+### Changed
+
+- The index cursor decodes only the key columns it reads instead of the whole entry on every step, as db-core#949: `agg_subquery` about 26% faster at 1 MB and 50 MB (#113).
+
 ## [0.26.9] - 2026-11-04
 
 ### Fixed
