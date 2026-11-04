@@ -26,7 +26,9 @@ use db_core::vm::row::{
 
 use crate::btree::{self, IndexCursor, IndexRow, Payload, TableCursor};
 use crate::header::{DatabaseHeader, JournalMode, SynchronousMode};
-use crate::record::{decode_record, decode_serial_value, parse_header_into, Value};
+use crate::record::{
+    decode_record, decode_serial_value, decode_varint, parse_header_into, RecordError, Value,
+};
 use crate::vfs::{PageError, PageSource};
 
 type SharedPager = Rc<RefCell<crate::pager::Pager>>;
@@ -235,9 +237,15 @@ pub struct IndexCursorAdapter {
     writer: Option<SharedPager>,
     header: DatabaseHeader,
     root_page: u32,
-    /// The entry most recently positioned on and its decoded key record
-    /// (key columns then the trailing rowid), `None` after a miss.
-    current: Option<(IndexRow, Vec<Value>)>,
+    /// The entry most recently positioned on, `None` after a miss. Its key
+    /// record (key columns then the trailing rowid) stays encoded: a
+    /// column is decoded only when something reads it (#113, as
+    /// db-core#949).
+    current: Option<IndexRow>,
+    /// The current entry's header entries (serial type, body offset per
+    /// column), parsed when the cursor is positioned. Its allocation is
+    /// reused for every entry, so positioning allocates nothing.
+    entries: Vec<(u64, usize)>,
 }
 
 impl IndexCursorAdapter {
@@ -253,9 +261,13 @@ impl IndexCursorAdapter {
             header,
             root_page,
             current: None,
+            entries: Vec::new(),
         }
     }
 
+    /// Positions on `row`. The header is walked and the body length
+    /// checked (a malformed record is an error here, as when the whole
+    /// record was decoded), but no column body is decoded.
     fn set_current(
         &mut self,
         row: Result<Option<IndexRow>, btree::BtreeError>,
@@ -264,33 +276,102 @@ impl IndexCursorAdapter {
         let Some(row) = row.map_err(cursor_err)? else {
             return Ok(false);
         };
-        let values = decode_record(&row.payload, self.header.text_encoding).map_err(cursor_err)?;
-        self.current = Some((row, values));
+        parse_header_checked_into(&row.payload, &mut self.entries).map_err(cursor_err)?;
+        self.current = Some(row);
         Ok(true)
+    }
+
+    /// Column `col` of the current entry, decoded now; a column past the
+    /// record's end is NULL. `Ok(None)` when there is no current entry.
+    fn decode_column(&self, col: usize) -> CursorResult<Option<Value>> {
+        let Some(row) = self.current.as_ref() else {
+            return Ok(None);
+        };
+        match self.entries.get(col) {
+            Some(&(serial_type, offset)) => {
+                let (value, _) = decode_serial_value(
+                    serial_type,
+                    &row.payload,
+                    offset,
+                    self.header.text_encoding,
+                )
+                .map_err(cursor_err)?;
+                Ok(Some(value))
+            }
+            None => Ok(Some(Value::Null)),
+        }
     }
 
     /// sqlite-rs `decode_leading_columns`: the entry's first `probe.len()`
     /// columns compared to `probe` under `collations`, or `None` when the
-    /// entry has no trailing rowid column beyond them.
+    /// entry has no trailing rowid column beyond them. Only those leading
+    /// columns are decoded.
     fn compare_leading(&self, probe: &[Value], collations: &[Collation]) -> Option<Ordering> {
-        let (_, values) = self.current.as_ref()?;
-        if values.len() <= probe.len() {
+        self.current.as_ref()?;
+        if self.entries.len() <= probe.len() {
             return None;
         }
-        Some(
-            values
-                .iter()
-                .zip(probe.iter())
-                .zip(
-                    collations
-                        .iter()
-                        .chain(std::iter::repeat(&Collation::Binary)),
-                )
-                .map(|((k, p), &c)| compare(k, p, c))
-                .find(|o| !o.is_eq())
-                .unwrap_or(Ordering::Equal),
-        )
+        for (col, (p, &c)) in probe
+            .iter()
+            .zip(
+                collations
+                    .iter()
+                    .chain(std::iter::repeat(&Collation::Binary)),
+            )
+            .enumerate()
+        {
+            // The header was checked when the cursor was positioned, so a
+            // body that still fails to decode (invalid text) has no
+            // ordering: report "no entry" rather than a wrong one.
+            let key = self.decode_column(col).ok()??;
+            let ordering = compare(&key, p, c);
+            if !ordering.is_eq() {
+                return Some(ordering);
+            }
+        }
+        Some(Ordering::Equal)
     }
+}
+
+/// [`parse_header_into`], plus the length check `decode_record` makes: the
+/// bodies the header declares end exactly at the end of `payload`. The
+/// lazy index cursor calls this when it positions, so a truncated or
+/// over-long record is still an error there without decoding any body.
+/// db-core's own copy (db-core#949) is crate-private.
+fn parse_header_checked_into(
+    payload: &[u8],
+    entries: &mut Vec<(u64, usize)>,
+) -> Result<(), RecordError> {
+    parse_header_into(payload, entries)?;
+    let end = match entries.last() {
+        Some(&(serial_type, offset)) => offset.saturating_add(serial_type_len(serial_type)),
+        None => {
+            let (header_len, _) = decode_varint(payload)?;
+            usize::try_from(header_len).unwrap_or(usize::MAX)
+        }
+    };
+    if end > payload.len() {
+        return Err(RecordError::UnexpectedEof { offset: end });
+    }
+    if end < payload.len() {
+        return Err(RecordError::TrailingData {
+            trailing: payload.len().saturating_sub(end),
+        });
+    }
+    Ok(())
+}
+
+/// The body length of a record column of `serial_type` (file format
+/// 2.1); 10 and 11 are reserved and have no body.
+fn serial_type_len(serial_type: u64) -> usize {
+    let len = match serial_type {
+        0 | 8..=11 => 0,
+        1..=4 => serial_type,
+        5 => 6,
+        6 | 7 => 8,
+        n => n.saturating_sub(12) / 2,
+    };
+    usize::try_from(len).unwrap_or(usize::MAX)
 }
 
 impl Cursor for IndexCursorAdapter {
@@ -315,10 +396,7 @@ impl Cursor for IndexCursorAdapter {
     }
 
     fn column(&self, col: usize) -> CursorResult<Option<Value>> {
-        Ok(self
-            .current
-            .as_ref()
-            .map(|(_, values)| values.get(col).cloned().unwrap_or(Value::Null)))
+        self.decode_column(col)
     }
 
     fn rowid(&self) -> Option<i64> {
@@ -326,9 +404,9 @@ impl Cursor for IndexCursorAdapter {
     }
 
     fn idx_rowid(&self) -> Option<i64> {
-        let (_, values) = self.current.as_ref()?;
-        match values.last()? {
-            Value::Integer(rowid) => Some(*rowid),
+        // The trailing rowid is the last column; nothing else is decoded.
+        match self.decode_column(self.entries.len().checked_sub(1)?) {
+            Ok(Some(Value::Integer(rowid))) => Some(rowid),
             _ => None,
         }
     }
@@ -804,5 +882,170 @@ mod tests {
         let mut factory = StorageFactory::read_only(source, header);
         assert!(factory.open_read(1).is_ok());
         assert!(factory.open_write(1).is_err());
+    }
+
+    /// An index cursor over `CREATE INDEX ix ON ixt(a, b)` (#113): rows
+    /// `(1,'x')`, `(1,'y')`, `(2,NULL)`, whose entries are `(a, b, rowid)`.
+    fn index_cursor_over_a_b() -> IndexCursorAdapter {
+        let (vfs, header) = crate::btree::test_minimal_db(4096);
+        let pager =
+            crate::pager::Pager::open(&vfs, std::path::Path::new("/test.db"), 4096).unwrap();
+        let pager = Rc::new(RefCell::new(pager));
+        let mut autocommit = true;
+        for sql in [
+            "CREATE TABLE ixt(a, b, c)",
+            "CREATE INDEX ix ON ixt(a, b)",
+            "INSERT INTO ixt VALUES (1, 'x', 10), (1, 'y', 20), (2, NULL, 30)",
+        ] {
+            let (schemas, views) = schema_of(&pager, &header);
+            let program = crate::codegen::compile_statement(sql, &schemas, &views).unwrap();
+            autocommit = crate::vdbe::execute_transaction_step(
+                &program,
+                Rc::clone(&pager),
+                header,
+                autocommit,
+            )
+            .unwrap()
+            .1;
+        }
+        let (schemas, _) = schema_of(&pager, &header);
+        let root = schemas
+            .iter()
+            .find(|t| t.name == "ixt")
+            .unwrap()
+            .indexes
+            .first()
+            .unwrap()
+            .root_page;
+        IndexCursorAdapter::new(erase(pager), None, header, root)
+    }
+
+    fn schema_of(
+        pager: &Rc<RefCell<crate::pager::Pager>>,
+        header: &DatabaseHeader,
+    ) -> (
+        Vec<crate::schema::TableSchema>,
+        Vec<crate::schema::ViewSchema>,
+    ) {
+        let borrowed = pager.borrow();
+        let mut cursor = TableCursor::new(&*borrowed, header, 1);
+        let schemas = crate::schema::read_schema(&mut cursor, header.text_encoding).unwrap();
+        let mut cursor = TableCursor::new(&*borrowed, header, 1);
+        let views = crate::schema::read_views(&mut cursor, header.text_encoding).unwrap();
+        (schemas, views)
+    }
+
+    /// Positioning keeps the record encoded; every reader decodes only
+    /// what it asks for, and agrees with the old whole-record decode.
+    #[test]
+    fn an_index_entry_is_decoded_column_by_column() {
+        let mut c = index_cursor_over_a_b();
+        assert!(c.column(0).unwrap().is_none(), "nothing positioned yet");
+        assert_eq!(c.idx_rowid(), None);
+        assert!(c.idx_compare(&[Value::Integer(1)], &[]).is_none());
+
+        assert!(c.rewind().unwrap());
+        assert_eq!(c.column(0).unwrap(), Some(Value::Integer(1)));
+        assert_eq!(c.column(1).unwrap(), Some(Value::Text("x".into())));
+        assert_eq!(c.column(2).unwrap(), Some(Value::Integer(1)), "the rowid");
+        assert_eq!(c.column(3).unwrap(), Some(Value::Null), "past the end");
+        assert_eq!(c.idx_rowid(), Some(1));
+        assert_eq!(c.rowid(), Some(1));
+
+        // Only the probe's leading columns are compared.
+        let probe = |key: &[Value]| c.idx_compare(key, &[]);
+        assert_eq!(probe(&[Value::Integer(1)]), Some(Ordering::Equal));
+        assert_eq!(probe(&[Value::Integer(2)]), Some(Ordering::Less));
+        assert_eq!(probe(&[Value::Integer(0)]), Some(Ordering::Greater));
+        assert_eq!(
+            probe(&[Value::Integer(1), Value::Text("y".into())]),
+            Some(Ordering::Less)
+        );
+        // A probe as long as the entry leaves no trailing rowid: "not greater".
+        let full = [
+            Value::Integer(1),
+            Value::Text("x".into()),
+            Value::Integer(1),
+        ];
+        assert_eq!(probe(&full), Some(Ordering::Equal));
+        assert_eq!(c.compare_leading(&full, &[]), None);
+
+        assert!(c.next().unwrap() && c.next().unwrap());
+        assert_eq!(c.column(1).unwrap(), Some(Value::Null));
+        assert_eq!(c.idx_rowid(), Some(3));
+        assert!(!c.next().unwrap());
+        assert!(c.column(0).unwrap().is_none());
+        assert_eq!(c.idx_rowid(), None);
+
+        assert!(c.last().unwrap());
+        assert_eq!(c.idx_rowid(), Some(3));
+        assert!(c.prev().unwrap());
+        assert_eq!(c.idx_rowid(), Some(2));
+    }
+
+    #[test]
+    fn seeking_an_index_entry_compares_the_key_under_its_collations() {
+        let mut c = index_cursor_over_a_b();
+        let key = [Value::Integer(1), Value::Text("X".into())];
+        assert!(!c.seek_index_eq(&key, &[]).unwrap(), "binary: 'X' != 'x'");
+        assert!(c.column(0).unwrap().is_none(), "a miss leaves no entry");
+        assert!(c
+            .seek_index_eq(&key, &[Collation::Binary, Collation::NoCase])
+            .unwrap());
+        assert_eq!(c.idx_rowid(), Some(1));
+        assert!(c.seek_index_eq(&[Value::Integer(2)], &[]).unwrap());
+        assert_eq!(c.idx_rowid(), Some(3));
+        assert!(!c.seek_index_eq(&[Value::Integer(5)], &[]).unwrap());
+        assert!(c
+            .seek_index_ge(&[Value::Integer(1), Value::Text("y".into())], &[])
+            .unwrap());
+        assert_eq!(c.idx_rowid(), Some(2));
+    }
+
+    /// `parse_header_checked_into` accepts what `decode_record` accepts
+    /// and refuses a body of the wrong length, without decoding it, so a
+    /// malformed index entry is still an error when the cursor positions.
+    #[test]
+    fn checked_header_parse_requires_the_body_to_fill_the_payload() {
+        let mut entries = Vec::new();
+        // One 1-byte integer (7), then one empty text column.
+        parse_header_checked_into(&[3, 1, 13, 7], &mut entries).unwrap();
+        assert_eq!(entries, [(1, 3), (13, 4)]);
+        // The integer's byte is missing.
+        assert!(matches!(
+            parse_header_checked_into(&[2, 1], &mut entries),
+            Err(RecordError::UnexpectedEof { .. })
+        ));
+        // One byte too many.
+        assert!(matches!(
+            parse_header_checked_into(&[2, 1, 7, 7], &mut entries),
+            Err(RecordError::TrailingData { trailing: 1 })
+        ));
+        // A record with no columns is just its header byte.
+        parse_header_checked_into(&[1], &mut entries).unwrap();
+        assert!(entries.is_empty());
+        assert!(matches!(
+            parse_header_checked_into(&[1, 0], &mut entries),
+            Err(RecordError::TrailingData { trailing: 1 })
+        ));
+        // A broken header is refused by the parse itself.
+        assert!(parse_header_checked_into(&[], &mut entries).is_err());
+    }
+
+    /// `serial_type_len` agrees with how far `decode_serial_value` reads,
+    /// for every fixed-size type and for blobs and text of a few lengths.
+    #[test]
+    fn serial_type_len_matches_the_decoder() {
+        let body = [0u8; 64];
+        for serial_type in (0..=9).chain(12..=40) {
+            let (_, next) =
+                decode_serial_value(serial_type, &body, 0, crate::record::TextEncoding::Utf8)
+                    .unwrap();
+            assert_eq!(
+                serial_type_len(serial_type),
+                next,
+                "serial type {serial_type}"
+            );
+        }
     }
 }
