@@ -4,6 +4,21 @@ All notable changes to sqlite-rs. Format follows [Keep a Changelog](https://keep
 
 **Versioning policy:** one minor version per completed plan phase — the version number tells the plan's story, sub-steps stay inside a phase. V1 (READ CORE) = 0.1.0 through 0.4.0. *(History note: internal iterations briefly numbered 0.4.0–0.6.0 were renumbered into the phase scheme on 14 Aug 2026, before any tag or publication of those versions existed.)*
 
+## [0.26.11] - 2026-11-04
+
+### Added
+
+- `DESC` index key columns: `CREATE INDEX ... DESC` and INSERT/UPDATE/DELETE keep them in sqlite3's order; expression indexes, which also serve `WHERE <expr> = ?` and `BETWEEN`; `CREATE UNIQUE INDEX` checks existing rows (db-core#945, #951, #952).
+
+### Fixed
+
+- `PRAGMA journal_mode = <current>` inside a transaction is a no-op, as in sqlite3; `LIKE` operands, `COLLATE` after postfix tests, `ANALYZE <view>`; `GROUP BY`/`ORDER BY` terms sqlite3 folds to an integer are result positions; INTEGER PRIMARY KEY affinity, BLOB arithmetic; page reads retry short reads (db-core#945, #946, #954, #1003).
+
+### Changed
+
+- Faster row engine: no allocation per index probe, one-byte record-header fast path, same-size UPDATE in place, cheaper register access and AggStep, GROUP BY breaks via Compare + Jump (db-core#524, #525, #950, #961).
+- db-core pin v0.228.2.
+
 ## [0.26.10] - 2026-11-04
 
 ### Changed

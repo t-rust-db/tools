@@ -21,7 +21,7 @@ use sqlite_rs::vdbe::Opcode;
 /// GROUP BY's group-break as a three-way `Jump` on a `Compare`, where we
 /// emit an `Eq`/`IsNull`/`NotNull`/`Goto` chain -- same semantics,
 /// different machine. Parity means this list reaches empty.
-const KNOWN_UNIMPLEMENTED: &[&str] = &["Compare", "If", "Jump", "Move"];
+const KNOWN_UNIMPLEMENTED: &[&str] = &["If", "Move"];
 
 #[test]
 fn opcode_inventory_matches_harvested_set() {

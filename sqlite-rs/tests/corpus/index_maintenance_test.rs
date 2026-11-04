@@ -396,13 +396,12 @@ fn insert_maintains_an_index_on_the_rowid_alias_column() {
     );
 }
 
-/// A `DESC`-ordered index column: there is no b-tree comparator support
-/// for descending index keys anywhere in this codebase yet (a
-/// pre-existing #171 gap, not introduced here), so codegen must reject
-/// it loudly (`CodegenError::Unsupported`) rather than silently build
-/// an ascending key stock `sqlite3` would then compare backwards.
+/// A `DESC`-ordered index column (db-core#951): the key is built and
+/// placed under the descending comparator, so stock `sqlite3`'s
+/// `integrity_check` (which verifies index key order) passes and a scan
+/// of the index returns the values in descending order.
 #[test]
-fn insert_on_desc_index_is_rejected_not_silently_miskeyed() {
+fn insert_maintains_a_desc_index() {
     let Some(oracle) = pinned_oracle() else {
         skip_no_oracle("index_maintenance");
         return;
@@ -417,18 +416,31 @@ fn insert_on_desc_index_is_rejected_not_silently_miskeyed() {
     );
 
     let page_size = page_size_of(&db);
-    let header = read_header(&db, page_size);
-    let schema = table_schema(&db, &header, "t");
-    assert!(schema.indexes[0].columns[0].desc);
+    for sql in [
+        "INSERT INTO t VALUES (2, 'apple')",
+        "INSERT INTO t VALUES (3, 'zebra')",
+    ] {
+        let header = read_header(&db, page_size);
+        let schema = table_schema(&db, &header, "t");
+        assert!(schema.indexes[0].columns[0].desc);
+        let insert = match parse_insert(sql) {
+            ParseOutcome::Accepted(i) => *i,
+            other => panic!("failed to parse: {other:?}"),
+        };
+        let program = compile_insert(&insert, &schema, None).unwrap();
+        let vfs = UnixVfs;
+        let pager = Pager::open(&vfs, &db, page_size).unwrap();
+        execute_with_writable_db(&program, pager, header).unwrap();
+    }
 
-    let insert = match parse_insert("INSERT INTO t VALUES (2, 'apple')") {
-        ParseOutcome::Accepted(i) => *i,
-        other => panic!("failed to parse: {other:?}"),
-    };
-    let err = compile_insert(&insert, &schema, None).unwrap_err();
-    assert!(
-        matches!(err, sqlite_rs::codegen::CodegenError::Unsupported { .. }),
-        "expected Unsupported, got {err:?}"
+    assert_integrity_check_ok(&oracle, &db);
+    assert_eq!(
+        oracle_select(
+            &oracle,
+            &db,
+            "SELECT b FROM t INDEXED BY idx_b_desc WHERE b > ''"
+        ),
+        "zebra\nseed\napple"
     );
 }
 
