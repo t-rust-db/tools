@@ -946,16 +946,15 @@ the parser, #375).
 
 **Tests:** `tests/corpus/cte_test.rs::with_clause_second_cte_references_first_matches_oracle`
 
-#### Scenario: A CTE whose body is a compound (UNION) SELECT is rejected cleanly
+#### Scenario: A CTE whose body is a compound (UNION) SELECT reads every arm
 
 - GIVEN `WITH cte AS (SELECT x FROM t WHERE x > 15 UNION SELECT x FROM t
   WHERE x < 25) SELECT * FROM cte`
-- THEN compilation MUST fail with `CodegenError::Unsupported`, not
-  silently scan only the CTE body's `first` arm (a real data-loss bug
-  found and fixed by #382 — `materialize_from_subquery` previously
-  ignored every `compound` arm past `first`)
+- THEN the result MUST hold every arm's rows and match the pinned
+  sqlite3, not only the CTE body's `first` arm (the data-loss bug #382
+  first guarded against by refusing the query; db-core#940 supports it)
 
-**Tests:** `tests/corpus/cte_test.rs::with_clause_cte_body_is_union_is_rejected_cleanly`
+**Tests:** `tests/corpus/cte_test.rs::with_clause_cte_body_is_union_matches_oracle`
 
 ### Requirement 14: Compound SELECT (UNION / UNION ALL) [MUST]
 
