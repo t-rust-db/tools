@@ -2,6 +2,18 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.44.0] - 2026-11-06
+
+### Added
+
+- `date_trunc(part, ts)` over a TIMESTAMP column, in the select list, `WHERE`, `GROUP BY` and `ORDER BY` (db-core#647), and a TIMESTAMP column compared with a quoted timestamp such as `ts >= '2026-01-05'` (db-core#679), over files and table directories, in `EXPLAIN` and in streamed output. They failed with "unknown function date_trunc" and "could not convert string ... to INTEGER": column-rs now applies db-core's `resolve_timestamps`.
+- Legacy INT96 timestamp columns (Spark/Impala, pyarrow's `use_deprecated_int96_timestamps`) read as timestamps instead of failing with "unexpected end of page data".
+
+### Changed
+
+- `--pipe` types an INT96 column and a `date_trunc` result as TIMESTAMP (ISO 8601).
+- db-core pin v0.229.0.
+
 ## [0.43.2] - 2026-11-04
 
 ### Changed

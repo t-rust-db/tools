@@ -2,6 +2,16 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.14.10] - 2026-11-06
+
+### Fixed
+
+- The iot-fleet example fixture builds with DuckDB 2.0, which refuses `random()` in a window `ORDER BY`.
+
+### Changed
+
+- db-core pin v0.229.0.
+
 ## [0.14.9] - 2026-11-04
 
 ### Changed
