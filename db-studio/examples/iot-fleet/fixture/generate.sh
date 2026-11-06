@@ -48,14 +48,20 @@ WITH catalog(model, firmware) AS (
         ('EdgeSense-300', '1.9.5'),
         ('EdgeSense-400', '2.3.0')
 )
-SELECT
-    d.id,
-    c.model,
-    c.firmware,
-    ((d.id - 1) % 6) + 1 AS site_id
-FROM range(1, 61) AS d(id)
-JOIN catalog AS c ON true
-QUALIFY row_number() OVER (PARTITION BY d.id ORDER BY random()) = 1;
+SELECT id, model, firmware, site_id
+FROM (
+    SELECT
+        d.id,
+        c.model,
+        c.firmware,
+        ((d.id - 1) % 6) + 1 AS site_id,
+        random() AS pick
+    FROM range(1, 61) AS d(id)
+    JOIN catalog AS c ON true
+)
+-- `pick` is a column, not random() in the window: DuckDB 2.0 refuses a
+-- volatile window ORDER BY.
+QUALIFY row_number() OVER (PARTITION BY id ORDER BY pick) = 1;
 
 -- 2-3 sensors per device (id-parity decides which), type cycling
 -- through a fixed profile list so every sensor's base/spread is known.
