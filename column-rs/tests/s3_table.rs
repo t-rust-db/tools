@@ -8,7 +8,7 @@
 use column_rs::query::QueryEngine;
 use db_core::storage::ingest::{Ack, Layout, TableOptions, TableWriter, TierOptions};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -41,6 +41,8 @@ fn credentials() {
     ONCE.call_once(|| {
         std::env::set_var("AWS_ACCESS_KEY_ID", "test-key");
         std::env::set_var("AWS_SECRET_ACCESS_KEY", SECRET);
+        // Trusts the test CA that signed the https:// fake's certificate (#125).
+        std::env::set_var("AWS_CA_BUNDLE", fixture("tls_ca.pem"));
     });
 }
 
@@ -118,7 +120,8 @@ fn fixture(name: &str) -> PathBuf {
 /// path-style. It answers GET (whole or one `Range`) and HEAD, refuses
 /// everything else with 405, and logs each request as `METHOD /path`.
 struct FakeS3 {
-    port: u16,
+    /// `http://127.0.0.1:port`, or `https://localhost:port` (#125).
+    endpoint: String,
     log: Arc<Mutex<Vec<String>>>,
 }
 
@@ -133,14 +136,61 @@ impl FakeS3 {
                 answer(stream, &root, &served);
             }
         });
-        FakeS3 { port, log }
+        FakeS3 {
+            endpoint: format!("http://127.0.0.1:{port}"),
+            log,
+        }
+    }
+
+    /// [`FakeS3::serve`] over TLS with the `localhost` certificate (signed by
+    /// the test CA, `tls_ca.pem`) in the fixtures, closing each connection with a
+    /// `close_notify` or, as many servers do, without one.
+    #[cfg(feature = "s3-tls")]
+    fn serve_tls(root: &Path, close_notify: bool) -> FakeS3 {
+        use rustls::pki_types::pem::PemObject;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        let certs = CertificateDer::pem_file_iter(fixture("tls_cert.pem"))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let key = PrivateKeyDer::from_pem_file(fixture("tls_key.pem")).unwrap();
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let config = Arc::new(
+            rustls::ServerConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(certs, key)
+                .unwrap(),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let (root, served) = (root.to_path_buf(), Arc::clone(&log));
+        std::thread::spawn(move || {
+            for tcp in listener.incoming().flatten() {
+                let Ok(conn) = rustls::ServerConnection::new(Arc::clone(&config)) else {
+                    continue;
+                };
+                if let Some(mut tls) = answer(rustls::StreamOwned::new(conn, tcp), &root, &served) {
+                    if close_notify {
+                        tls.conn.send_close_notify();
+                        tls.flush().ok();
+                    }
+                }
+            }
+        });
+        FakeS3 {
+            endpoint: format!("https://localhost:{port}"),
+            log,
+        }
     }
 
     /// The table `prefix` of the bucket, as column-rs takes it.
     fn location(&self, prefix: &str) -> String {
         format!(
-            "s3://bucket/{prefix}?endpoint=http://127.0.0.1:{}&region=test",
-            self.port
+            "s3://bucket/{prefix}?endpoint={}&region=test",
+            self.endpoint
         )
     }
 
@@ -150,7 +200,9 @@ impl FakeS3 {
     }
 }
 
-fn answer(stream: TcpStream, root: &Path, log: &Mutex<Vec<String>>) {
+/// Answers one request on `stream` and hands the stream back (`None` when
+/// no request came).
+fn answer<S: Read + Write>(stream: S, root: &Path, log: &Mutex<Vec<String>>) -> Option<S> {
     let mut reader = BufReader::new(stream);
     let mut head = Vec::new();
     loop {
@@ -160,7 +212,7 @@ fn answer(stream: TcpStream, root: &Path, log: &Mutex<Vec<String>>) {
         }
         head.push(line.trim_end().to_string());
     }
-    let Some(request) = head.first() else { return };
+    let request = head.first()?;
     let mut parts = request.split(' ');
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
     let path = percent_decode(target.split('?').next().unwrap_or(""));
@@ -201,6 +253,8 @@ fn answer(stream: TcpStream, root: &Path, log: &Mutex<Vec<String>>) {
     if method != "HEAD" {
         stream.write_all(&bytes).ok();
     }
+    stream.flush().ok();
+    Some(stream)
 }
 
 /// The object's ETag: any stable hash of its bytes.
@@ -411,4 +465,76 @@ fn physical_describes_an_s3_table_without_a_wal() {
     assert!(text.contains("(object store s3://bucket/events"), "{text}");
     assert!(text.contains("flushed files only"), "{text}");
     assert!(text.contains("30 in files"), "{text}");
+}
+
+/// #125: an https:// store (AWS S3) answers as the local directory does,
+/// whether the server closes with a TLS `close_notify` or just closes.
+#[cfg(feature = "s3-tls")]
+#[test]
+fn an_https_store_answers_as_its_local_directory_does() {
+    let _serial = serial();
+    for close_notify in [true, false] {
+        let f = fixture_tables();
+        let s3 = FakeS3::serve_tls(&f._dir.0, close_notify);
+        let local = QueryEngine::open_many(&[f.events.clone(), f.users.clone()]).unwrap();
+        let remote = QueryEngine::open_many(&[
+            PathBuf::from(s3.location("events")),
+            PathBuf::from(s3.location("users")),
+        ])
+        .unwrap();
+        for sql in QUERIES {
+            assert_eq!(
+                rows(&remote, sql),
+                rows(&local, sql),
+                "{sql} (close_notify {close_notify})"
+            );
+        }
+    }
+}
+
+/// #125: the server's certificate is checked: without `AWS_CA_BUNDLE`
+/// naming the test CA it is refused, with it the query runs.
+#[cfg(feature = "s3-tls")]
+#[test]
+fn an_https_store_needs_a_trusted_certificate() {
+    let _serial = serial();
+    let f = fixture_tables();
+    let s3 = FakeS3::serve_tls(&f._dir.0, true);
+    let run = |bundle: Option<PathBuf>| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_column-rs"));
+        cmd.args(["-c", "SELECT count(*) FROM events", &s3.location("events")])
+            .env("AWS_ACCESS_KEY_ID", "test-key")
+            .env("AWS_SECRET_ACCESS_KEY", SECRET)
+            .env_remove("AWS_CA_BUNDLE");
+        if let Some(bundle) = bundle {
+            cmd.env("AWS_CA_BUNDLE", bundle);
+        }
+        cmd.output().unwrap()
+    };
+    let out = run(None);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("certificate"), "{stderr}");
+    let out = run(Some(fixture("tls_ca.pem")));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("30"));
+}
+
+/// #125: without the `s3-tls` feature an https:// store (AWS S3, or a
+/// location with no endpoint) fails naming the feature.
+#[cfg(not(feature = "s3-tls"))]
+#[test]
+fn an_https_store_needs_the_s3_tls_feature() {
+    credentials();
+    let location = "s3://bucket/events?endpoint=https://localhost:1&region=test";
+    let err = QueryEngine::open(Path::new(location))
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(err.contains("--features s3-tls"), "{err}");
+    assert!(err.contains("s3://bucket/events"), "{err}");
 }

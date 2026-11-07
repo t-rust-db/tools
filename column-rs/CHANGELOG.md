@@ -2,6 +2,16 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.46.0] - 2026-11-07
+
+### Added
+
+- `s3-tls` feature (off by default, about 0.9 MB): `https://` object-store locations, such as AWS S3, through rustls. `AWS_CA_BUNDLE` adds a CA to the bundled Mozilla roots. Without the feature an `https://` location fails naming the feature (#125).
+
+### Changed
+
+- db-core pin v0.236.0.
+
 ## [0.45.0] - 2026-11-07
 
 ### Added

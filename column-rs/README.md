@@ -59,8 +59,11 @@ column-rs -c "SELECT event_id, COUNT(*) FROM events GROUP BY event_id" events/
 # (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, or the shared credentials
 # file), never the location. A store holds the flushed files only, not the
 # writer's WAL, so rows not yet flushed don't show. Each query re-reads the
-# manifest and fetches only files it hasn't fetched yet. Plain http:// only
-# for now: AWS S3 over https:// needs a TLS transport (tools#125).
+# manifest and fetches only files it hasn't fetched yet. A default build
+# speaks http:// only. AWS S3 (https://, or a location with no endpoint)
+# needs `cargo build --release -p column-rs --features s3-tls`: rustls with
+# Mozilla's roots, plus any CA in the PEM file AWS_CA_BUNDLE names (a
+# TLS-inspecting proxy's). It adds about 0.9 MB, so it is off by default.
 column-rs -c "SELECT severity, COUNT(*) FROM sightings GROUP BY severity" \
   "s3://frank/sightings?endpoint=http://127.0.0.1:3900&region=garage"
 

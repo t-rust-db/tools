@@ -2,6 +2,12 @@
 
 All notable changes to column-ingest. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [0.3.13] - 2026-11-07
+
+### Changed
+
+- db-core pin v0.236.0.
+
 ## [0.3.12] - 2026-11-07
 
 ### Changed
