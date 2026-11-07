@@ -2,6 +2,8 @@
 //! out on disk -- the manifest, the WAL, the files and each file's Parquet
 //! column tree. It reads the manifest, the WAL and the Parquet footers;
 //! the files are memory-mapped, so only their footer pages are touched.
+//! A table in an object store (`s3://...`, tools#123) has no WAL there:
+//! its report covers the flushed files, each fetched whole.
 
 use db_core::storage::ingest::layout::date_string;
 use db_core::storage::ingest::{Area, KeyBound, LayoutKind, Snapshot, WAL_DIR};
@@ -26,7 +28,13 @@ pub struct Options {
 /// The report for table `name` at `path`: a table directory or a Parquet
 /// file.
 pub fn describe(name: &str, path: &Path, options: Options) -> Result<Vec<String>, String> {
-    if path.is_dir() {
+    if let Some(location) = path.to_str().filter(|p| p.starts_with("s3://")) {
+        let snapshot = crate::query::store_at(location)
+            .map_err(|e| e.to_string())
+            .and_then(|store| Snapshot::open_in(&store).map_err(|e| e.to_string()))
+            .map_err(|e| format!("{location}: {e}"))?;
+        table_dir(name, path, &snapshot, options)
+    } else if path.is_dir() {
         let snapshot = Snapshot::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
         table_dir(name, path, &snapshot, options)
     } else {
@@ -74,14 +82,25 @@ fn table_dir(
     if !sort_key.is_empty() {
         layout.push_str(&format!(", sort key ({})", sort_key.join(", ")));
     }
+    let store = path.to_str().is_some_and(|p| p.starts_with("s3://"));
+    let wal_line = if store {
+        "none in an object store: flushed files only".to_string()
+    } else {
+        wal(&path.join(WAL_DIR), options)
+    };
+    let kind = if store {
+        "object store"
+    } else {
+        "table directory"
+    };
     let mut lines = vec![
-        format!("{name}  (table directory {})", path.display()),
+        format!("{name}  ({kind} {})", path.display()),
         format!("  layout     {layout}"),
         format!(
             "  rows       {in_files} in files, {pending} pending in WAL (flushed_lsn {})",
             manifest.flushed_lsn
         ),
-        format!("  wal        {}", wal(&path.join(WAL_DIR), options)),
+        format!("  wal        {wal_line}"),
         format!(
             "  files      {}",
             file_counts(manifest.layout, &manifest.files)
