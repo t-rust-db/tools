@@ -17,8 +17,17 @@ db-cli = { workspace = true }
 itoa = "1"
 ryu = "1"
 serde_json = { version = "1", features = ["preserve_order"] }
+# `s3-tls` (#125): https:// object stores (AWS S3). Off by default: TLS is
+# about a megabyte, and the default build keeps the 5 MB target (#89).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+webpki-roots = { version = "1", optional = true }
+
+[features]
+s3-tls = ["dep:rustls", "dep:webpki-roots"]
 
 [dev-dependencies]
 # Builds table directories for tests/table_dir.rs (column-rs itself reads
 # them with ingest-read only).
 db-core = { workspace = true, features = ["ingest"] }
+# The TLS server side of the https:// store test (tests/s3_table.rs).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

@@ -42,7 +42,7 @@ use db_core::parser::row::ParseOutcome;
 use db_core::parser::Explain;
 use db_core::storage::column::parquet::footer::PhysicalType;
 use db_core::storage::column::{decode_column_full, decode_column_full_bit_pattern, Decoded};
-use db_core::storage::ingest::store::s3::{CommitMode, Credentials, S3Config, S3Store};
+use db_core::storage::ingest::store::s3::{CommitMode, Credentials, S3Config, S3Store, Transport};
 use db_core::storage::ingest::{Snapshot, Store, StoreReader, MANIFEST_FILE};
 use db_core::storage::parquet::Field;
 use db_core::storage::{ParquetFile, Vfs};
@@ -1066,7 +1066,42 @@ fn location_name(location: &str) -> String {
 pub(crate) fn store_at(location: &str) -> std::io::Result<Store> {
     let mut cfg = S3Config::from_uri(location, Credentials::from_chain()?)?;
     cfg.commit = CommitMode::SingleWriter;
-    S3Store::new(cfg).map(Store::S3)
+    S3Store::with_transport(cfg, transport()?).map(Store::S3)
+}
+
+/// HTTPS and HTTP, with the `s3-tls` feature (#125).
+#[cfg(feature = "s3-tls")]
+fn transport() -> std::io::Result<std::sync::Arc<dyn Transport>> {
+    Ok(Arc::new(crate::tls::TlsTransport::from_env()?))
+}
+
+/// HTTP only: an `https://` endpoint (AWS S3, or no endpoint at all)
+/// fails on its first request with a pointer to `s3-tls`.
+#[cfg(not(feature = "s3-tls"))]
+fn transport() -> std::io::Result<std::sync::Arc<dyn Transport>> {
+    Ok(Arc::new(HttpOnly))
+}
+
+#[cfg(not(feature = "s3-tls"))]
+struct HttpOnly;
+
+#[cfg(not(feature = "s3-tls"))]
+impl Transport for HttpOnly {
+    fn send(
+        &self,
+        request: &db_core::storage::ingest::store::s3::HttpRequest,
+    ) -> std::io::Result<db_core::storage::ingest::store::s3::HttpResponse> {
+        if request.endpoint.https {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                format!(
+                    "https://{} needs column-rs built with `--features s3-tls`",
+                    request.endpoint.host_header()
+                ),
+            ));
+        }
+        db_core::storage::ingest::store::s3::PlainHttp::default().send(request)
+    }
 }
 
 /// Opens the table at an `s3://` location. An error quotes the location,

@@ -22,6 +22,7 @@ smoke: ## Build the binary and run --help / --version (must exit 0)
 
 test: ## Run the full test suite (unit tests + DuckDB oracle integration tests, tests/oracle.rs)
 	cargo test
+	cargo test --features s3-tls --test s3_table
 
 test-lib: ## Just the library unit tests (fastest inner loop)
 	cargo test --lib
@@ -33,6 +34,7 @@ test-oracle: ## Just the DuckDB oracle tests (tests/oracle.rs) -- skip gracefull
 
 lint: ## Run clippy (deny warnings) and check formatting
 	cargo clippy --all-targets -- -D warnings
+	cargo clippy --all-targets --features s3-tls -- -D warnings
 	cargo fmt -- --check
 
 # === Fixtures ===

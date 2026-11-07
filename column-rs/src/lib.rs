@@ -1,6 +1,8 @@
 pub mod physical;
 pub mod pipe;
 pub mod query;
+#[cfg(feature = "s3-tls")]
+pub mod tls;
 
 /// Re-exports preserving column-rs's pre-extraction `column_rs::vm::*`
 /// surface — the actual implementation now lives in `db-core`'s
