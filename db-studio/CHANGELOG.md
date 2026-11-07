@@ -2,6 +2,12 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.14.12] - 2026-11-07
+
+### Changed
+
+- db-core pin v0.234.2.
+
 ## [0.14.11] - 2026-11-07
 
 ### Changed

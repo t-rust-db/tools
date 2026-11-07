@@ -2,6 +2,16 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.44.2] - 2026-11-07
+
+### Fixed
+
+- An unaliased scalar call, `CASE` or `date_trunc` in the select list gets a column header (`round(d)`, `CASE WHEN ... END`, `date_trunc('day', ts)`) instead of a blank one (db-core#1036).
+
+### Changed
+
+- db-core pin v0.234.2.
+
 ## [0.44.1] - 2026-11-07
 
 ### Fixed
