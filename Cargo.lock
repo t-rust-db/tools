@@ -283,7 +283,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "column-ingest"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "column-rs"
-version = "0.44.0"
+version = "0.44.1"
 dependencies = [
  "db-cli",
  "db-core",
@@ -431,15 +431,15 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.229.0"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.229.0#3679382a2b0cf9e20cd455ea2c78fd8988a5534b"
+version = "0.234.0"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.234.0#5558bf6d7198781de5157f92830e712f13a1497a"
 dependencies = [
  "memmap2",
 ]
 
 [[package]]
 name = "db-studio"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "catppuccin",
  "crossterm",
@@ -915,7 +915,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "loglume"
-version = "0.14.9"
+version = "0.14.10"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1812,7 +1812,7 @@ checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 
 [[package]]
 name = "sqlite-rs"
-version = "0.26.12"
+version = "0.26.13"
 dependencies = [
  "db-cli",
  "db-core",
@@ -2084,7 +2084,7 @@ checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "trigrep"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "db-core",
  "dirs",
