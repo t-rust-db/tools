@@ -2,6 +2,17 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.45.0] - 2026-11-07
+
+### Added
+
+- A table location can be an object store: `s3://bucket/prefix?endpoint=...&region=...` (Garage, MinIO) wherever a table directory is accepted (`-c`, `--pipe`, `.open`, joins with Parquet files, table directories and SQLite files), named after the location's last segment (#123). Each query re-reads the manifest and fetches only files it has not fetched yet. A store holds flushed files only, not the writer's WAL. Credentials come from the AWS environment or shared credentials file, never the location; the store is only read (a read-only key works). Plain `http://` only for now (#125).
+- `.physical` describes a table in an object store.
+
+### Changed
+
+- db-core pin v0.235.0.
+
 ## [0.44.2] - 2026-11-07
 
 ### Fixed
