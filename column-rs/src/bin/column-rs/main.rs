@@ -13,7 +13,7 @@ use handler::{ColumnHandler, Output};
 use stream_output::{print_chunk, print_result_streaming};
 
 const USAGE: &str =
-    "[--version] [--help] [-c \"<SQL>\" | --pipe] <file.parquet|table-dir|file.db> [more ...]";
+    "[--version] [--help] [-c \"<SQL>\" | --pipe] <file.parquet|table-dir|s3://bucket/table|file.db> [more ...]";
 
 fn usage_error(expected: &str) -> ExitCode {
     eprintln!("usage: column-rs {expected}");
@@ -44,18 +44,24 @@ fn main() -> ExitCode {
         Some("--help" | "-h") => usage(),
         Some("-c") => {
             let Some(sql) = args.next() else {
-                return usage_error("-c \"<SQL>\" <file.parquet|table-dir|file.db> [more ...]");
+                return usage_error(
+                    "-c \"<SQL>\" <file.parquet|table-dir|s3://bucket/table|file.db> [more ...]",
+                );
             };
             let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
             if paths.is_empty() {
-                return usage_error("-c \"<SQL>\" <file.parquet|table-dir|file.db> [more ...]");
+                return usage_error(
+                    "-c \"<SQL>\" <file.parquet|table-dir|s3://bucket/table|file.db> [more ...]",
+                );
             }
             run_query(&paths, &sql)
         }
         Some("--pipe") => {
             let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
             if paths.is_empty() {
-                return usage_error("--pipe <file.parquet|table-dir|file.db> [more ...]");
+                return usage_error(
+                    "--pipe <file.parquet|table-dir|s3://bucket/table|file.db> [more ...]",
+                );
             }
             let engine = match open_engine(&paths) {
                 Ok(engine) => engine,

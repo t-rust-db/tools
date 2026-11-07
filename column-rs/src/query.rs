@@ -13,6 +13,11 @@
 //! one a file stores with another type) and `read_snapshot` (the whole
 //! table, for join build sides, semi-joins and windows).
 //!
+//! A table in an object store (`s3://bucket/prefix?endpoint=...`, tools#123)
+//! is read through db-core's `StoreReader`: its flushed files only (a store
+//! holds no WAL), refreshed before each query, fetching only the files the
+//! manifest added since the last one.
+//!
 //! Nothing here plans or post-processes anything -- `compile()`,
 //! `AggPart`, `post_process` (now the `Opcode::Combine`/`Sort`/`Limit` tail applied by
 //! `db_core::vm::engine::run`) and the `EXPLAIN` tree all moved to db-core
@@ -37,11 +42,13 @@ use db_core::parser::row::ParseOutcome;
 use db_core::parser::Explain;
 use db_core::storage::column::parquet::footer::PhysicalType;
 use db_core::storage::column::{decode_column_full, decode_column_full_bit_pattern, Decoded};
-use db_core::storage::ingest::{Snapshot, MANIFEST_FILE};
+use db_core::storage::ingest::store::s3::{CommitMode, Credentials, S3Config, S3Store};
+use db_core::storage::ingest::{Snapshot, Store, StoreReader, MANIFEST_FILE};
 use db_core::storage::parquet::Field;
 use db_core::storage::{ParquetFile, Vfs};
 use db_core::vm::batch::{Chunk, QueryOutput, ScanSource, VmError};
 use db_core::vm::engine::{self, InMemorySegment, NoResolver};
+use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -915,6 +922,9 @@ enum TableData {
     File(db_core::storage::column::posix::PosixFile),
     /// A table directory (tools#13), read as a fresh snapshot per query.
     Dir(std::path::PathBuf),
+    /// A table in an object store (tools#123), refreshed per query: the
+    /// reader keeps the files it fetched while the manifest lists them.
+    Store(Box<RefCell<StoreReader>>),
     /// A table in a SQLite file (tools#69), queried through db-core's row
     /// engine, or its cross-mode engine when joined to a Parquet file.
     Lookup,
@@ -937,6 +947,7 @@ fn is_sqlite_file(path: &std::path::Path) -> bool {
 enum Held<'d> {
     File(Box<ParquetFile<'d>>),
     Dir(Snapshot),
+    Store(Ref<'d, StoreReader>),
 }
 
 impl Held<'_> {
@@ -944,6 +955,7 @@ impl Held<'_> {
         match self {
             Held::File(file) => Ok(Opened::File(file)),
             Held::Dir(snapshot) => Opened::dir(snapshot),
+            Held::Store(reader) => Opened::dir(reader.snapshot()),
         }
     }
 }
@@ -1030,6 +1042,54 @@ fn is_table_dir(path: &std::path::Path) -> bool {
     path.is_dir() && path.join(MANIFEST_FILE).is_file()
 }
 
+/// The `s3://` location `path` names, if it is one (tools#123).
+fn store_location(path: &std::path::Path) -> Option<&str> {
+    path.to_str().filter(|p| p.starts_with("s3://"))
+}
+
+/// A store table's name: the location's last path segment, as db-core's
+/// `TableEngine::open_at` names it.
+fn location_name(location: &str) -> String {
+    let path = location.split('?').next().unwrap_or(location);
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty() && !s.ends_with(':'))
+        .unwrap_or("data")
+        .to_string()
+}
+
+/// The object store at an `s3://` location, opened for reading. Credentials
+/// come from the environment (`AWS_ACCESS_KEY_ID`, ...), never from the
+/// location. Single-writer mode: db-core's default probes the store for
+/// conditional puts with two writes, which a reader has no business making.
+pub(crate) fn store_at(location: &str) -> std::io::Result<Store> {
+    let mut cfg = S3Config::from_uri(location, Credentials::from_chain()?)?;
+    cfg.commit = CommitMode::SingleWriter;
+    S3Store::new(cfg).map(Store::S3)
+}
+
+/// Opens the table at an `s3://` location. An error quotes the location,
+/// which holds no credentials.
+fn open_store(location: &str) -> Result<StoreReader> {
+    let store =
+        store_at(location).map_err(|e| QueryError::TableDirectory(format!("{location}: {e}")))?;
+    StoreReader::open(store).map_err(|e| QueryError::TableDirectory(format!("{location}: {e}")))
+}
+
+/// `reader`'s table as of now: refreshed (fetching only new files) unless
+/// this query already holds it, as a self-join does.
+fn refreshed<'r>(
+    reader: &'r RefCell<StoreReader>,
+    location: &std::path::Path,
+) -> Result<Ref<'r, StoreReader>> {
+    if let Ok(mut r) = reader.try_borrow_mut() {
+        r.refresh()
+            .map_err(|e| QueryError::TableDirectory(format!("{}: {e}", location.display())))?;
+    }
+    Ok(reader.borrow())
+}
+
 fn open_snapshot(path: &std::path::Path) -> Result<Snapshot> {
     Snapshot::open(path).map_err(|e| QueryError::TableDirectory(format!("{}: {e}", path.display())))
 }
@@ -1067,6 +1127,21 @@ impl QueryEngine {
     /// session, under `name` (or its file stem, or the directory's name,
     /// if `None`). Errors if that table name is already loaded.
     pub fn add_table(&mut self, path: &std::path::Path, name: Option<String>) -> Result<()> {
+        if let Some(location) = store_location(path) {
+            let reader = open_store(location)?;
+            let columns = Opened::dir(reader.snapshot())?.columns()?;
+            let table_name = name.unwrap_or_else(|| location_name(location));
+            if self.tables.iter().any(|t| t.name == table_name) {
+                return Err(QueryError::DuplicateTable(table_name));
+            }
+            self.tables.push(Table {
+                name: table_name,
+                path: path.to_path_buf(),
+                data: TableData::Store(Box::new(RefCell::new(reader))),
+                columns,
+            });
+            return Ok(());
+        }
         if is_table_dir(path) {
             let snapshot = open_snapshot(path)?;
             let columns = Opened::dir(&snapshot)?.columns()?;
@@ -1165,6 +1240,7 @@ impl QueryEngine {
         Ok(match &table.data {
             TableData::File(data) => Held::File(Box::new(ParquetFile::open_file(data)?)),
             TableData::Dir(path) => Held::Dir(open_snapshot(path)?),
+            TableData::Store(reader) => Held::Store(refreshed(reader, &table.path)?),
             // `lookup_engine` takes every query that names one first.
             TableData::Lookup => {
                 return Err(QueryError::Lookup(
@@ -1364,10 +1440,19 @@ impl QueryEngine {
         // directory after the directory (db-core#782).
         for table in &columns {
             let own = match table.data {
-                TableData::File(_) => table.path.file_stem(),
-                _ => table.path.file_name(),
-            }
-            .and_then(|s| s.to_str());
+                TableData::File(_) => table
+                    .path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(String::from),
+                TableData::Store(_) => store_location(&table.path).map(location_name),
+                _ => table
+                    .path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map(String::from),
+            };
+            let own = own.as_deref();
             if own != Some(table.name.as_str()) {
                 return Err(QueryError::Lookup(
                     ErrorKind::Unsupported,
@@ -1628,7 +1713,7 @@ impl QueryEngine {
     pub fn table_path(&self, name: &str) -> Option<&std::path::Path> {
         let table = self.table(name).ok()?;
         match table.data {
-            TableData::File(_) | TableData::Dir(_) => Some(&table.path),
+            TableData::File(_) | TableData::Dir(_) | TableData::Store(_) => Some(&table.path),
             TableData::Lookup => None,
         }
     }
@@ -1642,7 +1727,7 @@ impl QueryEngine {
             .iter()
             .map(|t| {
                 let fresh = match &t.data {
-                    TableData::Dir(_) => self
+                    TableData::Dir(_) | TableData::Store(_) => self
                         .hold(&t.name)
                         .and_then(|held| held.open()?.columns())
                         .ok(),

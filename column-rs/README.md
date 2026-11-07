@@ -54,6 +54,16 @@ column-rs -c "SELECT id, amount FROM orders WHERE amount > 1000" orders.parquet
 # A table directory (written by column-ingest) is a table named after it
 column-rs -c "SELECT event_id, COUNT(*) FROM events GROUP BY event_id" events/
 
+# A table in an S3-compatible object store (Garage, MinIO) is a table named
+# after the location's last segment. Credentials come from the environment
+# (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, or the shared credentials
+# file), never the location. A store holds the flushed files only, not the
+# writer's WAL, so rows not yet flushed don't show. Each query re-reads the
+# manifest and fetches only files it hasn't fetched yet. Plain http:// only
+# for now: AWS S3 over https:// needs a TLS transport (tools#125).
+column-rs -c "SELECT severity, COUNT(*) FROM sightings GROUP BY severity" \
+  "s3://frank/sightings?endpoint=http://127.0.0.1:3900&region=garage"
+
 # A SQLite file's tables load under their own names; joined to Parquet
 # files or table directories (a star join may name two) they run in
 # db-core's cross-mode engine, and a filter on a lookup table skips the
