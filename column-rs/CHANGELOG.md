@@ -2,6 +2,20 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.44.1] - 2026-11-07
+
+### Fixed
+
+- `SUM(BOOLEAN)` counts true values instead of returning NULL (db-core#1020).
+- `HAVING count(n)` binds `n` to the table column, not a select-list alias of the same name (db-core#1019).
+- DECIMAL expressions with decimal literals, `abs` and `round` keep exact DECIMAL type and scale; `round` of an integer returns an integer (db-core#1016, db-core#1017).
+- `sum(BIGINT)` widens to DECIMAL(38, 0) instead of failing with "integer overflow" (db-core#1018).
+
+### Changed
+
+- A row group's column chunks decode in parallel on spare cores when a scan has fewer row groups than cores (db-core#800).
+- db-core pin v0.234.0.
+
 ## [0.44.0] - 2026-11-06
 
 ### Added
