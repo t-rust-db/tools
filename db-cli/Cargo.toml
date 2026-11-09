@@ -7,7 +7,6 @@ license = "Apache-2.0"
 
 [dependencies]
 libc = "0.2"
-dirs = "7"
 
 [lib]
 name = "db_cli"

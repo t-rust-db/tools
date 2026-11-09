@@ -180,14 +180,6 @@ criteria = "safe-to-deploy"
 version = "0.10.7"
 criteria = "safe-to-deploy"
 
-[[exemptions.dirs]]
-version = "7.0.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.dirs-sys]]
-version = "0.5.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.document-features]]
 version = "0.2.12"
 criteria = "safe-to-deploy"
@@ -322,10 +314,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.libm]]
 version = "0.2.16"
-criteria = "safe-to-deploy"
-
-[[exemptions.libredox]]
-version = "0.1.25"
 criteria = "safe-to-deploy"
 
 [[exemptions.line-clipping]]
@@ -550,10 +538,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.redox_syscall]]
 version = "0.5.18"
-criteria = "safe-to-deploy"
-
-[[exemptions.redox_users]]
-version = "0.5.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.regex]]

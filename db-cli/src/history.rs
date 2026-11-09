@@ -1,6 +1,7 @@
 //! Command history storage, navigation, and file persistence.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const MAX_HISTORY: usize = 1000;
@@ -101,12 +102,41 @@ impl History {
     }
 }
 
-/// Default history file path for the given app name, e.g. `history_path("column-rs")`
-/// resolves to `~/.local/state/column-rs_history` (or the platform equivalent).
+/// The history file for `app_name`: `$XDG_STATE_HOME/<app>/history`, else
+/// `~/.local/state/<app>/history` (#128); `None` without either variable.
+/// A history at the old `~/.<app>_history` is moved in once: appended to
+/// the new file, then removed.
 pub fn history_path(app_name: &str) -> Option<PathBuf> {
-    dirs::state_dir()
-        .or_else(dirs::home_dir)
-        .map(|d| d.join(format!(".{app_name}_history")))
+    let path = crate::xdg::state_dir(app_name)?.join("history");
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        merge_legacy(
+            &PathBuf::from(home).join(format!(".{app_name}_history")),
+            &path,
+        );
+    }
+    Some(path)
+}
+
+/// Appends `old`'s lines to `new` and removes `old`; leaves `old` alone
+/// if anything fails, so no history is lost.
+fn merge_legacy(old: &Path, new: &Path) {
+    let Ok(contents) = fs::read_to_string(old) else {
+        return;
+    };
+    if let Some(parent) = new.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    let appended = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(new)
+        // `save` writes no trailing newline; a blank line is skipped on load.
+        .and_then(|mut f| f.write_all(format!("\n{contents}").as_bytes()));
+    if appended.is_ok() {
+        fs::remove_file(old).ok();
+    }
 }
 
 #[cfg(test)]
@@ -156,5 +186,51 @@ mod tests {
         loaded.load(&path);
         assert_eq!(loaded.len(), 2);
         fs::remove_dir_all(&dir).ok();
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("db-cli-merge-{tag}-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        dir
+    }
+
+    #[test]
+    fn a_legacy_history_moves_into_a_missing_one() {
+        let dir = scratch("missing");
+        let (old, new) = (dir.join(".app_history"), dir.join("state/app/history"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&old, "select 1\nselect 2").unwrap();
+        merge_legacy(&old, &new);
+        assert!(!old.exists());
+        let mut h = History::new();
+        h.load(&new);
+        assert_eq!(h.len(), 2);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_legacy_history_is_appended_after_the_existing_one() {
+        let dir = scratch("both");
+        let (old, new) = (dir.join(".app_history"), dir.join("state/app/history"));
+        let mut existing = History::new();
+        existing.add("select 'older'");
+        existing.save(&new);
+        fs::write(&old, "select 'newer'").unwrap();
+        merge_legacy(&old, &new);
+        assert!(!old.exists());
+        let mut h = History::new();
+        h.load(&new);
+        let mut idx = None;
+        assert_eq!(h.prev(&mut idx), Some("select 'newer'"));
+        assert_eq!(h.prev(&mut idx), Some("select 'older'"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_legacy_history_leaves_the_new_one_alone() {
+        let dir = scratch("none");
+        let new = dir.join("state/app/history");
+        merge_legacy(&dir.join(".app_history"), &new);
+        assert!(!new.exists());
     }
 }

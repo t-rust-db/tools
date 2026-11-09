@@ -65,8 +65,8 @@ lock, and the CLI retries (bounded, exponential backoff) on the two
 transient errors that racing a bootstrap can still produce.
 
 The cache lives at `$TRIGREP_CACHE_DIR/<key>.db`, or by default
-`~/.cache/trigrep/` on Linux and `~/Library/Caches/trigrep/` on macOS, one
-file per canonicalised root. A modified or deleted file leaves stale
+`$XDG_CACHE_HOME/trigrep/`, else `~/.cache/trigrep/` (macOS too), one file
+per canonicalised root. A modified or deleted file leaves stale
 posting-list entries that are filtered at query time (the regex always runs on
 the real file); `--rebuild` reclaims them.
 

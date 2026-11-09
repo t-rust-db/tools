@@ -1,7 +1,7 @@
 //! XDG-based configuration (`config.toml`): theme color overrides
 //! (db-studio#61), ported near-verbatim from `t-rust-db/loglume#11`'s
-//! own config module -- same `resolve_config_dir` (pure, testable
-//! without touching real env), same load/save/round-trip-through-toml
+//! own config module -- same XDG resolution (db-cli's since tools#128),
+//! same load/save/round-trip-through-toml
 //! shape, same "`db-studio config`" print-the-resolved-config
 //! convention as `loglume config`.
 
@@ -67,26 +67,10 @@ pub fn config_path() -> PathBuf {
     config_dir().join("config.toml")
 }
 
+/// db-cli's XDG resolution (tools#128); `./.config/db-studio` without
+/// `$HOME`.
 fn config_dir() -> PathBuf {
-    resolve_config_dir(
-        std::env::var("XDG_CONFIG_HOME").ok(),
-        std::env::var("HOME").ok(),
-    )
-}
-
-/// Pure XDG Base Directory resolution, taking the two relevant env
-/// vars as plain arguments instead of reading the process environment
-/// directly -- keeps this testable without mutating global env state
-/// (`std::env::set_var` in tests is a known thread-safety hazard when
-/// tests run in parallel).
-fn resolve_config_dir(xdg_config_home: Option<String>, home: Option<String>) -> PathBuf {
-    if let Some(dir) = xdg_config_home {
-        if !dir.is_empty() {
-            return PathBuf::from(dir).join("db-studio");
-        }
-    }
-    let home = home.unwrap_or_else(|| ".".to_string());
-    PathBuf::from(home).join(".config").join("db-studio")
+    db_cli::xdg::config_dir("db-studio").unwrap_or_else(|| PathBuf::from(".config/db-studio"))
 }
 
 /// `db-studio config`: print the resolved config path and its contents.
@@ -107,27 +91,6 @@ pub fn print_resolved() -> io::Result<()> {
 )]
 mod tests {
     use super::*;
-
-    #[test]
-    fn xdg_config_home_wins_when_set() {
-        let dir = resolve_config_dir(
-            Some("/custom/config".to_string()),
-            Some("/home/me".to_string()),
-        );
-        assert_eq!(dir, PathBuf::from("/custom/config/db-studio"));
-    }
-
-    #[test]
-    fn falls_back_to_home_dot_config_when_xdg_unset() {
-        let dir = resolve_config_dir(None, Some("/home/me".to_string()));
-        assert_eq!(dir, PathBuf::from("/home/me/.config/db-studio"));
-    }
-
-    #[test]
-    fn falls_back_to_home_dot_config_when_xdg_empty() {
-        let dir = resolve_config_dir(Some(String::new()), Some("/home/me".to_string()));
-        assert_eq!(dir, PathBuf::from("/home/me/.config/db-studio"));
-    }
 
     #[test]
     fn default_config_has_no_theme_overrides() {

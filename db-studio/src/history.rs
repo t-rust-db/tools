@@ -15,19 +15,8 @@ use std::path::PathBuf;
 
 const SEPARATOR: char = '\u{1e}';
 
-fn cache_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("XDG_CACHE_HOME") {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir).join("db-studio"));
-        }
-    }
-    std::env::var("HOME")
-        .ok()
-        .map(|home| PathBuf::from(home).join(".cache").join("db-studio"))
-}
-
 fn history_path() -> Option<PathBuf> {
-    cache_dir().map(|dir| dir.join("history"))
+    db_cli::xdg::cache_dir("db-studio").map(|dir| dir.join("history"))
 }
 
 /// Loads every previously recorded query, oldest first. Never fails

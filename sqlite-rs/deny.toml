@@ -21,13 +21,13 @@ targets = [
 ignore = []
 
 [licenses]
-# MIT and MPL-2.0 are needed only by crates arriving transitively through
-# first-party git dependencies (ADR-0040): `ruzstd`/`twox-hash` (MIT) via
-# db-storage (until t-rust-db/db-storage#12), `option-ext` (MPL-2.0, via
-# `dirs`) and `libredox`/`redox_users` (MIT) via db-cli. Remove each again
+# MIT is needed only by crates arriving transitively through first-party
+# git dependencies (ADR-0040): `ruzstd`/`twox-hash` via db-storage (until
+# t-rust-db/db-storage#12). MPL-2.0 (`option-ext`, via `dirs`) went with
+# db-cli's `dirs` (tools#128). Remove each again
 # when nothing in the resolved graph requires it (`cargo deny check
 # licenses` reports the missing allowance instead of a silent pass).
-allow = ["Apache-2.0", "MIT", "MPL-2.0"]
+allow = ["Apache-2.0", "MIT"]
 confidence-threshold = 0.8
 
 [bans]
