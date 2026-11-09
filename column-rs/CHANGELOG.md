@@ -2,6 +2,12 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.46.1] - 2026-11-09
+
+### Changed
+
+- REPL history moves to `$XDG_STATE_HOME/column-rs/history` (default `~/.local/state/column-rs/history`); an existing `~/.column-rs_history` is merged in once.
+
 ## [0.46.0] - 2026-11-07
 
 ### Added
