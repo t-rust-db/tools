@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "column-rs"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "db-cli",
  "db-core",
@@ -435,9 +435,8 @@ dependencies = [
 
 [[package]]
 name = "db-cli"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
- "dirs",
  "libc",
 ]
 
@@ -451,10 +450,11 @@ dependencies = [
 
 [[package]]
 name = "db-studio"
-version = "0.14.14"
+version = "0.14.15"
 dependencies = [
  "catppuccin",
  "crossterm",
+ "db-cli",
  "db-core",
  "nucleo-matcher",
  "ratatui",
@@ -512,27 +512,6 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
-]
-
-[[package]]
-name = "dirs"
-version = "7.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d57d423b3c82e89b9a24ca3091fee61f456a26edbd28d26c65906f4bc1dcd8f"
-dependencies = [
- "dirs-sys",
-]
-
-[[package]]
-name = "dirs-sys"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
-dependencies = [
- "libc",
- "option-ext",
- "redox_users",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -898,15 +877,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
-name = "libredox"
-version = "0.1.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61ff90caf6077a803a240f62fdbe88645a890bbca49ef8174c3cb0404362171d"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "line-clipping"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -944,11 +914,12 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "loglume"
-version = "0.14.13"
+version = "0.14.14"
 dependencies = [
  "assert_cmd",
  "clap",
  "crossterm",
+ "db-cli",
  "db-core",
  "notify",
  "predicates",
@@ -1158,12 +1129,6 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
-name = "option-ext"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "ordered-float"
@@ -1610,16 +1575,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "redox_users"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60dc65c0ff1a7ae1294b0c67b9f14baf70b644404010370171787bfac1038fc0"
-dependencies = [
- "libredox",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "regex"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1895,7 +1850,7 @@ checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 
 [[package]]
 name = "sqlite-rs"
-version = "0.26.16"
+version = "0.26.17"
 dependencies = [
  "db-cli",
  "db-core",
@@ -2173,10 +2128,10 @@ checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "trigrep"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
+ "db-cli",
  "db-core",
- "dirs",
  "proptest",
  "regex",
  "regex-syntax",

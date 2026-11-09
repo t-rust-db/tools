@@ -12,8 +12,8 @@ ignore = []
 
 [licenses]
 # trigrep is Apache-2.0. MIT/Unlicense arrive via regex's family and
-# db-storage's ruzstd/twox-hash; MPL-2.0 only via option-ext (dirs-sys).
-allow = ["Apache-2.0", "MIT", "Unlicense", "MPL-2.0", "Unicode-3.0"]
+# db-storage's ruzstd/twox-hash.
+allow = ["Apache-2.0", "MIT", "Unlicense", "Unicode-3.0"]
 confidence-threshold = 0.8
 
 [bans]

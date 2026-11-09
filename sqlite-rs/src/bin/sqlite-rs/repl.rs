@@ -25,7 +25,8 @@
 //! tokenizer-backed highlighting via [`crate::highlight::SqlHighlighter`]
 //! — falling back to plain line reads (no prompt, like `sqlite3`) when
 //! stdin isn't a tty (piped scripts, as used by every test in this
-//! crate). History persists across sessions at [`history_path`];
+//! crate). History persists across sessions at [`db_cli::history_path`]
+//! (`$XDG_STATE_HOME/sqlite-rs/history`, else `~/.local/state/…`, #128);
 //! loading/saving is best-effort — a missing `$HOME`/`$XDG_STATE_HOME`
 //! or an unwritable history file never blocks the session.
 //!
@@ -347,7 +348,7 @@ pub fn run_repl(path: &Path) -> ExitCode {
     let mut repl = Repl::new(handler);
     repl.set_mode(OutputMode::List);
 
-    let history_file = history_path();
+    let history_file = db_cli::history_path("sqlite-rs");
     let opts = ReplOptions {
         prompt: "sqlite> ",
         continuation_prompt: "   ...> ",
@@ -360,21 +361,6 @@ pub fn run_repl(path: &Path) -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-/// Where the REPL's history lives: `$XDG_STATE_HOME/sqlite-rs/history`
-/// when that variable is set and non-empty, else `~/.sqlite-rs_history`;
-/// `None` with no `$HOME` at all (history is then session-only). Kept
-/// here rather than using [`db_cli::history_path`] so the on-disk
-/// location is unchanged from before #14 (`tests/unit/repl_history.rs`).
-fn history_path() -> Option<PathBuf> {
-    if let Some(xdg_state) = std::env::var_os("XDG_STATE_HOME") {
-        if !xdg_state.is_empty() {
-            return Some(PathBuf::from(xdg_state).join("sqlite-rs").join("history"));
-        }
-    }
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".sqlite-rs_history"))
 }
 
 /// `.headers on`'s column labels for `select`'s result set: for a

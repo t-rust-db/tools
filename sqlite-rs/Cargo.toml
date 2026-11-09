@@ -1,6 +1,6 @@
 [package]
 name = "sqlite-rs"
-version = "0.26.16"
+version = "0.26.17"
 edition = "2021"
 publish = false
 license = "Apache-2.0"
@@ -20,7 +20,7 @@ categories = ["database", "database-implementations"]
 db-core = { workspace = true, features = ["parser-row", "vm-row", "codegen-row", "storage-row"] }
 # CLI-only (readline, history, REPL loop, output modes — t-rust-db/sqlite-rs#14/#15):
 # optional so library consumers with `default-features = false` never pull
-# it (or its libc/dirs closure) in.
+# it (or its libc closure) in.
 db-cli = { workspace = true, optional = true }
 # CLI-only (`grep` subcommand pattern matching — t-rust-db/sqlite-rs#45):
 # same rationale/gating as `db-cli` above — optional so library consumers

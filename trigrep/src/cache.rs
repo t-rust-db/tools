@@ -91,9 +91,8 @@ pub fn fnv1a64(bytes: &[u8]) -> u64 {
 pub fn cache_path(root: &Path) -> Result<PathBuf> {
     let dir = match std::env::var_os(CACHE_DIR_ENV) {
         Some(d) => PathBuf::from(d),
-        None => dirs::cache_dir()
-            .ok_or("no cache directory for this platform; set TRIGREP_CACHE_DIR")?
-            .join("trigrep"),
+        None => db_cli::xdg::cache_dir("trigrep")
+            .ok_or("no $XDG_CACHE_HOME or $HOME; set TRIGREP_CACHE_DIR")?,
     };
     let key = fnv1a64(root.as_os_str().as_encoded_bytes());
     Ok(dir.join(format!("{key:016x}.db")))

@@ -7,9 +7,10 @@
     clippy::indexing_slicing
 )]
 
-//! REPL history persistence (#551, hand-rolled per #558):
-//! `$XDG_STATE_HOME/sqlite-rs/history` when set, else `~/.sqlite-rs_history`,
-//! survives across sessions. Driven non-interactively via piped stdin, same
+//! REPL history persistence (#551; db-cli's XDG paths since tools#128):
+//! `$XDG_STATE_HOME/sqlite-rs/history` when set, else
+//! `~/.local/state/sqlite-rs/history`, survives across sessions; an old
+//! `~/.sqlite-rs_history` is moved in once. Driven non-interactively via piped stdin, same
 //! `Command`+`CARGO_BIN_EXE_sqlite-rs` pattern as
 //! `tests/unit/repl_dot_commands.rs`, with `$HOME` overridden to a
 //! scratch directory (and `$XDG_STATE_HOME` explicitly removed unless a
@@ -78,7 +79,7 @@ fn run_repl_script(home: &Path, db: &Path, script: &str) {
 fn history_persists_across_sessions() {
     let home = scratch_dir("persists");
     let db = seed_db(&home);
-    let history_file = home.join(".sqlite-rs_history");
+    let history_file = home.join(".local/state/sqlite-rs/history");
 
     run_repl_script(&home, &db, "SELECT 1;\n.quit\n");
     assert!(
@@ -106,7 +107,7 @@ fn xdg_state_home_takes_precedence_over_home() {
     let xdg_state = scratch_dir("xdg-state");
     let db = seed_db(&home);
     let xdg_history_file = xdg_state.join("sqlite-rs").join("history");
-    let home_history_file = home.join(".sqlite-rs_history");
+    let home_history_file = home.join(".local/state/sqlite-rs/history");
 
     let mut child = Command::new(CLI)
         .arg("repl")
@@ -136,6 +137,26 @@ fn xdg_state_home_takes_precedence_over_home() {
         !home_history_file.exists(),
         "history should not also land at {}",
         home_history_file.display()
+    );
+}
+
+#[test]
+fn an_old_home_history_is_moved_into_the_state_dir() {
+    let home = scratch_dir("legacy");
+    let db = seed_db(&home);
+    let legacy = home.join(".sqlite-rs_history");
+    std::fs::write(&legacy, "SELECT 'before';").unwrap();
+
+    run_repl_script(&home, &db, "SELECT 2;\n.quit\n");
+    assert!(
+        !legacy.exists(),
+        "{} should have been moved",
+        legacy.display()
+    );
+    let contents = std::fs::read_to_string(home.join(".local/state/sqlite-rs/history")).unwrap();
+    assert!(
+        contents.contains("SELECT 'before';") && contents.contains("SELECT 2;"),
+        "the old history should carry over: {contents:?}"
     );
 }
 

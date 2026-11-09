@@ -21,6 +21,7 @@ pub mod history;
 pub mod output;
 pub mod repl;
 pub mod rusage;
+pub mod xdg;
 
 pub use editor::{Completer, Highlighter, Readline, ReadlineError};
 pub use history::{history_path, History};

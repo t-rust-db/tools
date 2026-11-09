@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.15] - 2026-11-09
+
+### Changed
+
+- Cache on macOS moves from `~/Library/Caches/trigrep` to `~/.cache/trigrep` (or `$XDG_CACHE_HOME/trigrep`); it rebuilds itself on first use.
+
 ## [0.5.14] - 2026-11-07
 
 ### Changed

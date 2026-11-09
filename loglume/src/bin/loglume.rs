@@ -981,26 +981,10 @@ mod config {
         config_dir().join("config.toml")
     }
 
+    /// db-cli's XDG resolution (tools#128); `./.config/loglume` without
+    /// `$HOME`.
     fn config_dir() -> PathBuf {
-        resolve_config_dir(
-            std::env::var("XDG_CONFIG_HOME").ok(),
-            std::env::var("HOME").ok(),
-        )
-    }
-
-    /// Pure XDG Base Directory resolution, taking the two relevant env
-    /// vars as plain arguments instead of reading the process environment
-    /// directly -- keeps this testable without mutating global env state
-    /// (`std::env::set_var` in tests is a known thread-safety hazard when
-    /// tests run in parallel).
-    fn resolve_config_dir(xdg_config_home: Option<String>, home: Option<String>) -> PathBuf {
-        if let Some(dir) = xdg_config_home {
-            if !dir.is_empty() {
-                return PathBuf::from(dir).join("loglume");
-            }
-        }
-        let home = home.unwrap_or_else(|| ".".to_string());
-        PathBuf::from(home).join(".config").join("loglume")
+        db_cli::xdg::config_dir("loglume").unwrap_or_else(|| PathBuf::from(".config/loglume"))
     }
 
     /// `loglume config`: print the resolved config path and its contents.
@@ -1017,27 +1001,6 @@ mod config {
     #[cfg(test)]
     mod tests {
         use super::*;
-
-        #[test]
-        fn xdg_config_home_wins_when_set() {
-            let dir = resolve_config_dir(
-                Some("/custom/config".to_string()),
-                Some("/home/me".to_string()),
-            );
-            assert_eq!(dir, PathBuf::from("/custom/config/loglume"));
-        }
-
-        #[test]
-        fn falls_back_to_home_dot_config_when_xdg_unset() {
-            let dir = resolve_config_dir(None, Some("/home/me".to_string()));
-            assert_eq!(dir, PathBuf::from("/home/me/.config/loglume"));
-        }
-
-        #[test]
-        fn falls_back_to_home_dot_config_when_xdg_empty() {
-            let dir = resolve_config_dir(Some(String::new()), Some("/home/me".to_string()));
-            assert_eq!(dir, PathBuf::from("/home/me/.config/loglume"));
-        }
 
         #[test]
         fn default_config_has_no_filters() {
@@ -1267,49 +1230,15 @@ mod cache {
         cache_dir().join("highlight_history")
     }
 
+    /// db-cli's XDG resolution (tools#128); `./.cache/loglume` without
+    /// `$HOME`.
     fn cache_dir() -> PathBuf {
-        resolve_cache_dir(
-            std::env::var("XDG_CACHE_HOME").ok(),
-            std::env::var("HOME").ok(),
-        )
-    }
-
-    /// Pure XDG Base Directory resolution, mirroring
-    /// `config::resolve_config_dir` but for the *cache* base dir.
-    fn resolve_cache_dir(xdg_cache_home: Option<String>, home: Option<String>) -> PathBuf {
-        if let Some(dir) = xdg_cache_home {
-            if !dir.is_empty() {
-                return PathBuf::from(dir).join("loglume");
-            }
-        }
-        let home = home.unwrap_or_else(|| ".".to_string());
-        PathBuf::from(home).join(".cache").join("loglume")
+        db_cli::xdg::cache_dir("loglume").unwrap_or_else(|| PathBuf::from(".cache/loglume"))
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
-
-        #[test]
-        fn xdg_cache_home_wins_when_set() {
-            let dir = resolve_cache_dir(
-                Some("/custom/cache".to_string()),
-                Some("/home/me".to_string()),
-            );
-            assert_eq!(dir, PathBuf::from("/custom/cache/loglume"));
-        }
-
-        #[test]
-        fn falls_back_to_home_dot_cache_when_xdg_unset() {
-            let dir = resolve_cache_dir(None, Some("/home/me".to_string()));
-            assert_eq!(dir, PathBuf::from("/home/me/.cache/loglume"));
-        }
-
-        #[test]
-        fn falls_back_to_home_dot_cache_when_xdg_empty() {
-            let dir = resolve_cache_dir(Some(String::new()), Some("/home/me".to_string()));
-            assert_eq!(dir, PathBuf::from("/home/me/.cache/loglume"));
-        }
 
         fn temp_history_path(tag: &str) -> PathBuf {
             std::env::temp_dir().join(format!(

@@ -2,6 +2,12 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.14.15] - 2026-11-09
+
+### Changed
+
+- Config and cache directories resolved through db-cli's XDG helper; paths unchanged.
+
 ## [0.14.14] - 2026-11-07
 
 ### Changed
