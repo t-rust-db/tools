@@ -291,3 +291,29 @@ fn each_request_sees_what_was_acknowledged_before_it() {
     pipe.finish();
     w.close().unwrap();
 }
+
+/// db-core#1046: an aggregate over a TIMESTAMP column (`max(ts)`) is a
+/// TIMESTAMP too, typed and encoded as one like the bare column.
+#[test]
+fn a_timestamp_aggregate_is_a_timestamp() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut pipe = Pipe::start(&[&fixtures.join("logical_types_millis.parquet")]);
+    let (header, rows, _) = pipe
+        .query(
+            json!(1),
+            "SELECT date_trunc('hour', ts_ms) AS h, max(ts_ms) AS m FROM logical_types_millis GROUP BY h",
+        )
+        .unwrap();
+    let types: Vec<Json> = header["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["type"].clone())
+        .collect();
+    assert_eq!(types, [json!("TIMESTAMP"), json!("TIMESTAMP")]);
+    assert_eq!(
+        rows,
+        [json!(["2024-01-15T10:00:00Z", "2024-01-15T10:30:04Z"])]
+    );
+    pipe.finish();
+}

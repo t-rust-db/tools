@@ -122,3 +122,72 @@ fn blob_columns_print_as_hex_literals() {
          1\tx'33333333333333333333333333333333'\tx'FFFF0001'\n"
     );
 }
+
+/// db-core#1046: a TIMESTAMP column, a `date_trunc` over one and a
+/// `min` of one print as ISO 8601, as DuckDB prints them, through `-c`'s
+/// streaming path and its collected one (an aggregate); `epoch_ms` stays
+/// an integer.
+#[test]
+fn timestamps_print_as_iso_8601() {
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/logical_types_millis.parquet"
+    );
+    let query = |sql: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_column-rs"))
+            .args(["-c", sql, fixture])
+            .output()
+            .expect("spawn column-rs");
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert_eq!(
+        query(
+            "SELECT ts_ms, date_trunc('hour', ts_ms) AS h, epoch_ms(ts_ms) AS e \
+             FROM logical_types_millis LIMIT 1"
+        ),
+        "ts_ms\th\te\n2024-01-15 10:30:00\t2024-01-15 10:00:00\t1705314600000\n"
+    );
+    assert_eq!(
+        query(
+            "SELECT date_trunc('hour', ts_ms) AS h, min(ts_ms) AS m, count(*) AS n \
+             FROM logical_types_millis GROUP BY h"
+        ),
+        "h\tm\tn\n2024-01-15 10:00:00\t2024-01-15 10:30:00\t5\n"
+    );
+}
+
+/// db-core#1046: the REPL's table prints a TIMESTAMP column as ISO 8601
+/// too.
+#[test]
+fn repl_prints_timestamps_as_iso_8601() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/logical_types_millis.parquet"
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_column-rs"))
+        .arg(fixture)
+        .env(
+            "XDG_STATE_HOME",
+            std::env::temp_dir().join("column-rs-repl-ts"),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn column-rs");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"SELECT ts_ms FROM logical_types_millis LIMIT 1;\n")
+        .unwrap();
+    let out = child.wait_with_output().expect("wait for column-rs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\u{2502} 2024-01-15 10:30:00 \u{2502}"),
+        "{stdout}"
+    );
+}

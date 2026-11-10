@@ -4,7 +4,9 @@
 
 use column_rs::physical;
 use column_rs::query::{OpcodeSection, PlanNode, QueryEngine, QueryResult};
+use column_rs::vm::Value;
 use db_cli::{render, OutputMode, ReplHandler};
+use db_core::engine::column::render_timestamp;
 use db_core::parser::Explain;
 use std::path::Path;
 
@@ -125,7 +127,18 @@ impl ReplHandler for ColumnHandler {
             Output::Rows(result) => {
                 let rows: Vec<Vec<String>> = result
                     .rows()
-                    .map(|row| row.iter().map(|v| v.to_string()).collect())
+                    .map(|row| {
+                        row.iter()
+                            .zip(result.timestamps.iter().chain(std::iter::repeat(&None)))
+                            .map(|(v, units)| match (v, units) {
+                                (Value::Int(n), Some(per_second)) => {
+                                    render_timestamp(*n, *per_second)
+                                        .unwrap_or_else(|| v.to_string())
+                                }
+                                _ => v.to_string(),
+                            })
+                            .collect()
+                    })
                     .collect();
                 render(mode, &result.columns, &rows, headers)
             }

@@ -85,6 +85,17 @@ pub enum TimeUnit {
 }
 
 impl ColType {
+    /// A TIMESTAMP counted in `per_second` units per second, as db-core's
+    /// `output_column_units` gives them; `None` for any other unit.
+    pub fn timestamp(per_second: i64) -> Option<Self> {
+        Some(ColType::Timestamp(match per_second {
+            1_000 => TimeUnit::Millis,
+            1_000_000 => TimeUnit::Micros,
+            1_000_000_000 => TimeUnit::Nanos,
+            _ => return None,
+        }))
+    }
+
     /// The type's name in the header, as DuckDB names it.
     pub fn name(self) -> String {
         match self {

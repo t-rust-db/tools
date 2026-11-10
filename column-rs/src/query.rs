@@ -28,8 +28,9 @@ use crate::vm::{Batch, Opcode, Program, Segment, Value};
 use db_core::codegen::batch::{self as planner, PlanError, TableStats};
 use db_core::engine::column::table::{read_snapshot_with_bit_patterns, snapshot_timestamp_columns};
 use db_core::engine::column::{
-    file_segments_with_bit_patterns, parquet_timestamp_columns, resolve_timestamps, snapshot_files,
-    snapshot_segments_with_bit_patterns, FileSegment, SnapshotSegment,
+    file_segments_with_bit_patterns, output_column_units, parquet_timestamp_columns,
+    resolve_timestamps, snapshot_files, snapshot_segments_with_bit_patterns, FileSegment,
+    SnapshotSegment,
 };
 use db_core::engine::resolve::CrossModeEngine;
 use db_core::engine::row::RowEngine;
@@ -236,10 +237,11 @@ fn lookup_error(e: EngineError) -> QueryError {
 pub type Result<T> = std::result::Result<T, QueryError>;
 
 /// One callback of [`QueryEngine::execute_streaming`] (db-core#456): the
-/// output column names (always first, always exactly once), then each
-/// chunk of the result as it becomes ready.
+/// output column names with their [`QueryResult::timestamps`] (always
+/// first, always exactly once), then each chunk of the result as it
+/// becomes ready.
 pub enum StreamEvent {
-    Columns(Vec<String>),
+    Columns(Vec<String>, Vec<Option<i64>>),
     Chunk(Chunk),
 }
 
@@ -887,6 +889,11 @@ pub struct QueryResult {
     /// per-row allocation. Consume it column by column via
     /// `output.chunks()`, or row by row via [`QueryResult::rows`].
     pub output: QueryOutput,
+    /// Per output column, its units per second when it is timestamp-valued
+    /// (a TIMESTAMP column, a `date_trunc` over one), else `None`: a printer
+    /// renders those integers with db-core's `render_timestamp`, as
+    /// DuckDB prints a TIMESTAMP (db-core#1046).
+    pub timestamps: Vec<Option<i64>>,
 }
 
 impl QueryResult {
@@ -1589,7 +1596,8 @@ impl QueryEngine {
         }
         let held = self.hold(from)?;
         let table = held.open()?;
-        resolve_timestamps(&mut query, &table.timestamps()?)
+        let timestamps = table.timestamps()?;
+        resolve_timestamps(&mut query, &timestamps)
             .map_err(|e| QueryError::Timestamp(e.message))?;
         let query = planner::expand_star(&query, &table.column_names()?)?;
         let program = planner::compile(&query)?;
@@ -1603,7 +1611,10 @@ impl QueryEngine {
                 "query has an aggregate, DISTINCT, ORDER BY, or LIMIT".to_string(),
             ));
         }
-        on_event(StreamEvent::Columns(planner::output_column_names(&query)));
+        on_event(StreamEvent::Columns(
+            planner::output_column_names(&query),
+            output_column_units(&query, &timestamps),
+        ));
         run_streaming(&table, &program, query.where_clause.as_ref(), |chunk| {
             on_event(StreamEvent::Chunk(chunk))
         })
@@ -1651,6 +1662,7 @@ impl QueryEngine {
                 .run_query(&sql)
                 .map_err(lookup_error)?;
             let types = vec![None; result.columns.len()];
+            let timestamps = vec![None; result.columns.len()];
             let rows = result
                 .rows
                 .into_iter()
@@ -1660,12 +1672,14 @@ impl QueryEngine {
                 QueryResult {
                     columns: result.columns,
                     output: QueryOutput::from_rows(rows),
+                    timestamps,
                 },
                 types,
             ));
         }
 
         one_join(&query)?;
+        let timestamps = self.timestamp_columns(&query)?;
         let query = self.with_timestamps_resolved(query)?;
 
         // Resolve `*` against the queried table(s)' schema before anything
@@ -1711,12 +1725,18 @@ impl QueryEngine {
         let main_types = main.column_types();
         let right_types = right.as_ref().map(Opened::column_types).unwrap_or_default();
         let right_name = first_join(&query).map(join_table).transpose()?;
+        let units = output_column_units(&query, &timestamps);
         let types = query
             .columns
             .iter()
-            .map(|column| match column {
+            .zip(&units)
+            .map(|(column, unit)| match column {
                 ResultColumn::Expr { expr, .. } => {
-                    let (table, name) = typed_column(expr)?;
+                    let Some((table, name)) = typed_column(expr) else {
+                        // An expression that is timestamp-valued
+                        // (`date_trunc`) is a TIMESTAMP to `--pipe` too.
+                        return unit.and_then(crate::pipe::ColType::timestamp);
+                    };
                     let in_right = table.is_some_and(|t| Some(t) == right_name);
                     let (first, second) = if in_right {
                         (&right_types, &main_types)
@@ -1733,6 +1753,7 @@ impl QueryEngine {
             QueryResult {
                 columns: headers.unwrap_or_else(|| planner::output_column_names(&query)),
                 output: rows,
+                timestamps: units,
             },
             types,
         ))
@@ -1815,11 +1836,20 @@ impl QueryEngine {
     /// The TIMESTAMP columns are those of every table the query names: its
     /// `FROM`, its `JOIN` and its `IN (SELECT ...)` table.
     fn with_timestamps_resolved(&self, mut query: Select) -> Result<Select> {
-        let mut tables = vec![from_table(&query)?];
-        if let Some(join) = first_join(&query) {
+        let timestamps = self.timestamp_columns(&query)?;
+        resolve_timestamps(&mut query, &timestamps)
+            .map_err(|e| QueryError::Timestamp(e.message))?;
+        Ok(query)
+    }
+
+    /// The TIMESTAMP columns, with their units per second, of every table
+    /// the query names ([`Self::with_timestamps_resolved`]).
+    fn timestamp_columns(&self, query: &Select) -> Result<Vec<(String, i64)>> {
+        let mut tables = vec![from_table(query)?];
+        if let Some(join) = first_join(query) {
             tables.push(join_table(join)?);
         }
-        if let Some(subquery) = in_subquery(&query) {
+        if let Some(subquery) = in_subquery(query) {
             tables.push(from_table(subquery)?);
         }
         let mut timestamps = Vec::new();
@@ -1829,9 +1859,7 @@ impl QueryEngine {
             }
             timestamps.extend(self.hold(table)?.open()?.timestamps()?);
         }
-        resolve_timestamps(&mut query, &timestamps)
-            .map_err(|e| QueryError::Timestamp(e.message))?;
-        Ok(query)
+        Ok(timestamps)
     }
 }
 

@@ -171,12 +171,14 @@ fn try_stream_query(engine: &QueryEngine, sql: &str) -> Result<bool, QueryError>
     let stdout = io::stdout();
     let mut out = BufWriter::with_capacity(4 * 1024 * 1024, stdout.lock());
     let mut streamed_header = false;
+    let mut timestamps = Vec::new();
     let result = engine.execute_streaming(sql, |event| match event {
-        column_rs::query::StreamEvent::Columns(columns) => {
+        column_rs::query::StreamEvent::Columns(columns, units) => {
             let _ = writeln!(out, "{}", columns.join("\t"));
+            timestamps = units;
             streamed_header = true;
         }
-        column_rs::query::StreamEvent::Chunk(chunk) => print_chunk(&mut out, &chunk),
+        column_rs::query::StreamEvent::Chunk(chunk) => print_chunk(&mut out, &chunk, &timestamps),
     });
     match result {
         Ok(()) => Ok(true),

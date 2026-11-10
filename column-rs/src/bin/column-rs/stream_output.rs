@@ -18,6 +18,7 @@ use std::io::{self, BufWriter, Write};
 
 use column_rs::query::QueryResult;
 use column_rs::vm::{Chunk, Value};
+use db_core::engine::column::render_timestamp;
 
 /// Formats a single cell straight into `out`, using `itoa`/`ryu` for the
 /// numeric variants instead of going through `Value`'s `Display` impl.
@@ -62,16 +63,26 @@ fn write_value(out: &mut impl Write, value: &Value) {
 /// row) to `out`. Shared by [`print_result_streaming`] and db-core#456's
 /// `-c` streaming path (`main::run_query`), which calls this once per
 /// chunk as `Database::execute_streaming` produces them, instead of
-/// collecting a whole [`QueryResult`] first.
-pub fn print_chunk(out: &mut impl Write, chunk: &Chunk) {
+/// collecting a whole [`QueryResult`] first. A column with units in
+/// `timestamps` ([`QueryResult::timestamps`]) prints as ISO 8601.
+pub fn print_chunk(out: &mut impl Write, chunk: &Chunk, timestamps: &[Option<i64>]) {
     let rows = chunk.first().map_or(0, |column| column.len());
     for r in 0..rows {
         for (i, column) in chunk.iter().enumerate() {
             if i > 0 {
                 let _ = out.write_all(b"\t");
             }
-            if let Some(value) = column.get(r) {
-                write_value(out, value);
+            match (column.get(r), timestamps.get(i)) {
+                (Some(Value::Int(v)), Some(Some(per_second))) => {
+                    match render_timestamp(*v, *per_second) {
+                        Some(iso) => {
+                            let _ = out.write_all(iso.as_bytes());
+                        }
+                        None => write_value(out, &Value::Int(*v)),
+                    }
+                }
+                (Some(value), _) => write_value(out, value),
+                (None, _) => {}
             }
         }
         let _ = out.write_all(b"\n");
@@ -83,6 +94,6 @@ pub fn print_result_streaming(result: &QueryResult) {
     let mut out = BufWriter::with_capacity(4 * 1024 * 1024, stdout.lock());
     let _ = writeln!(out, "{}", result.columns.join("\t"));
     for chunk in result.output.chunks() {
-        print_chunk(&mut out, chunk);
+        print_chunk(&mut out, chunk, &result.timestamps);
     }
 }
