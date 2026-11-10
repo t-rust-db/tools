@@ -106,7 +106,6 @@ fn raw_sql_query_works() {
 fn follow_mode_prints_appended_lines_and_footer() {
     use std::io::Write as _;
     use std::process::{Command as StdCommand, Stdio};
-    use std::time::Duration;
 
     let dir = std::env::temp_dir();
     let path = dir.join(format!(
@@ -122,33 +121,68 @@ fn follow_mode_prints_appended_lines_and_footer() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn loglume --follow");
+    let stdout = collect(child.stdout.take().unwrap());
+    let stderr = collect(child.stderr.take().unwrap());
 
-    std::thread::sleep(Duration::from_millis(300));
-    {
+    // Each step waits for loglume's output rather than a fixed sleep, so a
+    // loaded machine is slower, not a failure.
+    let initial = wait_for(&stdout, "initial line");
+    if initial {
         let mut f = std::fs::OpenOptions::new()
             .append(true)
             .open(&path)
             .unwrap();
         writeln!(f, "<131>Sep 9 08:00:01 host app[1]: err after start").unwrap();
     }
-    std::thread::sleep(Duration::from_millis(700));
+    let appended = initial && wait_for(&stdout, "err after start");
+    let footer = appended && wait_for(&stderr, "2 lines,");
 
     // SIGTERM would be nicer than kill, but std::process::Child has no
     // portable signal API; the process is a leaf test helper, so a hard
     // kill is fine here.
     child.kill().ok();
-    let output = child.wait_with_output().expect("wait for loglume");
+    child.wait().expect("wait for loglume");
     let _ = std::fs::remove_file(&path);
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("initial line"));
-    assert!(stdout.contains("err after start"));
+    let stdout = stdout.lock().unwrap().clone();
+    let stderr = stderr.lock().unwrap().clone();
+    assert!(initial, "expected the initial line, got: {stdout}");
+    assert!(appended, "expected the appended line, got: {stdout}");
+    assert!(footer, "expected updated footer, got: {stderr}");
+}
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("2 lines,"),
-        "expected updated footer, got: {stderr}"
-    );
+/// Everything `pipe` yields, gathered on a thread while the child runs.
+fn collect(
+    mut pipe: impl std::io::Read + Send + 'static,
+) -> std::sync::Arc<std::sync::Mutex<String>> {
+    let text = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let sink = std::sync::Arc::clone(&text);
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while let Ok(n @ 1..) = pipe.read(&mut buf) {
+            sink.lock()
+                .unwrap()
+                .push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+    });
+    text
+}
+
+/// Whether `text` comes to contain `needle` within 10 s.
+fn wait_for(text: &std::sync::Mutex<String>, needle: &str) -> bool {
+    wait_until(|| text.lock().unwrap().contains(needle))
+}
+
+/// Whether `done` holds within 10 s, checked every 20 ms.
+fn wait_until(mut done: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if done() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    done()
 }
 
 #[test]
@@ -431,11 +465,12 @@ fn alert_fires_exec_on_a_new_matching_line() {
             .unwrap();
         writeln!(f, "<131>Sep 9 08:00:01 host app[1]: something broke").unwrap();
     }
-    std::thread::sleep(Duration::from_millis(700));
+    let read = || std::fs::read_to_string(&out_path).unwrap_or_default();
+    wait_until(|| read().contains("something broke"));
 
     child.kill().ok();
     let _ = child.wait_with_output();
-    let fired = std::fs::read_to_string(&out_path).unwrap_or_default();
+    let fired = read();
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&out_path);
 
