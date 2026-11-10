@@ -173,7 +173,7 @@ fn parse_errors_have_their_own_kind() {
     let err = pipe.query(json!(1), "SELEC id FROM labels").unwrap_err();
     assert_eq!(err["error"]["kind"], json!("parse"), "{err}");
     let err = pipe
-        .query(json!(2), "SELECT UPPER(region) FROM production")
+        .query(json!(2), "SELECT QUOTE(region) FROM production")
         .unwrap_err();
     assert_eq!(err["error"]["kind"], json!("unsupported"), "{err}");
     let message = err["error"]["message"].as_str().unwrap();
