@@ -189,14 +189,14 @@ fn a_lookup_only_query_takes_sqlite3_functions() {
         ]
     );
     for sql in [
-        "SELECT UPPER(region) FROM production",
-        "SELECT UPPER(labels.label) FROM production JOIN labels ON production.id = labels.id",
+        "SELECT QUOTE(region) FROM production",
+        "SELECT QUOTE(labels.label) FROM production JOIN labels ON production.id = labels.id",
     ] {
-        // db-core 0.201 words it as an unsupported expression form, not
-        // "unknown function UPPER"; refused at the call either way.
+        // QUOTE is sqlite3's alone, so the column dialect refuses it
+        // (ADR 0030); UPPER is column SQL too since db-core 0.238 (#1046).
         let message = error(&engine, sql);
         assert!(
-            message.starts_with("unsupported at 1:8: ") && message.contains("UPPER"),
+            message.starts_with("unsupported at 1:8: ") && message.contains("QUOTE"),
             "{sql}: {message}"
         );
     }

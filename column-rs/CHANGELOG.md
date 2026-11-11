@@ -2,6 +2,17 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.47.0] - 2026-11-11
+
+### Added
+
+- String and date/time functions in SQL, from db-core v0.238.0: `strftime(ts, fmt)`, `date_part`, `extract(part FROM ts)`, `year`..`second`, `epoch`, `CAST(ts AS DATE|VARCHAR)`, `upper`, `lower`, `length`, `substr`, `replace`, `trim`, `concat`, `split_part`, ... (db-core#1046)
+
+### Changed
+
+- TIMESTAMP results (a TIMESTAMP column, `date_trunc`, `min`/`max` of one) print as ISO 8601 (`2026-11-09 16:00:00`) in `-c` and the REPL; `--pipe` types a TIMESTAMP aggregate as TIMESTAMP.
+- db-core v0.239.0; S3 signs with IAM role credentials (db-core#1042).
+
 ## [0.46.1] - 2026-11-09
 
 ### Changed

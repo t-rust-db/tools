@@ -2,6 +2,12 @@
 
 All notable changes to column-ingest. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [0.3.14] - 2026-11-11
+
+### Changed
+
+- db-core v0.239.0: S3 signs with IAM role credentials (db-core#1042).
+
 ## [0.3.13] - 2026-11-07
 
 ### Changed

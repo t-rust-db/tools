@@ -2,6 +2,12 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.14.16] - 2026-11-11
+
+### Changed
+
+- db-core v0.239.0: S3 signs with IAM role credentials (db-core#1042).
+
 ## [0.14.15] - 2026-11-09
 
 ### Changed
