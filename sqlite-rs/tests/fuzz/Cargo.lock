@@ -44,8 +44,8 @@ dependencies = [
 
 [[package]]
 name = "db-core"
-version = "0.239.0"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.239.0#58920f3952300b973a66fafdf2768a9ace62ae3a"
+version = "0.240.0"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.240.0#3b77b658bf05e9d6fda23a549cc2448f4abfab3c"
 
 [[package]]
 name = "find-msvc-tools"

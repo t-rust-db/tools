@@ -118,7 +118,8 @@ fn fixture(name: &str) -> PathBuf {
 
 /// A read-only S3 over a local directory: bucket `bucket` is `root`,
 /// path-style. It answers GET (whole or one `Range`) and HEAD, refuses
-/// everything else with 405, and logs each request as `METHOD /path`.
+/// everything else with 405, and logs each request as `METHOD /path`,
+/// with ` bytes=a-b` after a ranged GET.
 struct FakeS3 {
     /// `http://127.0.0.1:port`, or `https://localhost:port` (#125).
     endpoint: String,
@@ -216,7 +217,8 @@ fn answer<S: Read + Write>(stream: S, root: &Path, log: &Mutex<Vec<String>>) -> 
     let mut parts = request.split(' ');
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
     let path = percent_decode(target.split('?').next().unwrap_or(""));
-    log.lock().unwrap().push(format!("{method} {path}"));
+    let range = header(&head, "range").map_or(String::new(), |r| format!(" {r}"));
+    log.lock().unwrap().push(format!("{method} {path}{range}"));
     let length = header(&head, "content-length").map_or(0, |v| v.parse().unwrap_or(0));
     let mut body = vec![0; length];
     reader.read_exact(&mut body).ok();
@@ -393,12 +395,15 @@ fn each_query_refreshes_and_fetches_only_new_files() {
     let _serial = serial();
     let f = fixture_tables();
     let engine = QueryEngine::open(Path::new(&f.s3.location("events"))).unwrap();
+    // The Parquet files fetched, by path: a ranged GET logs its range too.
     let parquet = |requests: &[String]| -> Vec<String> {
-        requests
+        let mut paths: Vec<String> = requests
             .iter()
+            .map(|r| r.split(" bytes=").next().unwrap_or(r).to_string())
             .filter(|r| r.ends_with(".parquet"))
-            .cloned()
-            .collect()
+            .collect();
+        paths.dedup();
+        paths
     };
     let opened = f.s3.take();
     assert!(!parquet(&opened).is_empty(), "{opened:?}");
@@ -418,7 +423,7 @@ fn each_query_refreshes_and_fetches_only_new_files() {
     let grown = parquet(&f.s3.take());
     assert!(!grown.is_empty());
     assert!(
-        grown.iter().all(|r| !opened.contains(r)),
+        grown.iter().all(|r| !parquet(&opened).contains(r)),
         "refetched a file it already had: {grown:?}"
     );
 }
@@ -465,6 +470,32 @@ fn physical_describes_an_s3_table_without_a_wal() {
     assert!(text.contains("(object store s3://bucket/events"), "{text}");
     assert!(text.contains("flushed files only"), "{text}");
     assert!(text.contains("30 in files"), "{text}");
+}
+
+/// #131: `.physical` reads each Parquet file's footer by range, never the
+/// whole object.
+#[test]
+fn physical_reads_only_the_footers_of_an_s3_table() {
+    let _serial = serial();
+    let f = fixture_tables();
+    let location = f.s3.location("events");
+    f.s3.take();
+    column_rs::physical::describe(
+        "events",
+        Path::new(&location),
+        column_rs::physical::Options::default(),
+    )
+    .unwrap();
+    let parquet: Vec<String> =
+        f.s3.take()
+            .into_iter()
+            .filter(|r| r.starts_with("GET ") && r.contains(".parquet"))
+            .collect();
+    assert!(!parquet.is_empty(), "no Parquet file was read");
+    assert!(
+        parquet.iter().all(|r| r.contains(" bytes=")),
+        "a whole-object GET: {parquet:#?}"
+    );
 }
 
 /// #125: an https:// store (AWS S3) answers as the local directory does,

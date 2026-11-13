@@ -5,6 +5,7 @@
 //! A table in an object store (`s3://...`, tools#123) has no WAL there:
 //! its report covers the flushed files, each fetched whole.
 
+use db_core::engine::column::snapshot_files;
 use db_core::storage::ingest::layout::date_string;
 use db_core::storage::ingest::{Area, KeyBound, LayoutKind, Snapshot, WAL_DIR};
 use db_core::storage::parquet::footer::{
@@ -60,10 +61,10 @@ fn table_dir(
     options: Options,
 ) -> Result<Vec<String>, String> {
     let manifest = snapshot.manifest();
-    let mut footers = Vec::new();
-    for (entry, bytes) in snapshot.files() {
-        footers.push(parse_footer(bytes).map_err(|e| format!("{}: {e}", entry.path))?);
-    }
+    // Opened files keep their parsed footer; in an object store only the
+    // footer is fetched, by range, not the whole object (#131).
+    let files = snapshot_files(snapshot).map_err(|e| e.to_string())?;
+    let footers: Vec<&FileMetaData> = files.iter().map(|f| f.metadata()).collect();
     let in_files: u64 = manifest.files.iter().map(|f| f.rows).sum();
     let pending: usize = snapshot.pages().iter().map(|p| p.len()).sum();
     // The sort key isn't recorded; the key ranges name its columns.
@@ -153,13 +154,12 @@ fn table_dir(
 
     if !footers.is_empty() {
         lines.push(String::new());
-        let metas: Vec<&FileMetaData> = footers.iter().collect();
         if options.rowgroups {
             for (entry, meta) in manifest.files.iter().zip(&footers) {
                 lines.extend(per_row_group(meta, Some(&entry.path), options));
             }
         } else {
-            lines.extend(columns(&metas, options));
+            lines.extend(columns(&footers, options));
         }
     }
     Ok(lines)
