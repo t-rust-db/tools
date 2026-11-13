@@ -89,7 +89,7 @@ fn style_for(kind: &TokenKind) -> Option<Style> {
             theme::keyword()
         }
         TokenKind::String(_) | TokenKind::Blob(_) => theme::string_literal(),
-        TokenKind::Integer(_) | TokenKind::Float(_) => theme::number_literal(),
+        TokenKind::Integer(_) | TokenKind::Float(..) => theme::number_literal(),
         TokenKind::Identifier(_) => theme::identifier(),
         TokenKind::Error(_) => theme::error(),
         _ => return None,

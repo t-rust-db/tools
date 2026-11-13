@@ -37,7 +37,7 @@ pub fn highlight(line: &str) -> String {
                 Some(BOLD_BLUE)
             }
             TokenKind::String(_) | TokenKind::Blob(_) => Some(GREEN),
-            TokenKind::Integer(_) | TokenKind::Float(_) => Some(CYAN),
+            TokenKind::Integer(_) | TokenKind::Float(..) => Some(CYAN),
             _ => None,
         };
         if let Some(color) = color {
