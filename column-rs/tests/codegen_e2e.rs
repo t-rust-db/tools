@@ -21,13 +21,14 @@ fn fixture_path(name: &str) -> String {
         .into_owned()
 }
 
-/// Locate the already-built `libcolumn_rs-*.rlib` in `target/<profile>/deps`
-/// (guaranteed to exist -- this very test binary links against it) so
-/// `rustc` can compile a freshly-generated file against the same library,
-/// without needing a separate `cargo build`.
-fn find_column_rs_rlib(deps_dir: &std::path::Path) -> PathBuf {
-    std::fs::read_dir(deps_dir)
-        .unwrap()
+/// Locate the already-built `libcolumn_rs-*.rlib` in the deps dirs (guaranteed
+/// to exist -- this very test binary links against it) so `rustc` can compile
+/// a freshly-generated file against the same library, without needing a
+/// separate `cargo build`.
+fn find_column_rs_rlib(deps: &[PathBuf]) -> PathBuf {
+    deps.iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("libcolumn_rs-") && n.ends_with(".rlib")))
@@ -35,14 +36,21 @@ fn find_column_rs_rlib(deps_dir: &std::path::Path) -> PathBuf {
         .expect("libcolumn_rs-*.rlib not found in target deps -- expected `cargo test` to have already built it")
 }
 
-fn deps_dir() -> PathBuf {
-    // The test binary itself lives at target/<profile>/deps/<test>-<hash>;
-    // its own directory is exactly the deps dir we need.
-    std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
+fn deps_dirs() -> Vec<PathBuf> {
+    // Cargo keeps test binaries in target/<profile>/deps/ beside the rlibs,
+    // but newer toolchains put them in target/<profile>/build/<pkg>/<hash>/out/.
+    // The rlibs are searched in the profile's deps/ and beside the binary.
+    let exe = std::env::current_exe().unwrap();
+    let profile = exe
+        .ancestors()
+        .find(|p| {
+            matches!(
+                p.file_name().and_then(|n| n.to_str()),
+                Some("debug" | "release")
+            )
+        })
+        .unwrap();
+    vec![profile.join("deps"), exe.parent().unwrap().to_path_buf()]
 }
 
 /// Compile `src` (a codegen'd `.rs` file) into a standalone binary linked
@@ -51,7 +59,7 @@ fn compile_and_run(src: &str, args: &[&str]) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    let deps = deps_dir();
+    let deps = deps_dirs();
     let rlib = find_column_rs_rlib(&deps);
 
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -80,9 +88,10 @@ fn compile_and_run(src: &str, args: &[&str]) -> String {
         // An abort program links both, as the shipped binary is abort too.
         rustc.args(["-C", "panic=abort"]);
     }
+    for dir in &deps {
+        rustc.arg("-L").arg(dir);
+    }
     let status = rustc
-        .arg("-L")
-        .arg(&deps)
         .arg("--extern")
         .arg(format!("column_rs={}", rlib.display()))
         .arg("-o")
