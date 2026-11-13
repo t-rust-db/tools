@@ -2,6 +2,16 @@
 
 All notable changes to column-rs. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.47.1] - 2026-11-13
+
+### Fixed
+
+- `.physical` on an `s3://` table reads only each Parquet file's footer, not the whole object (#131).
+
+### Changed
+
+- db-core v0.240.0: range reads for object stores (db-core#1052).
+
 ## [0.47.0] - 2026-11-11
 
 ### Added
