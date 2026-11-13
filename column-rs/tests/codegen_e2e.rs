@@ -37,9 +37,9 @@ fn find_column_rs_rlib(deps: &[PathBuf]) -> PathBuf {
 }
 
 fn deps_dirs() -> Vec<PathBuf> {
-    // Cargo keeps test binaries in target/<profile>/deps/ beside the rlibs,
-    // but newer toolchains put them in target/<profile>/build/<pkg>/<hash>/out/.
-    // The rlibs are searched in the profile's deps/ and beside the binary.
+    // Up to rustc 1.99 cargo put every rlib in target/<profile>/deps/; from
+    // 1.100 each unit has its own target/<profile>/build/<pkg>/<hash>/out/
+    // and there is no deps/. Search both layouts.
     let exe = std::env::current_exe().unwrap();
     let profile = exe
         .ancestors()
@@ -50,7 +50,22 @@ fn deps_dirs() -> Vec<PathBuf> {
             )
         })
         .unwrap();
-    vec![profile.join("deps"), exe.parent().unwrap().to_path_buf()]
+    let mut dirs = vec![profile.join("deps")];
+    for pkg in std::fs::read_dir(profile.join("build"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        for unit in std::fs::read_dir(pkg.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            dirs.push(unit.path().join("out"));
+        }
+    }
+    dirs.retain(|d| d.is_dir());
+    dirs
 }
 
 /// Compile `src` (a codegen'd `.rs` file) into a standalone binary linked
