@@ -2,6 +2,12 @@
 
 All notable changes to column-ingest. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [0.3.15] - 2026-11-13
+
+### Changed
+
+- db-core v0.240.0: range reads for object stores (db-core#1052).
+
 ## [0.3.14] - 2026-11-11
 
 ### Changed

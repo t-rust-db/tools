@@ -2,6 +2,12 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.14.17] - 2026-11-13
+
+### Changed
+
+- db-core v0.240.0: range reads for object stores (db-core#1052).
+
 ## [0.14.16] - 2026-11-11
 
 ### Changed

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.17] - 2026-11-13
+
+### Changed
+
+- db-core v0.240.0: range reads for object stores (db-core#1052).
+
 ## [0.5.16] - 2026-11-11
 
 ### Changed
