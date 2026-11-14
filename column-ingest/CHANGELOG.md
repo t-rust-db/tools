@@ -2,6 +2,12 @@
 
 All notable changes to column-ingest. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [0.3.16] - 2026-11-14
+
+### Changed
+
+- db-core v0.241.0: in the column engine, `round(x, n)` with a negative `n` rounds to tens, a decimal literal keeps its written scale, a BLOB used as a number is an error, and `CAST`, `::` and `decode()` follow DuckDB (db-core#1027, db-core#948); a cold query on an `s3://` table makes far fewer requests (db-core#1059).
+
 ## [0.3.15] - 2026-11-13
 
 ### Changed

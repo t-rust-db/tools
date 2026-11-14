@@ -4,6 +4,16 @@ All notable changes to sqlite-rs. Format follows [Keep a Changelog](https://keep
 
 **Versioning policy:** one minor version per completed plan phase — the version number tells the plan's story, sub-steps stay inside a phase. V1 (READ CORE) = 0.1.0 through 0.4.0. *(History note: internal iterations briefly numbered 0.4.0–0.6.0 were renumbered into the phase scheme on 14 Aug 2026, before any tag or publication of those versions existed.)*
 
+## [0.26.20] - 2026-11-14
+
+### Fixed
+
+- The highlighter matches db-core's float token, which now carries its source text.
+
+### Changed
+
+- db-core v0.241.0: in the column engine, `round(x, n)` with a negative `n` rounds to tens, a decimal literal keeps its written scale, a BLOB used as a number is an error, and `CAST`, `::` and `decode()` follow DuckDB (db-core#1027, db-core#948); a cold query on an `s3://` table makes far fewer requests (db-core#1059).
+
 ## [0.26.19] - 2026-11-13
 
 ### Changed
