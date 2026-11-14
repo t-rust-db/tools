@@ -2,6 +2,16 @@
 
 All notable changes to db-studio. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
+## [0.14.18] - 2026-11-14
+
+### Fixed
+
+- The highlighter matches db-core's float token, which now carries its source text.
+
+### Changed
+
+- db-core v0.241.0: in the column engine, `round(x, n)` with a negative `n` rounds to tens, a decimal literal keeps its written scale, a BLOB used as a number is an error, and `CAST`, `::` and `decode()` follow DuckDB (db-core#1027, db-core#948); a cold query on an `s3://` table makes far fewer requests (db-core#1059).
+
 ## [0.14.17] - 2026-11-13
 
 ### Changed

@@ -1423,7 +1423,7 @@ impl QueryEngine {
                 let literal = match value {
                     Value::Null => Literal::Null,
                     Value::Int(i) => Literal::Integer(i),
-                    Value::Float(f) => Literal::Float(f),
+                    Value::Float(f) => Literal::Float(f, None),
                     Value::Bool(b) => Literal::Integer(i64::from(b)),
                     Value::Str(s) => Literal::Str(s.into_owned()),
                     Value::Blob(b) => Literal::Blob(b.to_vec()),
